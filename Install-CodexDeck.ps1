@@ -1,0 +1,26 @@
+﻿param([string]$InstallHome = $HOME, [switch]$SkipPath)
+$ErrorActionPreference = 'Stop'
+if ($env:OS -ne 'Windows_NT') { throw 'Codex Deck requires Windows and Windows PowerShell 5.1 with WPF.' }
+$suiteRoot = Join-Path $InstallHome '.codex-loop'
+$binRoot = Join-Path $InstallHome '.local/bin'
+$files = @('Codex-Deck.ps1','Deck.Core.ps1','Deck.Theme.xaml','Run-CodexLoopUsage.cmd',
+    'Test-Deck.ps1','Test-DeckScheduler.ps1','Test-CodexAuth.ps1','Test-CodexLoopUsage.ps1',
+    'deck/assets/codex-deck.png','deck/assets/codex-deck.ico')
+$wrappers = @('codex-auth.ps1','codex-auth.cmd','codex-check.cmd','codex-deck.cmd')
+# Validate the complete payload before changing an existing installation.
+foreach ($name in $files) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "suite/$name") -PathType Leaf)) { throw "Missing suite file: $name" } }
+foreach ($name in $wrappers) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "bin/$name") -PathType Leaf)) { throw "Missing command: $name" } }
+foreach ($group in @(@('suite',$suiteRoot,$files), @('bin',$binRoot,$wrappers))) {
+    foreach ($name in $group[2]) {
+        $target = Join-Path $group[1] $name
+        [void][IO.Directory]::CreateDirectory((Split-Path $target))
+        if (Test-Path -LiteralPath $target) { Copy-Item -LiteralPath $target -Destination ($target+'.bak-install-'+[guid]::NewGuid().ToString('N')) }
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot ($group[0]+'/'+$name)) -Destination $target -Force
+    }
+}
+[void][IO.Directory]::CreateDirectory((Join-Path $suiteRoot 'accounts'))
+if (!$SkipPath) {
+    $userPath = [Environment]::GetEnvironmentVariable('Path','User')
+    if ($binRoot -notin @($userPath -split ';')) { [Environment]::SetEnvironmentVariable('Path',(@($binRoot,$userPath) -join ';'),'User') }
+}
+Write-Host 'Codex Deck installed. Open a new terminal and run codex-auth account1 or codex-deck. Codex CLI must be installed separately.'

@@ -1,0 +1,29 @@
+name: Windows checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Repository hygiene
+        run: ./Test-Repository.ps1
+      - name: Core and account regression tests
+        run: |
+          ./suite/Test-Deck.ps1
+          ./suite/Test-DeckScheduler.ps1
+          ./suite/Test-CodexAuth.ps1
+          ./suite/Test-CodexLoopUsage.ps1
+      - name: WPF smoke test
+        run: powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File ./suite/Codex-Deck.ps1 -SmokeTest
+      - name: Installer payload
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP 'deck-install'
+          ./Install-CodexDeck.ps1 -InstallHome $destination -SkipPath
+          if (!(Test-Path "$destination/.codex-loop/deck/assets/codex-deck.ico")) { throw 'Missing installed icon' }
