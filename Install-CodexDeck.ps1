@@ -14,6 +14,9 @@ foreach ($group in @(@('suite',$suiteRoot,$files), @('bin',$binRoot,$wrappers)))
     foreach ($name in $group[2]) {
         $target = Join-Path $group[1] $name
         [void][IO.Directory]::CreateDirectory((Split-Path $target))
+        # Unchanged assets may be held open by the running desktop companion.
+        $source = Join-Path $PSScriptRoot ($group[0]+'/'+$name)
+        if ((Test-Path -LiteralPath $target) -and (Get-FileHash -LiteralPath $source).Hash -eq (Get-FileHash -LiteralPath $target).Hash) { continue }
         if (Test-Path -LiteralPath $target) { Copy-Item -LiteralPath $target -Destination ($target+'.bak-install-'+[guid]::NewGuid().ToString('N')) }
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot ($group[0]+'/'+$name)) -Destination $target -Force
     }
