@@ -87,8 +87,8 @@ For a non-interactive view, use **`codex-auth status`**. It prints cached data w
 
 ## Desktop companion
 
-<p align="center"><img src="docs/panel.png" width="660" alt="Codex Deck desktop control panel with a synthetic account and expanded usage details"><br>
-<sub>Current main-branch desktop UI, captured with the built-in synthetic smoke test.</sub></p>
+<p align="center"><img src="docs/desktop-preview.png" width="476" alt="Codex Deck desktop control panel with a synthetic account and expanded usage details"><br>
+<sub>Desktop development preview, captured from the current local UI with synthetic data. This layout is not included in release 1.1.0.</sub></p>
 
 Run **`codex-deck`**, or press **D** in the terminal dashboard.
 
