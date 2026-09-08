@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 � 2026-09-08
+## 1.1.0 — 2026-09-08
 
 - Bare `codex-auth` now opens an interactive terminal dashboard with cached usage, background refresh, quota bars, search and keyboard navigation.
 - Launch Codex, log in, create profiles and open desktop Deck from the dashboard.
@@ -10,7 +10,7 @@
 - Skip unchanged installer payloads, including assets held open by the desktop companion.
 - Rebuilt the README with current terminal and desktop previews; refreshed contributor instructions and excluded encrypted account exports from Git.
 
-## 1.0.0 — 2026-09-06
+## 1.0.0 â€” 2026-09-06
 
 First public release of Codex Deck for Windows.
 
