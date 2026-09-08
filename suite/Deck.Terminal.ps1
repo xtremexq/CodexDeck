@@ -81,6 +81,21 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     Add-Line '  L login  N new account  D desktop Deck  M mask email  Q quit' 'Cyan'
     return $lines.ToArray()
 }
+function Read-DeckTerminalInput([string]$Prompt) {
+    [Console]::Write($Prompt + ': ')
+    $value = ''
+    while ($true) {
+        $key = [Console]::ReadKey($true)
+        if ($key.Key -eq 'Escape') { return '' }
+        if ($key.Key -eq 'Enter') { [Console]::WriteLine(); return $value }
+        if ($key.Key -eq 'Backspace' -and $value.Length) {
+            $value = $value.Substring(0,$value.Length - 1)
+            [Console]::Write("`b `b")
+        } elseif (-not [char]::IsControl($key.KeyChar) -and $value.Length -lt 40) {
+            $value += $key.KeyChar; [Console]::Write($key.KeyChar)
+        }
+    }
+}
 function Show-DeckTerminal {
     param([string]$SuiteRoot, [string]$AuthScript, [switch]$Snapshot)
     . (Join-Path $SuiteRoot 'Deck.Core.ps1')
@@ -93,7 +108,7 @@ function Show-DeckTerminal {
     if (-not $interactive) { $notice = 'Cached snapshot. Run codex-auth in a terminal for live checks and actions.' }
     $oldColor = [Console]::ForegroundColor; $oldBackground = [Console]::BackgroundColor
     $oldCursor = $true
-    if ($interactive) { $oldCursor = [Console]::CursorVisible; [Console]::CursorVisible = $false; Clear-Host }
+    if ($interactive) { $oldCursor = [Console]::CursorVisible; [Console]::CursorVisible = $false; Clear-Host; $lastFrame = '' }
     try {
         do {
             $names = @(Get-ChildItem -LiteralPath $accountRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' } | Sort-Object @{Expression={ if ($_.Name -match '^account(\d+)$') { [int]$Matches[1] } else { [int]::MaxValue } }},Name | ForEach-Object Name)
@@ -141,6 +156,8 @@ function Show-DeckTerminal {
             if ($interactive) { $width = [Console]::WindowWidth; $height = [Console]::WindowHeight }
             $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask)
             if (-not $interactive) { $frame | ForEach-Object { Write-Output $_.Text }; return }
+            $signature = "$width/$height/" + (($frame | ForEach-Object { $_.Text + $_.Color + $_.Background }) -join "`n")
+            if ($signature -ne $lastFrame) {
             [Console]::SetCursorPosition(0,0)
             for ($line = 0; $line -lt $height - 1; $line++) {
                 $text = ''; [Console]::ForegroundColor = 'Gray'; [Console]::BackgroundColor = 'Black'
@@ -149,6 +166,8 @@ function Show-DeckTerminal {
                 if ($line -lt $height - 2) { [Console]::WriteLine() }
             }
             [Console]::ResetColor()
+            $lastFrame = $signature
+            }
             $until = [DateTimeOffset]::UtcNow.AddMilliseconds(500)
             while (-not [Console]::KeyAvailable -and [DateTimeOffset]::UtcNow -lt $until) { Start-Sleep -Milliseconds 50 }
             if (-not [Console]::KeyAvailable) { continue }
@@ -170,13 +189,13 @@ function Show-DeckTerminal {
                 default {
                     if ($key.KeyChar -eq '/') {
                         [Console]::CursorVisible = $true; Clear-Host
-                        $filter = Read-Host 'Find account (empty = all)'; $selected = 0
-                        [Console]::CursorVisible = $false; Clear-Host
+                        $filter = Read-DeckTerminalInput 'Find account (empty = all)'; $selected = 0
+                        [Console]::CursorVisible = $false; Clear-Host; $lastFrame = ''
                     } elseif ($key.Key -in @('Enter','L','N')) {
                         [Console]::CursorVisible = $true; Clear-Host
                         try {
                             if ($key.Key -eq 'N') {
-                                $name = Read-Host 'New account name or number (empty cancels)'
+                                $name = Read-DeckTerminalInput 'New account name or number (empty cancels)'
                                 if ($name -match '^\d+$') { $name = "account$name" }
                                 if ($name -and ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -match '^(con|prn|aux|nul|com[0-9]|lpt[0-9])$')) { throw 'Invalid account name.' }
                                 if ($name -and (Test-Path -LiteralPath (Join-Path $accountRoot $name))) { throw 'That account already exists.' }
@@ -191,7 +210,7 @@ function Show-DeckTerminal {
                                 if (-not $pending.Contains($name)) { $pending.Enqueue($name) }
                             }
                         } catch { $notice = $_.Exception.Message }
-                        finally { [Console]::CursorVisible = $false; Clear-Host }
+                        finally { [Console]::CursorVisible = $false; Clear-Host; $lastFrame = '' }
                     }
                 }
             }
