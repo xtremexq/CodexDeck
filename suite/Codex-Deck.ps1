@@ -1065,7 +1065,7 @@ try{
             if($entryMenu.Items.Count -ne 10 -or $entryMenu.Items[9].Foreground.ToString() -ne '#FFF17D8D'){throw 'Entry actions or red Delete missing'}
             $entryMenu.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
             if(-not $manualChecks.ContainsKey('account1')){throw 'Entry check did not queue its account'}
-            $rememberWidth=$window.Width+25; $rememberHeight=$window.Height+35
+            $rememberWidth=[Math]::Min([Windows.SystemParameters]::WorkArea.Width,$window.Width+25); $rememberHeight=[Math]::Min([Windows.SystemParameters]::WorkArea.Height,$window.Height+35)
             $window.Width=$rememberWidth; $window.Height=$rememberHeight
             Set-DeckMode $(if($widget){'Panel'}else{'Widget'}); Render-Deck
             Set-DeckMode $testMode; Render-Deck
