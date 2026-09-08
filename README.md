@@ -14,6 +14,10 @@ A terminal dashboard and desktop companion for multiple Codex CLI accounts on Wi
 <p align="center"><img src="docs/terminal.png" width="1040" alt="Terminal dashboard showing synthetic accounts, remaining quota bars, reset times, sessions and keyboard shortcuts"><br>
 <sub>Synthetic terminal preview rendered from the dashboard's actual frame builder. No real account data.</sub></p>
 
+## Support Codex Deck
+
+If Deck helps your daily workflow, [support its development](https://xtremexq.github.io/CodexDeck/support/). Contributions help fund testing, maintenance tools, and time for fixes and improvements. Always optional; all features remain free and open source.
+
 ## Your accounts, together
 
 Run **`codex-auth`** to see your local accounts and their cached usage immediately. Check fresh limits in the background, find the profile you need, and launch Codex from the same terminal. Keep the floating desktop widget nearby when you want usage visible while you work.
@@ -32,7 +36,7 @@ Codex Deck is an unofficial, independent project. It uses your existing Codex CL
 
 **Requires Windows, Windows PowerShell 5.1, and Codex CLI available as `codex`.** The desktop companion uses WPF and the Windows system tray. Linux and macOS are not supported. No administrator account is required.
 
-Download **[CodexDeck-1.1.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/1.1.0/CodexDeck-1.1.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
+Download **[CodexDeck-1.2.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/1.2.0/CodexDeck-1.2.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
@@ -88,12 +92,13 @@ For a non-interactive view, use **`codex-auth status`**. It prints cached data w
 ## Desktop companion
 
 <p align="center"><img src="docs/desktop-preview.png" width="476" alt="Codex Deck desktop control panel with a synthetic account and expanded usage details"><br>
-<sub>Desktop development preview, captured from the current local UI with synthetic data.</sub></p>
+<sub>Desktop preview, captured from the UI with synthetic data.</sub></p>
 
 Run **`codex-deck`**, or press **D** in the terminal dashboard.
 
 - **Open Terminal** launches the selected account in your default or chosen folder.
-- **Show all** includes disconnected profiles; **Check** requests usage for the visible accounts.
+- Click the **online / terminals** bar to switch between connected accounts and all profiles, in either view.
+- Click the status bar below the list to check every visible account; the panel **Check** button does the same.
 - Switch between the **panel** and **widget**, then expand account rows for more detail.
 - **Settings** controls appearance, visible fields, email masking, automatic checks and warm-up.
 - Closing the window normally hides it to the tray. **Quit** stops Deck's monitoring without closing your Codex terminals.
@@ -181,4 +186,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and screenshot generation, [CH
 
 ### Development account tools
 
-Best-account selection, local session history, account rename, manual reset-credit details, and opt-in live failover are documented in [Account tools](docs/ACCOUNT-TOOLS.md). These source changes are newer than the 1.1.0 release.
+Best-account selection, local session history, account rename, manual reset-credit details, and opt-in live failover are documented in [Account tools](docs/ACCOUNT-TOOLS.md). These source changes are newer than the 1.2.0 release.

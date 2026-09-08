@@ -14,7 +14,11 @@ foreach ($bad in '', '1,1','account1,ACCOUNT1','../outside','missing','1,') {
     $failed=$false; try { Resolve-DeckFailoverPool $fixture $bad Ordered | Out-Null } catch { $failed=$true }
     if (-not $failed) { throw 'Invalid pool accepted.' }
 }
-$proxy=Start-DeckFailover $fixture $choice.Pool Ordered $choice.Account
+$savedEncoding=[Console]::OutputEncoding
+try {
+    [Console]::OutputEncoding=[Text.UTF8Encoding]::new($true)
+    $proxy=Start-DeckFailover $fixture $choice.Pool Ordered $choice.Account
+} finally { [Console]::OutputEncoding=$savedEncoding }
 try {
     $argsList=@(Get-DeckFailoverArguments $proxy.BaseUrl)
     if ($argsList -notcontains 'model_providers.deck_failover.stream_max_retries=0' -or $argsList -notcontains 'model_providers.deck_failover.supports_websockets=false') { throw 'Transport safety overrides missing.' }

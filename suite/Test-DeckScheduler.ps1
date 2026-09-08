@@ -18,6 +18,7 @@ function Start-DeckTask($code,$kind,$account){
 $root=Join-Path $env:TEMP ('deck-scheduler-'+[guid]::NewGuid().ToString('N'))
 $suite=$PSScriptRoot; $settings=Get-DeckDefaults; $tasks=@{}; $manualChecks=@{}; $nextCheck=@{}; $pendingWarm=@{}
 $cache=@{}; $history=@{}; $resets=@{}; $batchAccounts=@(); $batchUntil=[DateTimeOffset]::MinValue
+$StatusButton=[pscustomobject]@{IsEnabled=$true}
 $CheckButton=[pscustomobject]@{IsEnabled=$true;Content='Check'}; $allProfiles=$false; $widget=$false; $started=@()
 Invoke-DeckTick; Assert ($started.Count -eq 0) 'Disabled auto-check started a request'
 $settings.AutoCheck=$true

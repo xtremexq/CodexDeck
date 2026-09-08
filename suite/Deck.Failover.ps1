@@ -37,8 +37,10 @@ function Start-DeckFailover([string]$SuiteRoot, [string[]]$Pool, [string]$Mode, 
     $process = [Diagnostics.Process]::new(); $process.StartInfo=$info
     try {
         [void]$process.Start()
-        $process.StandardInput.WriteLine((@{ root=$SuiteRoot; pool=@($Pool); mode=$Mode; owner=$Account } | ConvertTo-Json -Compress))
-        $process.StandardInput.Flush()
+        # Write BOM-free UTF-8 regardless of the host console encoding.
+        $writer = [IO.StreamWriter]::new($process.StandardInput.BaseStream, [Text.UTF8Encoding]::new($false))
+        $writer.WriteLine((@{ root=$SuiteRoot; pool=@($Pool); mode=$Mode; owner=$Account } | ConvertTo-Json -Compress))
+        $writer.Flush()
         $ready = $process.StandardOutput.ReadLineAsync()
         if (-not $ready.Wait(10000) -or -not $ready.Result) { throw 'Failover proxy did not become ready.' }
         $result = $ready.Result | ConvertFrom-Json

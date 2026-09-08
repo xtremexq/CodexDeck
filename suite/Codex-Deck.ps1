@@ -55,14 +55,14 @@ public static class DeckTaskbarIdentity {
 $script:window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
 $script:appIcon=[Windows.Media.Imaging.BitmapImage]::new([uri](Join-Path $root 'assets/codex-deck.png'))
 $window.Icon=$appIcon; $window.FindName('AppLogo').Source=$appIcon
-foreach ($name in 'AccountPicker','SettingsButton','LaunchButton','ConfigButton','NewButton','AllButton','CheckButton','Summary','StatusLine','Cards','ModeButton','CloseButton','LaunchBar','ActionBar','Brand','Subtitle','LayoutRoot','Disclaimer','Header','WidgetFilter','CardScroll') {
+foreach ($name in 'AccountPicker','SettingsButton','LaunchButton','ConfigButton','NewButton','AllButton','CheckButton','Summary','StatusLine','Cards','ModeButton','CloseButton','LaunchBar','ActionBar','Brand','Subtitle','LayoutRoot','Disclaimer','Header','SummaryButton','StatusButton','CardScroll') {
     Set-Variable -Name $name -Value $window.FindName($name) -Scope Script
 }
 # Native caption hit testing covers the top padding, logo, text and gaps too.
 # The old Header-only mouse handler left the surrounding margin undraggable.
 $chrome=[Windows.Shell.WindowChrome]::new(); $chrome.CaptionHeight=54; $chrome.ResizeBorderThickness='5'; $chrome.GlassFrameThickness='0'; $chrome.CornerRadius='10'
 [Windows.Shell.WindowChrome]::SetWindowChrome($window,$chrome)
-foreach($button in @($ModeButton,$SettingsButton,$CloseButton,$WidgetFilter)) {
+foreach($button in @($ModeButton,$SettingsButton,$CloseButton)) {
     [Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($button,$true)
 }
 function New-DeckText([string]$Text, [string]$Color='#EAF0FA', [double]$Size=12) {
@@ -309,7 +309,6 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
     $script:widget=$Mode -ne 'Panel'; $settings.ViewMode=$Mode
     $visibility=if($widget){'Collapsed'}else{'Visible'}
     foreach($control in @($LaunchBar,$ActionBar,$Subtitle,$SettingsButton)){$control.Visibility=$visibility}
-    $WidgetFilter.Visibility=if($widget){'Visible'}else{'Collapsed'}
     $window.MinWidth=if($widget){238}else{476}; $window.MinHeight=100
     $window.Width=if($widget){$settings.WidgetWidth}else{[Math]::Max($window.MinWidth,$settings.Width)}
     $savedHeight=if($widget){$settings.WidgetHeight}else{$settings.Height}
@@ -475,9 +474,8 @@ function Show-DeckSettings {
     $groups=[ordered]@{
         Appearance=@('ViewMode','Compact','AlwaysOnTop','CloseToTray','AutoStart','OpacityPercent','FontSize','DefaultFolder','AlwaysAskFolder')
         Details=@('AccountPickerUsage','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets')
-        Checks=@('AutoCheck','PollMinutes','MinimumGapSeconds')
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
-        'Usage Warmup'=@('WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupEnabled','WarmupAllPaid','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
+        'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupEnabled','WarmupAllPaid','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
     }
     $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; only the selected fallback accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='All modes send a small real prompt in the background. Choose after-reset, daily local times, or both for selected paid accounts. Right-click any signed-in account to warm it now. Success requires an assistant reply. Closing the window keeps enabled schedules running in the tray.'}
     $labels=@{FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Fallback selection';FailoverAccounts='Fallback accounts in order (comma-separated names)';AccountPickerUsage='Usage and reset times in account picker';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up (master switch)';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Start in background when signing into Windows';WarmupAllPaid='All Plus or higher (including future accounts)';WarmupAccounts='Additional accounts (type to find; select one or more)';WarmupModel='Model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
@@ -486,14 +484,16 @@ function Show-DeckSettings {
         $tab=[Windows.Controls.TabItem]::new(); $tab.Header=$group
         $scroll=[Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility='Auto'; $scroll.HorizontalScrollBarVisibility='Disabled'
         $panel=[Windows.Controls.StackPanel]::new(); $panel.Margin='2,0,12,0'; $scroll.Content=$panel; $tab.Content=$scroll
-        $description=New-DeckText $descriptions[$group] '#929CA4'; $description.Margin='0,0,0,20'; [void]$panel.Children.Add($description)
+        $description=New-DeckText $(if($group -eq 'Checks & Warmup'){$descriptions.Checks}else{$descriptions[$group]}) '#929CA4'; $description.Margin='0,0,0,20'; [void]$panel.Children.Add($description)
         $panels[$group]=$panel; [void]$tabs.Items.Add($tab)
     }
-    foreach ($key in $settings.Keys) {
+    foreach ($key in @(@($groups.Values | ForEach-Object { $_ }) + @($settings.Keys) | Select-Object -Unique)) {
         if ($key -in @('Width','Height','WidgetWidth','WidgetHeight','WidgetAutoHeight')) { continue }
         $group=@($groups.Keys | Where-Object { $key -in $groups[$_] })[0]
         if(-not $group){$group='Appearance'}
         $panel=$panels[$group]
+        if($key -eq 'AutoCheck'){[void]$panel.Children.Add((New-DeckText 'Checks' '#EDF1F7' 18))}
+        if($key -eq 'WarmupResetEnabled'){[void]$panel.Children.Add((New-DeckText 'Usage Warmup' '#EDF1F7' 18)); [void]$panel.Children.Add((New-DeckText $descriptions['Usage Warmup'] '#929CA4'))}
         $caption=if($labels.ContainsKey($key)){$labels[$key]}else{(($key -replace '^Show','') -creplace '([a-z])([A-Z])','$1 $2')}
         if ($settings[$key] -is [bool]) {
             $control=[Windows.Controls.CheckBox]::new(); $control.Content=$caption; $control.IsChecked=$settings[$key]
@@ -629,6 +629,8 @@ function Render-Deck {
     $warming=@($tasks.Values | Where-Object Kind -eq 'Warm-up').Count
     $StatusLine.Text = if ($tasks.Count) { "Checking $($tasks.Count-$warming) / warming $warming…" } else { $(if($settings.AutoCheck){"$notice / auto-check every $($settings.PollMinutes)m"}else{"$notice / auto-check off"}) }
     if($widget -and -not $tasks.Count){$StatusLine.Text='Checks '+$(if($settings.AutoCheck){'on'}else{'off'})+'  /  warm-up '+$(if($settings.WarmupEnabled){'on'}else{'off'})}
+    $SummaryButton.ToolTip=if($allProfiles){'Showing all accounts. Click for connected only.'}else{'Showing connected accounts. Click to see all.'}
+    $Summary.Foreground=if($allProfiles){'#69DEC0'}else{'#8493AA'}
     $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + $allProfiles + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
     if ($signature -eq $lastRender) { return }
     $script:lastRender=$signature
@@ -802,6 +804,7 @@ function Invoke-DeckTick {
         $script:notice='List check complete'
     }
     $CheckButton.IsEnabled=-not $batchAccounts.Count -and $now -ge $batchUntil
+    $StatusButton.IsEnabled=$CheckButton.IsEnabled
     $CheckButton.Content=if($batchAccounts.Count){'Checking…'}elseif($now -lt $batchUntil){'Check ('+[int][Math]::Ceiling(($batchUntil-$now).TotalSeconds)+'s)'}else{'Check'}
     Render-Deck
     if($yieldTick -and -not $script:tickQueued){
@@ -859,13 +862,11 @@ $SettingsButton.Add_Click({Show-DeckSettings})
 $toggleProfiles={
     $script:allProfiles=-not $allProfiles
     $AllButton.Content=if($allProfiles){'Connected only'}else{'Show all'}
-    $WidgetFilter.ToolTip=if($allProfiles){'Showing all / click for connected only'}else{'Showing connected / click for all accounts'}
-    $WidgetFilter.Foreground=if($allProfiles){'#69DEC0'}else{'#9AA5AD'}
     $script:lastRender=''; Render-Deck
 }
-$AllButton.Add_Click($toggleProfiles); $WidgetFilter.Add_Click($toggleProfiles)
+$AllButton.Add_Click($toggleProfiles); $SummaryButton.Add_Click($toggleProfiles)
 $CheckButton.ToolTip='Check visible accounts. Show all includes disconnected profiles. Up to eight checks run together. A list cooldown starts when they finish.'
-$CheckButton.Add_Click({
+$checkVisible={
     if($batchAccounts.Count -or [DateTimeOffset]::UtcNow -lt $batchUntil){return}
     $names=@($sessions | ForEach-Object Account | Select-Object -Unique)
     if($allProfiles){$names=@(Get-DeckAccounts)}
@@ -876,7 +877,10 @@ $CheckButton.Add_Click({
         $manualChecks[$name]=$now
     }
     $script:batchAccounts=@($names); $script:notice="Checking $($names.Count) accounts"; $script:lastRender=''; Render-Deck
-})
+}
+$CheckButton.Add_Click($checkVisible)
+$StatusButton.Add_Click($checkVisible)
+$StatusButton.ToolTip=$CheckButton.ToolTip
 $NewButton.Add_Click({
     $names=@(Get-DeckAccounts); $number=1
     while("account$number" -in $names){$number++}
@@ -938,6 +942,18 @@ try{
     if($SmokeTest){
         $settingsTest=Show-DeckSettings -TestUI
         if (-not $settingsTest.Controls.ContainsKey('FailoverEnabled') -or $settingsTest.Controls.FailoverMode.Items.Count -ne 2 -or $settingsTest.Controls.FailoverEnabled.IsChecked) { throw 'Failover Settings controls/default failed.' }
+        $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
+        if($headers -notcontains 'Checks & Warmup' -or $headers -contains 'Checks' -or $headers -contains 'Usage Warmup'){throw 'Checks and warmup must share one tab.'}
+        $checkPanel=$settingsTest.Controls.AutoCheck.Parent
+        if($checkPanel -ne $settingsTest.Controls.WarmupEnabled.Parent -or $checkPanel.Children.IndexOf($settingsTest.Controls.AutoCheck) -ge $checkPanel.Children.IndexOf($settingsTest.Controls.WarmupEnabled)){throw 'Checks must appear above warmup.'}
+        $before=$allProfiles
+        $SummaryButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        if($allProfiles -eq $before){throw 'Summary did not switch account view.'}
+        $SummaryButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        if($allProfiles -ne $before){throw 'Summary did not restore account view.'}
+        $StatusButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        foreach($name in @($sessions | ForEach-Object Account | Select-Object -Unique)){if(-not $manualChecks.ContainsKey($name)){throw 'Status check skipped a visible account.'}}
+        $manualChecks.Clear(); $script:batchAccounts=@()
         $settingsTest.Dialog.Close()
         'PASS: Settings includes opt-in failover, selection mode and saved account pool.'
 
@@ -1025,7 +1041,7 @@ try{
         if($configMenu.Items.Count -ne 3 -or $ConfigButton.Content -ne 'Configs' -or [Windows.Controls.Grid]::GetColumn($NewButton) -ne 0){throw 'Account controls layout failed.'}
 
         if($chrome.CaptionHeight -ne 62){throw 'Panel caption does not cover top padding.'}
-        foreach($button in @($ModeButton,$SettingsButton,$CloseButton,$WidgetFilter)) {
+        foreach($button in @($ModeButton,$SettingsButton,$CloseButton)) {
             if(-not [Windows.Shell.WindowChrome]::GetIsHitTestVisibleInChrome($button)){throw 'Caption button would be intercepted by dragging.'}
         }
         Set-DeckMode 'Widget' -Initial

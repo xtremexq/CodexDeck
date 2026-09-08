@@ -83,7 +83,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     Add-Line '  WARMUP   U run now  T daily times  W select account  P pause/resume' 'DarkMagenta'
     Add-Line ('  ' + $Notice) 'Yellow'
     Add-Line '  NAVIGATE Up/Down select  Enter launch  / search  B best  Q quit' 'Gray'
-    Add-Line '  MANAGE   R refresh  A all  H history  F failover  F2 rename  L login  N new' 'DarkGray'
+    Add-Line '  MANAGE   R refresh  A all  H history  F2 rename  L login  N new' 'DarkGray'
     Add-Line '  DISPLAY  D desktop Deck  S settings  M mask email' 'DarkGray'
     return $lines.ToArray()
 }
@@ -206,21 +206,6 @@ function Show-DeckTerminal {
                 'H' {
                     [Console]::CursorVisible=$true
                     try { Show-DeckHistoryBrowser $SuiteRoot $AuthScript } catch { $notice=$_.Exception.Message }
-                    finally { [Console]::CursorVisible=$false; Clear-Host; $lastFrame='' }
-                }
-                'F' {
-                    [Console]::CursorVisible=$true; Clear-Host
-                    try {
-                        $pool=Read-DeckTerminalInput 'Failover pool: comma-separated accounts (empty cancels)' 820
-                        if ($pool) {
-                            $mode=Read-DeckTerminalInput 'Mode: Ordered or Best (empty cancels)'
-                            if ($mode) {
-                                if ($mode -notin @('Ordered','Best')) { throw 'Choose Ordered or Best.' }
-                                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $AuthScript -Failover $mode -FailoverAccounts $pool
-                                $notice="Failover session returned (exit $LASTEXITCODE)."
-                            }
-                        }
-                    } catch { $notice=$_.Exception.Message }
                     finally { [Console]::CursorVisible=$false; Clear-Host; $lastFrame='' }
                 }
                 'F2' {

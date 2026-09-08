@@ -1,14 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 - 2026-09-08
 
+- Fixed Windows CI failover startup with explicit BOM-free UTF-8.
+- Combined Checks and Warmup settings, added clickable view/check status bars, and removed the terminal F shortcut.
+- Added a dedicated support page linked from README and About.
 - Added opt-in live failover, saved desktop defaults, explicit account pools, ordered/best selection and bounded pre-stream quota retries.
 - Added best-account recommendations, unified local session history, account rename and manual reset-credit details.
 - Fixed slow history loading for large session collections and metadata headers; H opens history and S opens desktop Settings from the terminal dashboard.
 - Updated the desktop companion, settings, encrypted backup/restore, account picker, warm-up controls and synthetic preview.
 - Expanded regression coverage for account tools, failover, desktop behavior and installation.
 
-## 1.1.0 � 2026-09-08
+## 1.1.0 — 2026-09-08
 
 - Bare `codex-auth` now opens an interactive terminal dashboard with cached usage, background refresh, quota bars, search and keyboard navigation.
 
@@ -36,7 +39,7 @@
 - AES-256-GCM password-encrypted configuration/account export and validated import; Backup and About tabs.
 - Fifty proposed features in docs/FEATURE-IDEAS.md.
 
-## 1.0.0 — 2026-09-06
+## 1.0.0 â€” 2026-09-06
 
 First public release of Codex Deck for Windows.
 

@@ -1,6 +1,6 @@
-# Account tools (development)
+# Account tools
 
-These features are in the working source and are not included in the published 1.1.0 ZIP.
+These features are included in release 1.2.0.
 
 ## Best account
 
@@ -24,7 +24,7 @@ Usage refreshes also attempt to read available manual reset credits. Expanded de
 
 ## Live failover (opt-in)
 
-Press **F** in the terminal dashboard, enter a comma-separated account pool, then choose **Ordered** or **Best**. Empty input cancels. Or launch directly:
+Press **Settings → Failover** in the terminal dashboard, enter a comma-separated account pool, then choose **Ordered** or **Best**. Empty input cancels. Or launch directly:
 
 ```powershell
 codex-auth -Failover Ordered -FailoverAccounts account1,account2,account3
