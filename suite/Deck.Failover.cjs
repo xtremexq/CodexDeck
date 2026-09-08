@@ -156,7 +156,7 @@ if (require.main === module) {
     const newline = input.indexOf('\n'); if (newline < 0) return;
     started = true;
     try {
-      const proxy = await createProxy(JSON.parse(input.slice(0,newline)));
+      const proxy = await createProxy(JSON.parse(input.slice(0,newline).replace(/^\uFEFF/, '')));
       process.stdout.write(JSON.stringify({ baseUrl:proxy.baseUrl, account:proxy.account }) + '\n');
     } catch { process.stderr.write('Deck failover could not start. Check pool logins and fresh usage.\n'); process.exit(1); }
     input = '';
