@@ -87,7 +87,7 @@ $supportOverlay=[Windows.Controls.Border]::new(); $supportOverlay.Background='#E
 $supportCard=[Windows.Controls.Border]::new(); $supportCard.MaxWidth=460; $supportCard.Margin='28'; $supportCard.Padding='26'; $supportCard.CornerRadius='12'; $supportCard.Background='#171F22'; $supportCard.BorderBrush='#426358'; $supportCard.BorderThickness='1'; $supportCard.VerticalAlignment='Center'
 $supportContent=[Windows.Controls.StackPanel]::new(); $supportCard.Child=$supportContent; $supportOverlay.Child=$supportCard
 [void]$supportContent.Children.Add((New-DeckText 'More time to build.' '#A9E8D5' 24))
-$supportCopy=New-DeckText "If Codex Deck makes your day easier, help keep it getting better.`n`nYour support funds bug fixes, Windows testing, and improvements to the little things you use every day." '#EAF0FA' 15
+$supportCopy=New-DeckText "If Codex Deck makes your day easier, help keep it getting better.`n`nYour support funds bug fixes, testing, and improvements to the little things you use every day." '#EAF0FA' 15
 $supportCopy.Margin='0,16,0,20'; [void]$supportContent.Children.Add($supportCopy)
 $supportLink=[Windows.Controls.Button]::new(); $supportLink.Content='Support Codex Deck'; $supportLink.Padding='16,10'; [void]$supportContent.Children.Add($supportLink)
 $supportDismiss=[Windows.Controls.Button]::new(); $supportDismiss.Content='I don''t want to help now'; $supportDismiss.Margin='0,10,0,0'; $supportDismiss.Padding='12,8'; [void]$supportContent.Children.Add($supportDismiss)

@@ -27,11 +27,15 @@ Run **`codex-auth`** to see your local accounts and their cached usage immediate
 
 ## Less account juggling. More time to build.
 
-Codex Deck brings your accounts, usage limits, and sessions into one view so you can get back to building. **If Deck saves you time, help keep it moving forward.**
+Codex Deck brings your accounts, usage limits, and sessions into one view so you can get back to building.
 
-Your support funds bug fixes, Windows testing, and improvements that make Deck easier to use every day.
+**If Deck saves you time, help keep it moving forward.**
 
-**[Support Codex Deck →](https://xtremexq.github.io/CodexDeck/support/)** · Give once or monthly through GitHub Sponsors. Always optional; Deck is free and open source.
+Your support funds bug fixes, testing, and improvements that make Deck easier to use every day.
+
+**[Support Codex Deck →](https://xtremexq.github.io/CodexDeck/support/)** · Give once or monthly through GitHub Sponsors.
+
+Always optional; Deck is free and open source.
 
 ## Install
 
