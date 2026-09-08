@@ -1,9 +1,9 @@
-﻿@echo off
+@echo off
 setlocal
 set "__SELF=%~f0"
 set "__TMPFILE=%TEMP%\Run-CodexLoopUsage-%RANDOM%%RANDOM%.ps1"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$self = $env:__SELF; $tmp = $env:__TMPFILE; $marker = '__POWERSHELL__'; $content = Get-Content -LiteralPath $self; $start = [Array]::IndexOf($content, $marker); if ($start -lt 0) { throw 'Embedded PowerShell marker not found.' }; Set-Content -LiteralPath $tmp -Value $content[($start + 1)..($content.Length - 1)] -Encoding UTF8"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$self = $env:__SELF; $tmp = $env:__TMPFILE; $marker = '__POWERSHELL__'; $content = Get-Content -LiteralPath $self -Encoding UTF8; $start = [Array]::IndexOf($content, $marker); if ($start -lt 0) { throw 'Embedded PowerShell marker not found.' }; Set-Content -LiteralPath $tmp -Value $content[($start + 1)..($content.Length - 1)] -Encoding UTF8"
 if errorlevel 1 (
     exit /b %errorlevel%
 )

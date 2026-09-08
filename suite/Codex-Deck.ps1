@@ -55,14 +55,14 @@ public static class DeckTaskbarIdentity {
 $script:window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
 $script:appIcon=[Windows.Media.Imaging.BitmapImage]::new([uri](Join-Path $root 'assets/codex-deck.png'))
 $window.Icon=$appIcon; $window.FindName('AppLogo').Source=$appIcon
-foreach ($name in 'AccountPicker','SettingsButton','LaunchButton','ConfigButton','NewButton','AllButton','CheckButton','Summary','StatusLine','Cards','ModeButton','CloseButton','LaunchBar','ActionBar','Brand','Subtitle','LayoutRoot','Disclaimer','Header','SummaryButton','StatusButton','CardScroll') {
+foreach ($name in 'AccountPicker','SettingsButton','LaunchButton','ConfigButton','NewButton','Summary','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','Brand','Subtitle','LayoutRoot','Disclaimer','Header','SummaryButton','StatusButton','CardScroll') {
     Set-Variable -Name $name -Value $window.FindName($name) -Scope Script
 }
 # Native caption hit testing covers the top padding, logo, text and gaps too.
 # The old Header-only mouse handler left the surrounding margin undraggable.
 $chrome=[Windows.Shell.WindowChrome]::new(); $chrome.CaptionHeight=54; $chrome.ResizeBorderThickness='5'; $chrome.GlassFrameThickness='0'; $chrome.CornerRadius='10'
 [Windows.Shell.WindowChrome]::SetWindowChrome($window,$chrome)
-foreach($button in @($ModeButton,$SettingsButton,$CloseButton)) {
+foreach($button in @($MinimizeButton,$ModeButton,$SettingsButton,$CloseButton)) {
     [Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($button,$true)
 }
 function New-DeckText([string]$Text, [string]$Color='#EAF0FA', [double]$Size=12) {
@@ -264,6 +264,7 @@ function New-DeckWidgetDetails([string]$Name) {
         }
         if($parts.Count){$reset=New-DeckText ('Reset  '+($parts -join '  /  ')) '#8293AA' 10; $reset.Margin='0,7,0,0'; [void]$stack.Children.Add($reset)}
     }
+    if($settings.ShowResetCredits){[void]$stack.Children.Add((New-DeckText ('Reset credits  '+(Format-DeckResetCredits $Row)) '#8293AA' 10))}
     if($settings.ShowPlan -and $plan){$stack.Children.Insert(0,(New-DeckText $plan.ToUpperInvariant() '#8394AD' 10))}
     return $stack
 }
@@ -307,8 +308,9 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
         Save-DeckView
     }
     $script:widget=$Mode -ne 'Panel'; $settings.ViewMode=$Mode
+    $window.ShowInTaskbar=-not $widget
     $visibility=if($widget){'Collapsed'}else{'Visible'}
-    foreach($control in @($LaunchBar,$ActionBar,$Subtitle,$SettingsButton)){$control.Visibility=$visibility}
+    foreach($control in @($LaunchBar,$Subtitle,$SettingsButton,$MinimizeButton)){$control.Visibility=$visibility}
     $window.MinWidth=if($widget){238}else{476}; $window.MinHeight=100
     $window.Width=if($widget){$settings.WidgetWidth}else{[Math]::Max($window.MinWidth,$settings.Width)}
     $savedHeight=if($widget){$settings.WidgetHeight}else{$settings.Height}
@@ -460,25 +462,33 @@ function Edit-DeckConfig([string]$Path, [string]$Label) {
 }
 function Show-DeckSettings {
     param([switch]$TestUI)
-    $dialog=[Windows.Window]::new(); $dialog.Title='Codex Deck / Settings'; $dialog.Width=600; $dialog.Height=640; $dialog.MinWidth=540; $dialog.MinHeight=440
+    $dialog=[Windows.Window]::new(); $dialog.Title='Codex Deck / Settings'; $dialog.Width=640; $dialog.Height=[Math]::Min(700,[Windows.SystemParameters]::WorkArea.Height); $dialog.MinWidth=540; $dialog.MinHeight=440
+    $dialog.WindowStyle='None'; $dialog.ResizeMode='CanResize'; $dialog.ShowInTaskbar=$false
+    $settingsChrome=[Windows.Shell.WindowChrome]::new(); $settingsChrome.CaptionHeight=65; $settingsChrome.ResizeBorderThickness='5'; $settingsChrome.GlassFrameThickness='0'
+    [Windows.Shell.WindowChrome]::SetWindowChrome($dialog,$settingsChrome)
     if(-not $TestUI){$dialog.Owner=$window}; $dialog.WindowStartupLocation='CenterOwner'; $dialog.Background='#000000'; $dialog.Foreground='#EAF0FA'
     $dialog.Icon=$appIcon; $dialog.Resources.MergedDictionaries.Add($window.Resources)
-    $dock=[Windows.Controls.DockPanel]::new(); $dock.Margin='18'; $dialog.Content=$dock
+    $dock=[Windows.Controls.DockPanel]::new(); $dock.Margin='22'
+    $frame=[Windows.Controls.Border]::new(); $frame.BorderBrush='#363F45'; $frame.BorderThickness='1'; $frame.CornerRadius='10'; $frame.Background='#101315'; $frame.Child=$dock; $dialog.Content=$frame
     $save=[Windows.Controls.Button]::new(); $save.Content='Save settings'; $save.Padding='12,8'; $save.Margin='0,12,0,0'
     [Windows.Controls.DockPanel]::SetDock($save,'Bottom'); [void]$dock.Children.Add($save)
     $heading=New-DeckText 'Settings' '#EDF1F7' 22; $heading.Margin='0,0,0,5'
-    [Windows.Controls.DockPanel]::SetDock($heading,'Top'); [void]$dock.Children.Add($heading)
+    $titlebar=[Windows.Controls.DockPanel]::new(); $titlebar.LastChildFill=$true
+    $dismiss=[Windows.Controls.Button]::new(); $dismiss.Style=$window.Resources['IconButton']; $dismiss.Content=[char]0x00D7; $dismiss.ToolTip='Close settings'; $dismiss.Margin='12,0,0,0'; $dismiss.VerticalAlignment='Top'
+    [Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($dismiss,$true)
+    $dismiss.Add_Click({$dialog.Close()}.GetNewClosure()); [Windows.Controls.DockPanel]::SetDock($dismiss,'Right'); [void]$titlebar.Children.Add($dismiss); [void]$titlebar.Children.Add($heading)
+    [Windows.Controls.DockPanel]::SetDock($titlebar,'Top'); [void]$dock.Children.Add($titlebar)
     $intro=New-DeckText 'Make Deck feel at home.' '#929CA4'; $intro.Margin='0,0,0,20'
     [Windows.Controls.DockPanel]::SetDock($intro,'Top'); [void]$dock.Children.Add($intro)
     $tabs=[Windows.Controls.TabControl]::new(); [void]$dock.Children.Add($tabs)
     $groups=[ordered]@{
         Appearance=@('ViewMode','Compact','AlwaysOnTop','CloseToTray','AutoStart','OpacityPercent','FontSize','DefaultFolder','AlwaysAskFolder')
-        Details=@('AccountPickerUsage','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets')
+        Details=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
         'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupEnabled','WarmupAllPaid','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
     }
     $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; only the selected fallback accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='All modes send a small real prompt in the background. Choose after-reset, daily local times, or both for selected paid accounts. Right-click any signed-in account to warm it now. Success requires an assistant reply. Closing the window keeps enabled schedules running in the tray.'}
-    $labels=@{FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Fallback selection';FailoverAccounts='Fallback accounts in order (comma-separated names)';AccountPickerUsage='Usage and reset times in account picker';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up (master switch)';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Start in background when signing into Windows';WarmupAllPaid='All Plus or higher (including future accounts)';WarmupAccounts='Additional accounts (type to find; select one or more)';WarmupModel='Model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
+    $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Fallback selection';FailoverAccounts='Fallback accounts in order (comma-separated names)';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up (master switch)';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Start in background when signing into Windows';WarmupAllPaid='All Plus or higher (including future accounts)';WarmupAccounts='Additional accounts (type to find; select one or more)';WarmupModel='Model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
     $panels=@{}; $controls=@{}
     foreach($group in $groups.Keys){
         $tab=[Windows.Controls.TabItem]::new(); $tab.Header=$group
@@ -487,11 +497,25 @@ function Show-DeckSettings {
         $description=New-DeckText $(if($group -eq 'Checks & Warmup'){$descriptions.Checks}else{$descriptions[$group]}) '#929CA4'; $description.Margin='0,0,0,20'; [void]$panel.Children.Add($description)
         $panels[$group]=$panel; [void]$tabs.Items.Add($tab)
     }
+    $detailSections=[ordered]@{
+        'Account identity'=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage')
+        'Usage & credits'=@('ShowQuota','ShowResets','ShowResetCredits','ShowCredits')
+        'Session details'=@('ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup')
+        'Widget'=@('WidgetOneLine','WidgetShowEmail','WidgetShowResets')
+        'Diagnostics'=@('ShowCheckedAt','ShowSource','ShowProcessIds')
+    }
+    $detailPanels=@{}; $detailWrap=[Windows.Controls.WrapPanel]::new(); [void]$panels.Details.Children.Add($detailWrap)
+    foreach($section in $detailSections.Keys){
+        $card=[Windows.Controls.Border]::new(); $card.Width=258; $card.Padding='14'; $card.Margin='0,0,12,12'; $card.CornerRadius='7'; $card.Background='#171C1F'; $card.BorderBrush='#2B343A'; $card.BorderThickness='1'
+        $sectionPanel=[Windows.Controls.StackPanel]::new(); $card.Child=$sectionPanel
+        $sectionTitle=New-DeckText $section '#A9E8D5' 14; $sectionTitle.Margin='0,0,0,14'; [void]$sectionPanel.Children.Add($sectionTitle)
+        [void]$detailWrap.Children.Add($card); foreach($field in $detailSections[$section]){$detailPanels[$field]=$sectionPanel}
+    }
     foreach ($key in @(@($groups.Values | ForEach-Object { $_ }) + @($settings.Keys) | Select-Object -Unique)) {
         if ($key -in @('Width','Height','WidgetWidth','WidgetHeight','WidgetAutoHeight')) { continue }
         $group=@($groups.Keys | Where-Object { $key -in $groups[$_] })[0]
         if(-not $group){$group='Appearance'}
-        $panel=$panels[$group]
+        $panel=if($group -eq 'Details'){$detailPanels[$key]}else{$panels[$group]}
         if($key -eq 'AutoCheck'){[void]$panel.Children.Add((New-DeckText 'Checks' '#EDF1F7' 18))}
         if($key -eq 'WarmupResetEnabled'){[void]$panel.Children.Add((New-DeckText 'Usage Warmup' '#EDF1F7' 18)); [void]$panel.Children.Add((New-DeckText $descriptions['Usage Warmup'] '#929CA4'))}
         $caption=if($labels.ContainsKey($key)){$labels[$key]}else{(($key -replace '^Show','') -creplace '([a-z])([A-Z])','$1 $2')}
@@ -556,7 +580,7 @@ function Show-DeckSettings {
             $script:settings=Get-DeckSettings $root; Set-DeckAppearance; Set-DeckMode $settings.ViewMode; $script:lastRender=''; $dialog.Close()
         } catch { $settingsError.Text=$_.Exception.Message }
     })
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs}}
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -597,7 +621,7 @@ function New-DeckPanelDetails([string]$Name) {
         $fields['Status']=$status+' · percentages remaining; * reset passed, check again'
         if($settings.ShowEmail){$fields['Email']=if($displayEmail){if($settings.MaskEmail){$displayEmail -replace '^(.).*(@.*)$','$1***$2'}else{$displayEmail}}else{'Unavailable'}}
         if($settings.ShowPlan){$fields['Plan']=if($plan){$plan}else{'Unavailable'}}
-        $fields['Reset credits']=Format-DeckResetCredits $row
+        if($settings.ShowResetCredits){$fields['Reset credits']=Format-DeckResetCredits $row}
         if($settings.ShowSessionCount){$fields['Terminals']=[string]$connected.Count}
         if($settings.ShowModel){$fields['Model']=$profile.Model+' / '+$profile.Effort}
         if($settings.ShowUptime -and $connected.Count){$fields['Uptime']=[string][int]([DateTimeOffset]::Now-[DateTimeOffset]($connected | Sort-Object StartedAt | Select-Object -First 1).StartedAt).TotalMinutes+' min'}
@@ -634,7 +658,7 @@ function Render-Deck {
     $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + $allProfiles + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
     if ($signature -eq $lastRender) { return }
     $script:lastRender=$signature
-    $style=(@('Compact','FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupAllPaid','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
+    $style=(@('Compact','FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowResetCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupAllPaid','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
     if($style -ne $rowStyle){
         $poolKey=[string]$widget; $pool=$rowPools[$poolKey]
         if($pool -and $pool.Style -eq $style){$script:rowControls=$pool.Controls}else{$script:rowControls=@{}; $rowPools[$poolKey]=@{Style=$style;Controls=$rowControls}}
@@ -803,9 +827,7 @@ function Invoke-DeckTick {
         $script:batchAccounts=@(); $script:batchUntil=$now.AddSeconds($settings.MinimumGapSeconds)
         $script:notice='List check complete'
     }
-    $CheckButton.IsEnabled=-not $batchAccounts.Count -and $now -ge $batchUntil
-    $StatusButton.IsEnabled=$CheckButton.IsEnabled
-    $CheckButton.Content=if($batchAccounts.Count){'Checking…'}elseif($now -lt $batchUntil){'Check ('+[int][Math]::Ceiling(($batchUntil-$now).TotalSeconds)+'s)'}else{'Check'}
+    $StatusButton.IsEnabled=-not $batchAccounts.Count -and $now -ge $batchUntil
     Render-Deck
     if($yieldTick -and -not $script:tickQueued){
         $script:tickQueued=$true
@@ -817,6 +839,7 @@ function Invoke-DeckTick {
 $script:manualChecks=@{}
 $script:pendingWarm=@{}
 $script:widget=$false
+$MinimizeButton.Add_Click({$window.WindowState='Minimized'})
 $ModeButton.Add_Click({Set-DeckMode $(if($widget){'Panel'}else{'Widget'}); Render-Deck})
 $CloseButton.Add_Click({$window.Close()})
 $AccountPicker.Add_DropDownOpened({
@@ -861,11 +884,10 @@ $defaultsItem.Add_Click({Edit-DeckConfig (Join-Path $HOME '.codex/config.toml') 
 $SettingsButton.Add_Click({Show-DeckSettings})
 $toggleProfiles={
     $script:allProfiles=-not $allProfiles
-    $AllButton.Content=if($allProfiles){'Connected only'}else{'Show all'}
     $script:lastRender=''; Render-Deck
 }
-$AllButton.Add_Click($toggleProfiles); $SummaryButton.Add_Click($toggleProfiles)
-$CheckButton.ToolTip='Check visible accounts. Show all includes disconnected profiles. Up to eight checks run together. A list cooldown starts when they finish.'
+$SummaryButton.Add_Click($toggleProfiles)
+$StatusButton.ToolTip='Check visible accounts. Show all includes disconnected profiles. Up to eight checks run together. A list cooldown starts when they finish.'
 $checkVisible={
     if($batchAccounts.Count -or [DateTimeOffset]::UtcNow -lt $batchUntil){return}
     $names=@($sessions | ForEach-Object Account | Select-Object -Unique)
@@ -878,9 +900,7 @@ $checkVisible={
     }
     $script:batchAccounts=@($names); $script:notice="Checking $($names.Count) accounts"; $script:lastRender=''; Render-Deck
 }
-$CheckButton.Add_Click($checkVisible)
 $StatusButton.Add_Click($checkVisible)
-$StatusButton.ToolTip=$CheckButton.ToolTip
 $NewButton.Add_Click({
     $names=@(Get-DeckAccounts); $number=1
     while("account$number" -in $names){$number++}
@@ -940,6 +960,7 @@ try{
     if($SmokeTest -or $Demo){Set-DeckMode $PreviewMode -Initial}
     Invoke-DeckTick
     if($SmokeTest){
+        $script:supportTestPath=Join-Path ([IO.Path]::GetTempPath()) ('deck-support-test-'+[guid]::NewGuid().ToString('N')+'.json')
         $settingsTest=Show-DeckSettings -TestUI
         if (-not $settingsTest.Controls.ContainsKey('FailoverEnabled') -or $settingsTest.Controls.FailoverMode.Items.Count -ne 2 -or $settingsTest.Controls.FailoverEnabled.IsChecked) { throw 'Failover Settings controls/default failed.' }
         $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
@@ -954,6 +975,12 @@ try{
         $StatusButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         foreach($name in @($sessions | ForEach-Object Account | Select-Object -Unique)){if(-not $manualChecks.ContainsKey($name)){throw 'Status check skipped a visible account.'}}
         $manualChecks.Clear(); $script:batchAccounts=@()
+        if($settingsTest.Dialog.WindowStyle -ne 'None' -or $settingsTest.Dialog.ShowInTaskbar){throw 'Settings chrome/taskbar failed.'}
+        if(-not $settingsTest.Controls.ShowResetCredits.IsChecked){throw 'Reset credits must default on.'}
+        if($settingsTest.Controls.ShowResetCredits.Parent -eq $settingsTest.Controls.ShowEmail.Parent){throw 'Details sections are not grouped.'}
+        $settings.ShowResetCredits=$false
+        if(@((New-DeckPanelDetails 'account1').Children | Where-Object {$_ -is [Windows.Controls.Grid] -and $_.Children[0].Text -eq 'Reset credits'}).Count){throw 'Reset credits toggle ignored.'}
+        $settings.ShowResetCredits=$true
         $settingsTest.Dialog.Close()
         'PASS: Settings includes opt-in failover, selection mode and saved account pool.'
 
@@ -1006,6 +1033,28 @@ try{
         if($settingsUI.Controls.WarmupModel -isnot [Windows.Controls.ComboBox] -or $settingsUI.Controls.WarmupModel.SelectedItem -ne $settings.WarmupModel){throw 'Model selector failed.'}
         foreach($control in $settingsUI.Controls.Values){if($control.Margin.Bottom -lt 14){throw 'Settings spacing failed.'}}
         if(@($settingsUI.Tabs.Items | ForEach-Object Header) -notcontains 'Backup' -or @($settingsUI.Tabs.Items | ForEach-Object Header) -notcontains 'About'){throw 'Backup/About tabs missing'}
+        foreach($header in @('Backup','About','Appearance')){
+            $settingsUI.Tabs.SelectedItem=@($settingsUI.Tabs.Items | Where-Object Header -eq $header)[0]
+            $expected=if($header -eq 'Appearance'){'Visible'}else{'Collapsed'}
+            if($settingsUI.Save.Visibility -ne $expected){throw "Unexpected Save visibility on $header"}
+        }
+        if($settingsUI.SupportPrompt.Visibility -ne 'Visible'){throw 'First-visit support prompt missing'}
+        $settingsUI.SupportDismiss.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        if($settingsUI.SupportPrompt.Visibility -ne 'Collapsed'){throw 'Support prompt did not dismiss'}
+        foreach($days in @(1,34,35,36)){
+            Write-DeckJson $script:supportTestPath @{ShownAt=[DateTimeOffset]::Now.AddDays(-$days).ToString('o')}
+            $returnVisit=Show-DeckSettings -TestUI
+            $expected=if($days -ge 35){'Visible'}else{'Collapsed'}
+            if($returnVisit.SupportPrompt.Visibility -ne $expected){throw "Support schedule failed at day $days"}
+            if($days -ge 35 -and $returnVisit.Tabs.SelectedItem.Header -ne 'About'){throw 'Support visit must open About'}
+            if($days -ge 35){
+                $returnVisit.Dialog.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.FrameworkElement]::LoadedEvent))
+                $visit=Read-DeckJson $script:supportTestPath
+                if(([DateTimeOffset]::Now - [DateTimeOffset]$visit.ShownAt).TotalMinutes -gt 1){throw 'Support visit timestamp was not saved'}
+            }
+            $returnVisit.Dialog.Close()
+        }
+        Remove-Item -LiteralPath $script:supportTestPath -ErrorAction SilentlyContinue
         $settingsUI.Dialog.Close()
         $window.Content.Measure([Windows.Size]::new($window.Width,$window.Height)); $window.Content.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $window.Content.UpdateLayout()
         if($Cards.Children.Count -ne 1){throw 'Smoke test card rendering failed.'}
@@ -1033,7 +1082,11 @@ try{
         $detailLabels=@($Cards.Children[0].Child.Content.Children | Where-Object {$_ -is [Windows.Controls.Grid]} | ForEach-Object {$_.Children[0].Text})
         foreach($label in @('Status','Email','Plan','Terminals','Model','Uptime','Last check','Source','Process IDs','Folders','Warm-up','Credits')){if($label -notin $detailLabels){throw "Missing expanded field: $label"}}
         if($LaunchBar.Visibility -ne 'Visible' -or $Cards.Children.Count -ne 1){throw 'Panel mode failed.'}
-        if($ActionBar.Children.Count -ne 2 -or $CheckButton.Content -ne 'Check'){throw 'Action bar layout failed.'}
+        if($window.FindName('AllButton') -or $window.FindName('CheckButton')){throw 'Redundant panel controls remain.'}
+        if(-not $window.ShowInTaskbar -or $MinimizeButton.Visibility -ne 'Visible'){throw 'Panel taskbar/minimize failed.'}
+        if($MinimizeButton.Parent.Children[0] -ne $MinimizeButton){throw 'Minimize must be the first caption button.'}
+        $MinimizeButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        if($window.WindowState -ne 'Minimized'){throw 'Minimize action failed.'}; $window.WindowState='Normal'
         [void]$configMenu.ApplyTemplate()
         $menuSurface=[Windows.Media.VisualTreeHelper]::GetChild($configMenu,0)
         if($menuSurface -isnot [Windows.Controls.Border] -or $menuSurface.Background.ToString() -ne '#FF141619'){throw 'Configs menu background template failed.'}
@@ -1041,10 +1094,11 @@ try{
         if($configMenu.Items.Count -ne 3 -or $ConfigButton.Content -ne 'Configs' -or [Windows.Controls.Grid]::GetColumn($NewButton) -ne 0){throw 'Account controls layout failed.'}
 
         if($chrome.CaptionHeight -ne 62){throw 'Panel caption does not cover top padding.'}
-        foreach($button in @($ModeButton,$SettingsButton,$CloseButton)) {
+        foreach($button in @($MinimizeButton,$ModeButton,$SettingsButton,$CloseButton)) {
             if(-not [Windows.Shell.WindowChrome]::GetIsHitTestVisibleInChrome($button)){throw 'Caption button would be intercepted by dragging.'}
         }
         Set-DeckMode 'Widget' -Initial
+        if($window.ShowInTaskbar -or $MinimizeButton.Visibility -ne 'Collapsed'){throw 'Widget taskbar/minimize failed.'}
         if($chrome.CaptionHeight -ne 54){throw 'Widget caption does not cover top padding.'}
         Render-Deck
         $savedSessions=$sessions

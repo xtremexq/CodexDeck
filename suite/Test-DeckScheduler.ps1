@@ -19,7 +19,7 @@ $root=Join-Path $env:TEMP ('deck-scheduler-'+[guid]::NewGuid().ToString('N'))
 $suite=$PSScriptRoot; $settings=Get-DeckDefaults; $tasks=@{}; $manualChecks=@{}; $nextCheck=@{}; $pendingWarm=@{}
 $cache=@{}; $history=@{}; $resets=@{}; $batchAccounts=@(); $batchUntil=[DateTimeOffset]::MinValue
 $StatusButton=[pscustomobject]@{IsEnabled=$true}
-$CheckButton=[pscustomobject]@{IsEnabled=$true;Content='Check'}; $allProfiles=$false; $widget=$false; $started=@()
+$allProfiles=$false; $widget=$false; $started=@()
 Invoke-DeckTick; Assert ($started.Count -eq 0) 'Disabled auto-check started a request'
 $settings.AutoCheck=$true
 Invoke-DeckTick; Assert ($started.Count -eq 1 -and $started[0] -eq 'work-main') 'Auto-check missed connected account'
@@ -37,7 +37,7 @@ Invoke-DeckTick; Assert ($tasks.Count -eq 4) 'Remaining checks did not start as 
 $batchAccounts=@(Get-DeckAccounts)
 foreach($worker in $tasks.Values){$worker.Process.HasExited=$true}
 Invoke-DeckTick
-Assert ($batchAccounts.Count -eq 0 -and $batchUntil -gt [DateTimeOffset]::UtcNow -and -not $CheckButton.IsEnabled) 'Full-list cooldown must begin after completion'
+Assert ($batchAccounts.Count -eq 0 -and $batchUntil -gt [DateTimeOffset]::UtcNow -and -not $StatusButton.IsEnabled) 'Full-list cooldown must begin after completion'
 $settings.AutoCheck=$false; $manualChecks.account1=[DateTimeOffset]::UtcNow
 Invoke-DeckTick; Assert ($tasks.ContainsKey('account1')) 'Single check blocked by list cooldown or auto-check off'
 $old=$cache.account1; $tasks.account1.Process.HasExited=$true; $tasks.account1.Process.ExitCode=1

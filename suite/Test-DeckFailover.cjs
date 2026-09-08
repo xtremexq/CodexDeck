@@ -57,6 +57,16 @@ async function main() {
     assert.equal((await fetch(url.replace(/\/[a-f0-9]+$/,'/wrong')+'/responses',{method:'POST'})).status,403);
     assert.equal((await fetch(url+'/arbitrary')).status,404); assert.equal(seen.length,0);
     assert.equal((await send(url,{}, {'content-encoding':'gzip'})).status,415);
+    behavior=(req,res)=>{assert.equal(req.url,'/responses/compact');res.writeHead(200,{'content-type':'application/json'});res.end('{"output":[]}');};
+    url=await start();
+    const compact=(base,body={})=>fetch(base+'/responses/compact',{method:'POST',body:JSON.stringify(body)});
+    assert.equal((await compact(url)).status,200); assert.equal(seen[0].account,'a');
+    behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
+    url=await start(); assert.equal((await compact(url)).status,429); assert.equal(seen.length,1,'Compaction must not switch accounts');
+    behavior=(req,res)=>{res.writeHead(req.headers['chatgpt-account-id']==='a'?429:200);res.end(req.headers['chatgpt-account-id']==='a'?quota:'ok');};
+    url=await start(); await (await send(url)).text();
+    assert.equal((await compact(url,{input:[{encrypted_content:'opaque'}]})).status,409);
+    assert.equal(seen.length,2,'Bound compact history must not cross accounts');
     behavior=(_req,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write('data: waiting\n\n');};
     url=await start(); const controller=new AbortController();
     result=await fetch(url+'/responses',{method:'POST',body:'{}',signal:controller.signal});

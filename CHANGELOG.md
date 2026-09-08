@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0 - 2026-09-08
+
+- Added a themed support invitation on the first Settings visit and every 35 days thereafter, opening About.
+- Hid Save settings on Backup and About.
+- Redesigned the support page with optional GitHub sponsorships and clearer project information.
+- Added panel minimize, removed redundant actions, and hid widget/Settings taskbar entries.
+- Restyled Settings and grouped Details, including reset credits enabled by default.
+- Fixed the codex-check batch encoding error and expanded compaction proxy regression coverage.
+- Refreshed the README and desktop preview.
+
 ## 1.2.0 - 2026-09-08
 
 - Fixed Windows CI failover startup with explicit BOM-free UTF-8.

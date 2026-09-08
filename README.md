@@ -11,12 +11,7 @@ A terminal dashboard and desktop companion for multiple Codex CLI accounts on Wi
 </p>
 <p align="center"><a href="#install">Install</a> · <a href="#terminal-dashboard">Terminal</a> · <a href="#desktop-companion">Desktop</a> · <a href="#commands">Commands</a> · <a href="#help">Help</a></p>
 
-<p align="center"><img src="docs/terminal.png" width="1040" alt="Terminal dashboard showing synthetic accounts, remaining quota bars, reset times, sessions and keyboard shortcuts"><br>
-<sub>Synthetic terminal preview rendered from the dashboard's actual frame builder. No real account data.</sub></p>
-
-## Support Codex Deck
-
-If Deck helps your daily workflow, [support its development](https://xtremexq.github.io/CodexDeck/support/). Contributions help fund testing, maintenance tools, and time for fixes and improvements. Always optional; all features remain free and open source.
+<p align="center"><img src="docs/terminal.png" width="1040" alt="Terminal dashboard showing accounts, remaining quota bars, reset times, sessions and keyboard shortcuts"></p>
 
 ## Your accounts, together
 
@@ -30,13 +25,19 @@ Run **`codex-auth`** to see your local accounts and their cached usage immediate
 | Launch Codex, log in, or create a profile | Choose a launch folder and customize visible details |
 | Print a cached snapshot for scripts | Configure optional, quota-consuming warm-up requests |
 
-Codex Deck is an unofficial, independent project. It uses your existing Codex CLI installation and accounts; it does not supply accounts or additional quota.
+## Less account juggling. More time to build.
+
+Codex Deck brings your accounts, usage limits, and sessions into one view so you can get back to building. **If Deck saves you time, help keep it moving forward.**
+
+Your support funds bug fixes, Windows testing, and improvements that make Deck easier to use every day.
+
+**[Support Codex Deck →](https://xtremexq.github.io/CodexDeck/support/)** · Give once or monthly through GitHub Sponsors. Always optional; Deck is free and open source.
 
 ## Install
 
 **Requires Windows, Windows PowerShell 5.1, and Codex CLI available as `codex`.** The desktop companion uses WPF and the Windows system tray. Linux and macOS are not supported. No administrator account is required.
 
-Download **[CodexDeck-1.2.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/1.2.0/CodexDeck-1.2.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
+Download **[CodexDeck-1.3.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/1.3.0/CodexDeck-1.3.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
@@ -91,16 +92,16 @@ For a non-interactive view, use **`codex-auth status`**. It prints cached data w
 
 ## Desktop companion
 
-<p align="center"><img src="docs/desktop-preview.png" width="476" alt="Codex Deck desktop control panel with a synthetic account and expanded usage details"><br>
-<sub>Desktop preview, captured from the UI with synthetic data.</sub></p>
+<p align="center"><img src="docs/desktop-preview.png" width="476" alt="Codex Deck desktop control panel with an account and expanded usage details"></p>
 
 Run **`codex-deck`**, or press **D** in the terminal dashboard.
 
 - **Open Terminal** launches the selected account in your default or chosen folder.
 - Click the **online / terminals** bar to switch between connected accounts and all profiles, in either view.
-- Click the status bar below the list to check every visible account; the panel **Check** button does the same.
+- Click the status bar below the list to check every visible account.
 - Switch between the **panel** and **widget**, then expand account rows for more detail.
 - **Settings** controls appearance, visible fields, email masking, automatic checks and warm-up.
+- The panel appears in the taskbar; the widget and Settings stay out of it. Use **Minimize** to minimize the panel.
 - Closing the window normally hides it to the tray. **Quit** stops Deck's monitoring without closing your Codex terminals.
 
 Desktop automatic checks are off by default. Enable them in Settings if you want continued polling. Terminal startup checks and desktop polling are separate controls.
@@ -149,8 +150,6 @@ Paths below are relative to your Windows user profile:
 
 Email masking affects the display, not the saved cache. Recovery copies can contain sign-ins. Keep live installation data and account exports out of GitHub; see [SECURITY.md](SECURITY.md).
 
-The terminal writes `terminal-cache.json` separately from the desktop's `cache.json` and reads the newest records from both when it opens.
-
 ## Update or remove
 
 To update a Git installation:
@@ -180,10 +179,14 @@ To remove Deck, quit it and remove its installed scripts and command wrappers. K
 
 ## For contributors
 
-Source is in `suite/`; command wrappers are in `bin/`. Documentation images use synthetic data. Tests and build scripts belong in this repository: `Test-Repository.ps1` checks for private/generated files, script parse errors, encoding mistakes and whitespace, and is used by CI and release builds.
+Source is in `suite/`; command wrappers are in `bin/`. Run `Test-Repository.ps1` before contributing to check script syntax, encoding, and repository hygiene.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and screenshot generation, [CHANGELOG.md](CHANGELOG.md) for release history, and [LICENSE](LICENSE) for the MIT license.
 
-### Development account tools
+### Account tools
 
-Best-account selection, local session history, account rename, manual reset-credit details, and opt-in live failover are documented in [Account tools](docs/ACCOUNT-TOOLS.md). These source changes are newer than the 1.2.0 release.
+Best-account selection, local session history, account rename, manual reset-credit details, and opt-in live failover are documented in [Account tools](docs/ACCOUNT-TOOLS.md).
+
+## Disclaimer
+
+Codex Deck is an independent project, not affiliated with or endorsed by OpenAI. Codex and other product names belong to their respective owners. You need your own Codex CLI installation and accounts; Deck does not provide quota or change account limits. Usage information may be delayed or unavailable. The software is provided “as is,” without warranty, under the [MIT license](LICENSE).

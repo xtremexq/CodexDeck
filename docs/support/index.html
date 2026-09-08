@@ -1,104 +1,70 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Help give Codex Deck the time, testing, and tools it needs to stay maintained.">
-  <meta name="theme-color" content="#0a0e27">
-  <title>Support Codex Deck</title>
+  <meta name="description" content="Less account juggling. More time to build. Support the independent developer behind Codex Deck.">
+  <meta name="theme-color" content="#101916">
+  <title>More time to build · Support Codex Deck</title>
   <link rel="icon" type="image/png" href="./assets/codex-deck.png">
   <link rel="stylesheet" href="./support.css">
-  <script>
-    (function () {
-      var saved = null;
-      try { saved = localStorage.getItem('codexdeck-support-theme'); } catch (_) {}
-      var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-      document.documentElement.setAttribute('data-theme', theme);
-    }());
-  </script>
+  <script src="./support.js" defer></script>
 </head>
 <body>
-  <div class="ambient ambient-one" aria-hidden="true"></div>
-  <div class="ambient ambient-two" aria-hidden="true"></div>
-
-  <button class="theme-toggle" id="themeToggle" type="button" aria-label="Change color theme" title="Change color theme">
-    <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="4"></circle>
-      <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path>
-    </svg>
-    <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5 8.5 8.5 0 1 0 20.5 14.2Z"></path>
-    </svg>
-    <svg class="theme-icon theme-icon-blackhole" viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="3"></circle>
-      <ellipse cx="12" cy="12" rx="9" ry="4.5" transform="rotate(-18 12 12)"></ellipse>
-    </svg>
-  </button>
-
-  <main class="page-shell">
-    <section class="support-card" aria-labelledby="pageTitle">
-      <div class="support-layout">
-          <div class="support-copy">
-            <p class="eyebrow">OPTIONAL · NO PAYWALLS</p>
-            <h1 id="pageTitle">Keep Codex Deck <span>ready for what’s next.</span></h1>
-            <p class="lead mobile-lead">A clearer view of every account. Help keep Codex Deck updated, tested, and ready for your next coding session.</p>
-
-            <aside class="honesty-note">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"></path><path d="m9 12 2 2 4-4"></path></svg>
-              <p><strong>Where it actually goes</strong><br>Codex Deck runs locally on your Windows PC.<br>Contributions help with testing, maintenance tools, and my time for fixes and improvements.</p>
-            </aside>
-          </div>
-
-          <div class="support-controls">
-            <p class="controls-lead">
-              <strong>A clearer view of every account.</strong>
-              <span>Help keep Codex Deck updated, tested, and ready for your next coding session.</span>
-            </p>
-            <div class="field-heading">
-              <span>Choose an amount</span>
-              <div class="frequency-toggle" id="frequencyToggle" role="group" aria-label="Sponsorship frequency" data-frequency="one-time" hidden>
-                <button class="frequency-option is-active" type="button" data-frequency="one-time" aria-pressed="true">One-time</button>
-                <button class="frequency-option" type="button" data-frequency="recurring" aria-pressed="false">Monthly</button>
-              </div>
-            </div>
-            <div class="amount-picker" id="amountPicker" role="group" aria-label="Suggested contribution amount"></div>
-            <label class="custom-amount" id="customAmountWrap">
-              <span id="currencySymbol">$</span>
-              <input id="customAmount" type="number" inputmode="decimal" min="1" max="1000" step="1" placeholder="Other amount" aria-label="Custom contribution amount">
-            </label>
-
-            <div class="field-heading method-heading">
-              <span>Choose a method</span>
-              <small>Checkout stays with the provider</small>
-            </div>
-            <div class="method-picker" id="methodPicker" role="radiogroup" aria-label="Payment method"></div>
-
-            <button class="primary-cta" id="supportCta" type="button" disabled>
-              <span id="supportCtaText">Choose a payment method</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
-            </button>
-            <p class="provider-note" id="providerNote">No payment details are collected by this page.</p>
-
-            <div class="setup-notice" id="setupNotice" hidden>
-              <strong>Preview mode</strong>
-              <span>Add your payment links in <code>support-data.json</code> to activate checkout.</span>
-            </div>
-          </div>
+  <header class="site-header">
+    <a class="brand" href="https://github.com/xtremexq/CodexDeck"><img src="./assets/codex-deck.png" width="36" height="36" alt=""><span>Codex Deck</span></a>
+    <a class="back-link" href="https://github.com/xtremexq/CodexDeck">Back to the project <span aria-hidden="true">↗</span></a>
+  </header>
+  <main>
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> SUPPORT CODEX DECK</p>
+        <h1 id="page-title">Less account juggling.<br><em>More time<br>to build.</em></h1>
+        <p class="lead">Checking limits. Switching accounts. Finding the terminal you left open. The little interruptions add up.</p>
+        <p class="pitch">Deck brings it all into view so you can get back to building. If it’s earned a place in your workflow, help keep it getting better.</p>
+        <a class="text-link" href="#contribute">Give something back <span aria-hidden="true">↘</span></a>
+        <div class="workflow" aria-label="Less account management, more time to build">
+          <span>Check.</span><span>Switch.</span><strong>Keep building. <span aria-hidden="true">_</span></strong>
+        </div>
       </div>
+      <section class="contribution" id="contribute" aria-labelledby="contribute-title">
+        <p class="eyebrow">GIVE ONCE OR MONTHLY</p>
+        <h2 id="contribute-title">Back the work<br>behind your workflow.</h2>
+        <p class="card-intro">Your contribution supports the time I spend fixing bugs, testing on Windows, and making Deck easier to use.</p>
+        <form id="supportForm" action="https://github.com/sponsors/xtremexq/sponsorships" method="get">
+          <input type="hidden" name="sponsor" value="xtremexq">
+          <fieldset>
+            <legend>How would you like to support?</legend>
+            <div class="frequency">
+              <label><input type="radio" name="frequency" value="one-time" checked><span>One time</span></label>
+              <label><input type="radio" name="frequency" value="recurring"><span>Monthly</span></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Choose your amount <span class="currency">USD</span></legend>
+            <div class="amounts" id="amounts" hidden>
+              <button type="button" data-amount="3" aria-pressed="false">$3</button>
+              <button type="button" data-amount="5" aria-pressed="false">$5</button>
+              <button type="button" data-amount="10" aria-pressed="true">$10</button>
+              <button type="button" data-amount="25" aria-pressed="false">$25</button>
+            </div>
+            <label class="custom-label" for="amount">Your amount</label>
+            <div class="custom"><span aria-hidden="true">$</span><input id="amount" name="amount" type="number" inputmode="numeric" min="1" max="1000" step="1" required value="10" aria-describedby="amount-hint"><span>USD</span></div>
+            <p id="amount-hint" class="hint">Choose a preset or enter any whole-dollar amount.</p>
+          </fieldset>
+          <button class="cta" type="submit"><span id="ctaText">Support with $10</span><span aria-hidden="true">↗</span></button>
+          <p class="checkout-note" id="checkoutNote" aria-live="polite">One-time contribution. Continue to GitHub Sponsors to confirm.</p>
+        </form>
+        <div class="card-footer">Free to use. Open source. Support is always optional.</div>
+      </section>
     </section>
-
-    <div class="subtitle-cue" aria-hidden="true">
-      <span>00:00:03,000 → 00:00:06,500</span>
-      <p>Less account juggling. More time to build.</p>
-    </div>
-
-    <footer class="page-footer">
-      <p>Can’t contribute? Using Codex Deck, reporting a useful bug, or sharing the project already helps.</p>
-      <a id="footerRepositoryLink" href="https://github.com/xtremexq/CodexDeck" target="_blank" rel="noreferrer">View project on GitHub <span aria-hidden="true">↗</span></a>
-    </footer>
+    <section class="impact" aria-labelledby="impact-title">
+      <div class="section-intro"><p class="eyebrow">WHAT YOU’RE SUPPORTING</p><h2 id="impact-title">Small details.<br> A better daily tool.</h2></div>
+      <div class="impact-item"><span class="number">01 / RELIABILITY</span><h3>Keep the basics solid.</h3><p>Fixing the bugs that interrupt a session. Testing installation, account switching, and everyday use on Windows.</p></div>
+      <div class="impact-item"><span class="number">02 / USABILITY</span><h3>Make every glance count.</h3><p>Clearer usage information, simpler controls, and fewer steps between checking an account and getting back to work.</p></div>
+    </section>
+    <section class="personal" aria-labelledby="personal-title"><p class="eyebrow">KEEP DECK MOVING FORWARD</p><h2 id="personal-title">If Deck saves you time,<br>help shape what comes next.</h2><p>Fewer bugs. Smoother account switching. A better everyday experience. Your contribution supports the maintenance, testing, and improvements behind all three. Give once or monthly—every contribution helps keep Deck moving forward.</p><a class="text-link" href="#contribute">Support Codex Deck <span aria-hidden="true">↑</span></a></section>
   </main>
-
-  <div class="amount-toast" id="amountToast" aria-live="polite"></div>
-  <script src="./support.js" defer></script>
+  <footer><p>Another way to help: <a href="https://github.com/xtremexq/CodexDeck/issues">report a bug</a>, <a href="https://github.com/xtremexq/CodexDeck">star the repo</a>, or share Deck with someone who could use it.</p><span>Built for the work ahead.</span></footer>
 </body>
 </html>

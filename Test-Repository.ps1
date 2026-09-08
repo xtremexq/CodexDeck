@@ -9,6 +9,7 @@ try {
         if ($path -match '\.(png|ico)$') { continue }
         $text = [IO.File]::ReadAllText((Join-Path $PSScriptRoot $path))
         if ($text -match '(?i)[A-Z]:\\Users\\(?!Public\b|example\b)[^\s\\]+|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{32,}') { throw "Potential private content: $path" }
+        if ($path -match '\.(cmd|bat)$' -and [IO.File]::ReadAllBytes((Join-Path $PSScriptRoot $path))[0] -eq 239) { throw "Batch launcher must not have a UTF-8 BOM: $path" }
         if ($path -match '\.ps1$') {
             $bytes = [IO.File]::ReadAllBytes((Join-Path $PSScriptRoot $path))
             if ($bytes.Length -lt 3 -or $bytes[0] -ne 239 -or $bytes[1] -ne 187 -or $bytes[2] -ne 191) { throw "PowerShell UTF-8 BOM missing: $path" }

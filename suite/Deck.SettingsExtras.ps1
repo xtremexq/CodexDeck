@@ -58,7 +58,7 @@ $dialog.Add_Closed({$backupState.Manifest=$null; $password.Clear(); $repeat.Clea
 $aboutTab=[Windows.Controls.TabItem]::new(); $aboutTab.Header='About'; $about=[Windows.Controls.StackPanel]::new(); $about.Margin='4'; $aboutTab.Content=$about; [void]$tabs.Items.Add($aboutTab)
 $logo=[Windows.Controls.Image]::new(); $logo.Source=$appIcon; $logo.Width=48; $logo.Height=48; $logo.HorizontalAlignment='Left'; $logo.Margin='0,0,0,14'; [void]$about.Children.Add($logo)
 [void]$about.Children.Add((New-DeckText 'Codex Deck' '#EDF1F7' 24))
-[void]$about.Children.Add((New-DeckText 'Version 1.2.0 · Windows' '#69DEC0'))
+[void]$about.Children.Add((New-DeckText 'Version 1.3.0 · Windows' '#69DEC0'))
 $aboutText=New-DeckText "Manage your Codex accounts in one place.`n`nCheck usage, switch accounts, and schedule warm-ups from the desktop or terminal." '#B5BEC7' 14; $aboutText.Margin='0,18,0,20'; [void]$about.Children.Add($aboutText)
 [void]$about.Children.Add((New-DeckText 'Created by xtremexq · Open source · MIT license' '#929CA4'))
 $links=[Windows.Controls.WrapPanel]::new(); $links.Margin='0,20,0,20'; [void]$about.Children.Add($links)
@@ -74,3 +74,32 @@ foreach($link in @(
     [void]$links.Children.Add($button)
 }
 [void]$about.Children.Add((New-DeckText 'An independent companion for OpenAI Codex. Not affiliated with or endorsed by OpenAI.' '#737E89'))
+
+$tabs.Add_SelectionChanged({
+    $save.Visibility=if($tabs.SelectedItem.Header -in @('Backup','About')){'Collapsed'}else{'Visible'}
+}.GetNewClosure())
+$supportVisitPath=if($SmokeTest){$script:supportTestPath}else{Join-Path $root 'support-prompt.json'}
+$supportState=Read-DeckJson $supportVisitPath
+$supportDue=$true
+if($supportState.ShownAt){try{$supportDue=([DateTimeOffset]::Now - [DateTimeOffset]$supportState.ShownAt).TotalDays -ge 35}catch{}}
+$supportSurface=[Windows.Controls.Grid]::new(); $frame.Child=$null; [void]$supportSurface.Children.Add($dock); $frame.Child=$supportSurface
+$supportOverlay=[Windows.Controls.Border]::new(); $supportOverlay.Background='#EE101315'; $supportOverlay.Visibility='Collapsed'
+$supportCard=[Windows.Controls.Border]::new(); $supportCard.MaxWidth=460; $supportCard.Margin='28'; $supportCard.Padding='26'; $supportCard.CornerRadius='12'; $supportCard.Background='#171F22'; $supportCard.BorderBrush='#426358'; $supportCard.BorderThickness='1'; $supportCard.VerticalAlignment='Center'
+$supportContent=[Windows.Controls.StackPanel]::new(); $supportCard.Child=$supportContent; $supportOverlay.Child=$supportCard
+[void]$supportContent.Children.Add((New-DeckText 'More time to build.' '#A9E8D5' 24))
+$supportCopy=New-DeckText "If Codex Deck makes your day easier, help keep it getting better.`n`nYour support funds bug fixes, Windows testing, and improvements to the little things you use every day." '#EAF0FA' 15
+$supportCopy.Margin='0,16,0,20'; [void]$supportContent.Children.Add($supportCopy)
+$supportLink=[Windows.Controls.Button]::new(); $supportLink.Content='Support Codex Deck'; $supportLink.Padding='16,10'; [void]$supportContent.Children.Add($supportLink)
+$supportDismiss=[Windows.Controls.Button]::new(); $supportDismiss.Content='I don''t want to help now'; $supportDismiss.Margin='0,10,0,0'; $supportDismiss.Padding='12,8'; [void]$supportContent.Children.Add($supportDismiss)
+$supportNote=New-DeckText 'Always optional. Deck is free and open source.' '#929CA4' 12; $supportNote.Margin='0,16,0,0'; [void]$supportContent.Children.Add($supportNote)
+[void]$supportSurface.Children.Add($supportOverlay)
+$supportDismiss.Add_Click({$supportOverlay.Visibility='Collapsed'; $dock.IsEnabled=$true}.GetNewClosure())
+$supportLink.Add_Click({Start-Process 'https://xtremexq.github.io/CodexDeck/support/'; $supportOverlay.Visibility='Collapsed'; $dock.IsEnabled=$true}.GetNewClosure())
+$dialog.Add_PreviewKeyDown({param($sender,$eventArgs) if($eventArgs.Key -eq 'Escape' -and $supportOverlay.Visibility -eq 'Visible'){$supportOverlay.Visibility='Collapsed'; $dock.IsEnabled=$true; $eventArgs.Handled=$true}}.GetNewClosure())
+if($supportDue){
+    $tabs.SelectedItem=$aboutTab; $supportOverlay.Visibility='Visible'; $dock.IsEnabled=$false
+    $dialog.Add_Loaded({
+        try{Write-DeckJson $supportVisitPath @{ShownAt=[DateTimeOffset]::Now.ToString('o')}}catch{}
+        [void]$supportDismiss.Focus()
+    }.GetNewClosure())
+}
