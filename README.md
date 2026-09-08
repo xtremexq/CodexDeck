@@ -177,3 +177,17 @@ Run `./Test-Repository.ps1` for repository privacy/encoding checks. After commit
 ---
 
 <p align="center"><b>Codex Deck</b><br><sub>A little less account juggling. A little more room to work.</sub><br><a href="https://github.com/xtremexq/CodexDeck/issues">Report a bug or suggest a feature</a></p>
+
+## Terminal account dashboard
+
+Run **`codex-auth`** with no arguments to open the keyboard-driven admin panel. It displays cached quota bars immediately, refreshes missing or older-than-five-minute usage in the background (up to three accounts at a time), and shows plan, model, reset timestamps and connected sessions. Checks use the existing usage reader; opening the panel does not send a warm-up prompt. Cached values retain their check timestamp; a passed reset is explicitly marked.
+
+- **Up/Down**, **Page Up/Down**, **Home/End**: select an account.
+- **Enter**: launch Codex in the current terminal and return to the panel when it exits.
+- **R / A**: refresh the selected account / all accounts.
+- **/**: filter account names; **Esc** clears the filter or exits.
+- **L / N**: log in to the selected account / create and log in to a new account.
+- **D**: open desktop Deck, including its scheduling and warm-up settings.
+- **M**: toggle email masking (masked by default). **Q**: quit.
+
+`codex-auth status` prints a cached snapshot without network requests. Redirected input/output also uses snapshot mode so scripts never hang waiting for a key. Existing `list`, account launch, login and deletion commands remain available. The panel stores usage results in `deck/terminal-cache.json`, separate from the desktop writer, and reads the latest records from both caches. No new dependencies are required.

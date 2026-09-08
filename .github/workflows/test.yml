@@ -19,6 +19,7 @@ jobs:
           ./suite/Test-Deck.ps1
           ./suite/Test-DeckScheduler.ps1
           ./suite/Test-CodexAuth.ps1
+          ./suite/Test-DeckTerminal.ps1
           ./suite/Test-CodexLoopUsage.ps1
       - name: WPF smoke test
         run: powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File ./suite/Codex-Deck.ps1 -SmokeTest

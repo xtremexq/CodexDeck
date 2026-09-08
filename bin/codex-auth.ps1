@@ -613,7 +613,9 @@ function Initialize-AccountDirectory {
 }
 
 function Show-Usage {
-    Write-Host "Usage: codex-auth <accountN|N|list> [codex args...]"
+    Write-Host "Usage: codex-auth [dashboard|status|accountN|N|list] [codex args...]"
+    Write-Host "  codex-auth          Interactive account dashboard"
+    Write-Host "  codex-auth status   Cached dashboard snapshot (no network)"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  codex-auth account1"
@@ -681,7 +683,23 @@ if ($Account -in @("help", "--help", "-h")) {
     exit 0
 }
 
-if ([string]::IsNullOrWhiteSpace($Account) -or $Account -in @("list", "--list", "-l")) {
+if ([string]::IsNullOrWhiteSpace($Account) -or $Account -in @('dashboard', 'status')) {
+    $terminalRoot = Split-Path -Parent $accountsRoot
+    $panel = Join-Path $terminalRoot 'Deck.Terminal.ps1'
+    if (-not (Test-Path -LiteralPath $panel)) {
+        $terminalRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../suite'))
+        $panel = Join-Path $terminalRoot 'Deck.Terminal.ps1'
+    }
+    if (-not (Test-Path -LiteralPath $panel)) { throw 'Dashboard missing. Reinstall Codex Deck.' }
+    . $panel
+    # Runtime data always belongs to the installed accounts root.
+    $runtimeRoot = Split-Path -Parent $accountsRoot
+    if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'Deck.Core.ps1'))) { throw 'Codex Deck core missing. Run Install-CodexDeck.ps1 first.' }
+    Show-DeckTerminal -SuiteRoot $runtimeRoot -AuthScript $PSCommandPath -Snapshot:($Account -eq 'status')
+    exit 0
+}
+
+if ($Account -in @("list", "--list", "-l")) {
     Show-Usage
     Write-Host ""
     Show-Accounts
