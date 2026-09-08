@@ -86,9 +86,9 @@ function Read-DeckTerminalInput([string]$Prompt) {
     $value = ''
     while ($true) {
         $key = [Console]::ReadKey($true)
-        if ($key.Key -eq 'Escape') { return '' }
-        if ($key.Key -eq 'Enter') { [Console]::WriteLine(); return $value }
-        if ($key.Key -eq 'Backspace' -and $value.Length) {
+        if ($key.Key -eq 'Escape' -or [int]$key.KeyChar -eq 27) { return '' }
+        if ($key.Key -eq 'Enter' -or [int]$key.KeyChar -in @(10,13)) { [Console]::WriteLine(); return $value }
+        if (($key.Key -eq 'Backspace' -or [int]$key.KeyChar -eq 8) -and $value.Length) {
             $value = $value.Substring(0,$value.Length - 1)
             [Console]::Write("`b `b")
         } elseif (-not [char]::IsControl($key.KeyChar) -and $value.Length -lt 40) {
@@ -173,7 +173,11 @@ function Show-DeckTerminal {
             if (-not [Console]::KeyAvailable) { continue }
             $key = [Console]::ReadKey($true)
             $name = if ($visible.Count) { $visible[$selected] } else { $null }
-            switch ($key.Key) {
+            $action = $key.Key.ToString()
+            if (-not [char]::IsControl($key.KeyChar)) { $action = ([string]$key.KeyChar).ToUpperInvariant() }
+            elseif ([int]$key.KeyChar -in @(10,13)) { $action = 'Enter' }
+            elseif ([int]$key.KeyChar -eq 27) { $action = 'Escape' }
+            switch ($action) {
                 'Q' { return }
                 'Escape' { if ($filter) { $filter = ''; $selected = 0 } else { return } }
                 'UpArrow' { $selected = [Math]::Max(0,$selected - 1) }
@@ -191,10 +195,10 @@ function Show-DeckTerminal {
                         [Console]::CursorVisible = $true; Clear-Host
                         $filter = Read-DeckTerminalInput 'Find account (empty = all)'; $selected = 0
                         [Console]::CursorVisible = $false; Clear-Host; $lastFrame = ''
-                    } elseif ($key.Key -in @('Enter','L','N')) {
+                    } elseif ($action -in @('Enter','L','N')) {
                         [Console]::CursorVisible = $true; Clear-Host
                         try {
-                            if ($key.Key -eq 'N') {
+                            if ($action -eq 'N') {
                                 $name = Read-DeckTerminalInput 'New account name or number (empty cancels)'
                                 if ($name -match '^\d+$') { $name = "account$name" }
                                 if ($name -and ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -match '^(con|prn|aux|nul|com[0-9]|lpt[0-9])$')) { throw 'Invalid account name.' }
@@ -203,7 +207,7 @@ function Show-DeckTerminal {
                             if ($name) {
                                 [void][IO.Directory]::CreateDirectory($accountRoot)
                                 $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$AuthScript,$name)
-                                if ($key.Key -in @('L','N')) { $arguments += 'login' }
+                                if ($action -in @('L','N')) { $arguments += 'login' }
                                 & powershell.exe @arguments
                                 $notice = "$name returned (exit $LASTEXITCODE)."
                                 $profiles.Remove($name); $attempted.Remove($name)
