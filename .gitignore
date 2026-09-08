@@ -27,3 +27,6 @@ Thumbs.db
 Desktop.ini
 .idea/
 .vscode/
+
+# Encrypted account exports remain private.
+*.cdeck

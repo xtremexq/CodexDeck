@@ -1,193 +1,178 @@
 <p align="center">
-  <img src="suite/deck/assets/codex-deck.png" alt="Codex Deck icon" width="104">
+  <img src="suite/deck/assets/codex-deck.png" width="88" alt="Codex Deck">
 </p>
-
 <h1 align="center">Codex Deck</h1>
-
+<p align="center"><strong>One command. Every account. A clear view of your usage.</strong><br>
+A terminal dashboard and desktop companion for multiple Codex CLI accounts on Windows.</p>
 <p align="center">
-  <b>Your accounts. Your usage. One small deck.</b><br>
-  A local Windows companion for people who work with multiple Codex CLI accounts.
-</p>
-
-<p align="center">
-  <a href="https://github.com/xtremexq/CodexDeck/releases/latest"><img src="https://img.shields.io/github/v/release/xtremexq/CodexDeck?style=flat-square&amp;color=69dec0" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/platform-Windows-5796e6?style=flat-square" alt="Windows">
-  <img src="https://img.shields.io/badge/PowerShell-5.1-5796e6?style=flat-square" alt="PowerShell 5.1">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-69dec0?style=flat-square" alt="MIT license"></a>
   <a href="https://github.com/xtremexq/CodexDeck/actions/workflows/test.yml"><img src="https://github.com/xtremexq/CodexDeck/actions/workflows/test.yml/badge.svg" alt="Windows checks"></a>
+  <img src="https://img.shields.io/badge/Windows-PowerShell%205.1-0078D4" alt="Windows PowerShell 5.1">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-69dec0" alt="MIT license"></a>
 </p>
+<p align="center"><a href="#install">Install</a> · <a href="#terminal-dashboard">Terminal</a> · <a href="#desktop-companion">Desktop</a> · <a href="#commands">Commands</a> · <a href="#help">Help</a></p>
 
-<p align="center">
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#at-a-glance">Features</a> ·
-  <a href="#usage-warmup">Usage Warmup</a> ·
-  <a href="#privacy-and-local-data">Privacy</a> ·
-  <a href="#troubleshooting">Help</a>
-</p>
+<p align="center"><img src="docs/terminal.png" width="1040" alt="Terminal dashboard showing synthetic accounts, remaining quota bars, reset times, sessions and keyboard shortcuts"><br>
+<sub>Synthetic terminal preview rendered from the dashboard's actual frame builder. No real account data.</sub></p>
 
----
+## Your accounts, together
 
-<p align="center"><img src="docs/panel.png" width="660" alt="Codex Deck panel with a synthetic account and quota information"><br><sub>Synthetic preview. No real account data.</sub></p>
+Run **`codex-auth`** to see your local accounts and their cached usage immediately. Check fresh limits in the background, find the profile you need, and launch Codex from the same terminal. Keep the floating desktop widget nearby when you want usage visible while you work.
 
-## At a glance
+| Terminal dashboard | Desktop companion |
+| --- | --- |
+| Search and navigate accounts with the keyboard | Switch between a control panel and floating widget |
+| See quota bars, plans, reset times and attached sessions | Keep usage nearby with tray access and optional always-on-top |
+| Refresh one account or queue every account | Run manual checks or enable automatic polling |
+| Launch Codex, log in, or create a profile | Choose a launch folder and customize visible details |
+| Print a cached snapshot for scripts | Configure optional, quota-consuming warm-up requests |
 
-| Accounts & terminals | Usage & visibility |
-| :--- | :--- |
-| Separate local Codex profiles | Check visible accounts with one button |
-| Named accounts from the **+** button | Optional automatic checks for connected accounts |
-| Launch in a default folder or choose each time | Usage percentages, reset times, and cached status |
-| Edit account config and global defaults | Optional usage details in the account picker |
+Codex Deck is an unofficial, independent project. It uses your existing Codex CLI installation and accounts; it does not supply accounts or additional quota.
 
-| Your desktop | Your preferences |
-| :--- | :--- |
-| Black panel with expandable account rows | Settings grouped into four tabs |
-| Small floating widget and tray access | Compact rows start collapsed |
-| Independent panel and widget sizing | Email masking and detail visibility controls |
-| Closing Deck leaves account terminals running | Always on top, automatic checks, and warmup start off |
+## Install
 
-This is an unofficial project, independent of OpenAI. It does not provide accounts, extra quota, or a Codex subscription.
+**Requires Windows, Windows PowerShell 5.1, and Codex CLI available as `codex`.** The desktop companion uses WPF and the Windows system tray. Linux and macOS are not supported. No administrator account is required.
 
-## Quick start
-
-**Requirements:** Windows with Windows PowerShell 5.1, a desktop session, and Codex CLI installed and available as `codex`. WPF and Windows tray integration mean this version does **not** run on Linux or macOS. The installer does not install Codex or require an administrator account.
-
-1. Download **CodexDeck-1.0.0.zip** from [Releases](https://github.com/xtremexq/CodexDeck/releases/latest) and extract it.
-2. Open PowerShell in the extracted folder and run:
-
-   ```powershell
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
-   ```
-
-3. Open a **new terminal**, then start your first profile:
-
-   ```powershell
-   codex-auth account1
-   ```
-
-4. Follow Codex's sign-in flow. Open `codex-deck` to manage profiles and use **Check** to fetch usage.
-
-The installer copies scripts and icons into `%USERPROFILE%\.codex-loop` and command wrappers into `%USERPROFILE%\.local\bin`, adding the latter to your user PATH. Source archives from GitHub work with the same installer. Scripts are unsigned; review them before running. Execution policy bypass above applies to that process only.
-
-## Everyday controls
-
-| Control | What it does |
-| :--- | :--- |
-| **+** | Create a named profile; a numbered account name is suggested |
-| Account picker + **Open terminal** | Launch the selected profile in your chosen folder |
-| **Configs → Account config** | Edit the selected account's TOML configuration |
-| **Configs → Defaults** | Edit global defaults used to seed new profiles |
-| **Show all** | Include disconnected local profiles in the panel |
-| **Check** | Queue checks for visible accounts, including disconnected ones when Show all is active |
-| Row arrow | Expand account details; the widget grows within available screen space |
-| View switch | Move between the panel and floating widget |
-| Close / tray menu | Hide, restore, open settings, or quit Deck |
-
-Global defaults are not a second config for the selected account. Existing account choices are preserved; config changes apply on the next launch. The editor makes backups and detects conflicts, but does not validate TOML syntax.
-
-Closing the window hides Deck to the tray by default. **Quit** exits monitoring and stops pending warmup work; it does not close account terminals. Tray icons may appear in Windows' notification overflow. Connection indicators track terminals launched through `codex-auth`, not whether Codex is actively generating.
-
-### Command reference
+Download **[CodexDeck-1.1.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/1.1.0/CodexDeck-1.1.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
 
 ```powershell
-codex-deck                       # Open or reveal Deck
-codex-auth account1              # Launch an isolated profile
-codex-auth work-main             # Custom profile name
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
+```
+
+Or install from source:
+
+```powershell
+git clone https://github.com/xtremexq/CodexDeck.git
+cd CodexDeck
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
+```
+
+The [main-branch ZIP](https://github.com/xtremexq/CodexDeck/archive/refs/heads/main.zip) also works with the same installer. Release assets include a SHA-256 checksum.
+
+Open a **new terminal** and run:
+
+```powershell
+codex-auth
+```
+
+Press **N** to create a profile and sign in. Already have local profiles under `.codex-loop/accounts`? They appear automatically. You can also create or open one directly with `codex-auth account1`.
+
+The installer adds command wrappers to your user PATH and preserves existing account data. Codex CLI is installed separately. The execution-policy flag applies only to the installer process.
+
+## Terminal dashboard
+
+### A few keys cover the everyday work
+
+| Key | Action |
+| --- | --- |
+| **↑ / ↓** | Select an account |
+| **Page Up / Page Down**, **Home / End** | Navigate a longer list |
+| **Enter** | Launch Codex; return to the dashboard when it exits |
+| **R** | Refresh the selected account |
+| **A** | Queue fresh checks for every account |
+| **/** | Search account names |
+| **L** | Log in to the selected account |
+| **N** | Create a new profile and log in |
+| **D** | Open the desktop companion |
+| **M** | Toggle email masking; masking starts enabled |
+| **Esc** | Clear the search, or quit when no search is active |
+| **Q** | Quit the dashboard |
+
+Cached usage appears first. Authenticated accounts with missing or more-than-five-minute-old results are checked automatically, with up to three checks running at once. The panel stays responsive while checks run. Opening it does not send a warm-up prompt.
+
+**Bars show quota remaining.** Primary is the five-hour window, or another plan-specific window such as a free account's longer allowance. Weekly is shown separately when available. `?` means the value is unknown; it does not mean zero. Reset timestamps use your local time. **Reset passed** means the displayed value needs a fresh check.
+
+The selected account's details show its model, reasoning effort, last check and attached terminal sessions. A connected session means a terminal launched through `codex-auth`; it does not necessarily mean Codex is generating a response.
+
+For a non-interactive view, use **`codex-auth status`**. It prints cached data without network requests. Redirecting the bare command's input or output also selects snapshot mode.
+
+## Desktop companion
+
+<p align="center"><img src="docs/panel.png" width="660" alt="Codex Deck desktop control panel with a synthetic account and expanded usage details"><br>
+<sub>Current main-branch desktop UI, captured with the built-in synthetic smoke test.</sub></p>
+
+Run **`codex-deck`**, or press **D** in the terminal dashboard.
+
+- **Open Terminal** launches the selected account in your default or chosen folder.
+- **Show all** includes disconnected profiles; **Check** requests usage for the visible accounts.
+- Switch between the **panel** and **widget**, then expand account rows for more detail.
+- **Settings** controls appearance, visible fields, email masking, automatic checks and warm-up.
+- Closing the window normally hides it to the tray. **Quit** stops Deck's monitoring without closing your Codex terminals.
+
+Desktop automatic checks are off by default. Enable them in Settings if you want continued polling. Terminal startup checks and desktop polling are separate controls.
+
+### Optional warm-up
+
+Warm-up is off by default and requires automatic checking plus eligible account selection. After observing an eligible paid account's five-hour reset and verifying fresh zero usage, Deck can send a small prompt after a grace period. It skips unsupported plans, unavailable quotas and missed reset windows, and records attempts to avoid repeats.
+
+**Warm-up consumes real quota.** A successful prompt does not guarantee that a new usage timer starts. Leave it disabled if you only want monitoring.
+
+## Commands
+
+```powershell
+codex-auth                       # Interactive terminal dashboard
+codex-auth status                # Cached snapshot; no network
 codex-auth list                  # List local profiles
-codex-auth account1 -del         # Archive an inactive profile for recovery
-codex-check                      # Usage report
+codex-auth account1              # Launch an account
+codex-auth 2                     # Shorthand for account2
+codex-auth work-main             # Use a named profile
+codex-auth account1 login        # Sign in to that profile
+codex-auth account1 login status # Ask Codex for login status
+codex-auth account1 -del         # Move an inactive profile to recovery
+codex-deck                       # Open the desktop companion
+codex-check                      # Fetch a usage report
 codex-check -Account account1    # Check one account
-codex-check -Json                # Machine-readable output
-codex-check -NoColor             # Plain output
+codex-check -Json                # Machine-readable usage report
+codex-check -NoColor             # Plain-text usage report
 ```
 
-New profiles can inherit config, rules, and skills from an existing local profile. Authentication is separate. Account instructions use a shared `accounts/AGENTS.shared.md` file linked into profiles.
+Each profile has a separate `CODEX_HOME`. New profiles can inherit local configuration, rules and skills; authentication remains separate. Deletion keeps a recovery copy and refuses an account with a tracked connected terminal.
 
-## Settings and checks
+## Local data and privacy
 
-| Tab | Options |
-| :--- | :--- |
-| **Appearance** | View mode, compact rows, always on top, close-to-tray, start with account terminals, opacity, default folder, always ask for folder |
-| **Details** | Email, plan, quota, resets, optional diagnostics, email masking, widget details, account-picker usage |
-| **Checks** | Enable automatic checks, polling interval, minimum request spacing |
-| **Usage Warmup** | Enable warmup, select accounts and model, tune reset grace and maximum delay |
+Deck has no hosted backend. Usage checks use local Codex authentication to contact upstream services, with a Codex app-server fallback. These integrations depend on the installed CLI and upstream behavior.
 
-Email, plan, quota, and reset details start enabled for the panel. Account-picker usage is optional: it shows colored **percentage used / next local reset** and a gray relative last-check age. Deck displays the windows returned by the account, including five-hour, weekly, or monthly windows when present; it does not fabricate missing limits from the plan name.
+Paths below are relative to your Windows user profile:
 
-Automatic checks start **disabled**. When enabled, only connected accounts are polled, normally every ten minutes. Requests are serialized with a default twenty-second gap. Minimum settings are five minutes between regular account checks and fifteen seconds between requests. Manual checks respect spacing and a one-minute account cooldown. Failures back off; cached data is labeled. **Show all** changes visibility, not automatic polling scope.
+| Path | What lives there |
+| --- | --- |
+| `.codex-loop/accounts/` | Per-account sign-ins, configuration and Codex data |
+| `.codex-loop/deleted-accounts/` | Recoverable removed profiles |
+| `.codex-loop/deck/` | Preferences, usage caches, session records and warm-up history |
+| `.local/bin/` | Installed command wrappers |
 
-## Usage Warmup
+Email masking affects the display, not the saved cache. Recovery copies can contain sign-ins. Keep live installation data and account exports out of GitHub; see [SECURITY.md](SECURITY.md).
 
-Warmup is **off by default** and requires explicit account selection and confirmation. The default model is `gpt-5.6-luna` with low reasoning effort; the selector loads available models through Codex and caches the list. Availability depends on the installed CLI and account.
+The terminal writes `terminal-cache.json` separately from the desktop's `cache.json` and reads the newest records from both when it opens.
 
-For a connected eligible paid account, Deck can observe a five-hour reset, verify fresh zero usage after a grace period, and send a tiny non-interactive prompt. Automatic checks must also be enabled. Free, Go, unknown plans, exhausted or unknown quota, already-used windows, and missed events outside the configured delay are skipped.
+## Update or remove
 
-Attempts are persisted before execution, limited to one per observed reset, with a four-hour account cooldown and no automatic retry. The request uses an empty working directory, ephemeral execution, a read-only sandbox, and no approvals. **This consumes real quota. A successful prompt does not guarantee that a new usage timer starts.**
-
-## Privacy and local data
-
-Deck has no hosted backend. Usage checks contact OpenAI services using local Codex authentication, with a CLI app-server fallback. These integrations can change upstream.
-
-| Local location | Contents |
-| :--- | :--- |
-| `.codex-loop/accounts` | Credentials, account config, Codex sessions, rules, and skills |
-| `.codex-loop/deleted-accounts` | Recovery archives, which can contain credentials |
-| `.codex-loop/deck` | Settings, email/usage cache, session leases, and warmup outcomes |
-| `.local/bin` | Command wrappers |
-
-All paths are relative to your Windows user profile. Protect runtime data like credentials. Email masking is visual; it does not remove values from the local cache. Never upload a live installation directory. This repository and release include only source, tests, documentation, and app assets. See [SECURITY.md](SECURITY.md).
-
-## Updating and removal
-
-Deck starts with `codex-auth` when its autostart option is enabled; this is not Windows sign-in startup.
-
-Quit Deck before rerunning a newer installer. Account terminals can stay open. The installer preserves account/state directories and backs up replaced source files alongside them; restart Deck afterward.
-
-To remove the app, quit it and disable autostart in Settings first. Remove the four `codex-*` wrappers installed in `.local/bin` and the Deck source files from `.codex-loop`. Keep account directories if you want to retain credentials/history. Remove `.local/bin` from PATH only if no other tools use it. The installer deliberately has no automatic account-data deletion step.
-
-## Troubleshooting
-
-| Symptom | Check |
-| :--- | :--- |
-| Command not found after install | Open a new terminal; confirm `.local/bin` is on your user PATH |
-| `codex` is missing | Install Codex CLI separately and verify `codex --version` |
-| No account entries | Create a profile with `codex-auth account1`; use Show all for disconnected profiles |
-| No fresh usage | Press Check and allow the queue to run; check authentication and error status |
-| Auto-check appears idle | Enable it in Checks; only connected accounts are automatically checked |
-| Window is gone | Look in the tray overflow, or run `codex-deck` to reveal it |
-| Model list is unavailable | Verify CLI/account access; a cached/default model may remain visible |
-| Linux or macOS startup fails | This WPF release is Windows-only; a UI port is required |
-
-## Development
+To update a Git installation:
 
 ```powershell
-powershell.exe -NoProfile -File .\suite\Test-Deck.ps1
-powershell.exe -NoProfile -File .\suite\Test-DeckScheduler.ps1
-powershell.exe -NoProfile -File .\suite\Test-CodexAuth.ps1
-powershell.exe -NoProfile -File .\suite\Test-CodexLoopUsage.ps1
-powershell.exe -NoProfile -STA -File .\suite\Codex-Deck.ps1 -SmokeTest
-powershell.exe -NoProfile -STA -File .\suite\Codex-Deck.ps1 -LifecycleTest
+git pull --ff-only
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
 ```
 
-Tests use synthetic data and temporary fixtures; smoke/lifecycle modes make no usage or warmup requests. `-Demo` opens a synthetic widget; add `-PreviewMode Panel` to preview the panel. Install the app for normal use: launching the source directly is not a portable installation.
+Close the terminal dashboard and quit desktop Deck before updating, then reopen them afterward. The installer preserves account/state directories, backs up replaced files and skips unchanged payloads.
 
-The `suite/` directory contains WPF UI, theme, state/scheduler logic, usage adapter, and tests; `bin/` contains command wrappers. See [Contributing](CONTRIBUTING.md) and the [Changelog](CHANGELOG.md).
+To remove Deck, quit it and remove its installed scripts and command wrappers. Keep `.codex-loop/accounts` if you want to retain your profiles and history. Only remove `.local/bin` from PATH if no other tools use it. There is no automatic account-data deletion during uninstall.
 
-Run `./Test-Repository.ps1` for repository privacy/encoding checks. After committing, `./Build-Release.ps1 -Version 1.0.0` produces a source-only ZIP and SHA-256 checksum in `dist/` using `git archive`. No runtime directories are included. The project is distributed under the [MIT license](LICENSE); the app icon was created with AI assistance.
+## Help
 
----
+| Problem | Try this |
+| --- | --- |
+| `codex-auth` is not found | Open a new terminal; check that `.local/bin` is on your user PATH |
+| `codex` is not found | Install Codex CLI separately and confirm `codex --version` works |
+| The dashboard only prints once | Run it in an interactive terminal without input/output redirection |
+| No profiles appear | Press **N**, or run `codex-auth account1`; clear any search filter |
+| Usage is old or unavailable | Press **R**; check `codex-auth account1 login status` and `codex-check -Account account1` |
+| The desktop window disappeared | Check the tray overflow or run `codex-deck` |
+| Automatic desktop checks are idle | Enable them in Settings and check which profiles are visible |
 
-<p align="center"><b>Codex Deck</b><br><sub>A little less account juggling. A little more room to work.</sub><br><a href="https://github.com/xtremexq/CodexDeck/issues">Report a bug or suggest a feature</a></p>
+[Report a bug](https://github.com/xtremexq/CodexDeck/issues) with the command, expected behavior and sanitized error output. Do not attach live account files.
 
-## Terminal account dashboard
+## For contributors
 
-Run **`codex-auth`** with no arguments to open the keyboard-driven admin panel. It displays cached quota bars immediately, refreshes missing or older-than-five-minute usage in the background (up to three accounts at a time), and shows plan, model, reset timestamps and connected sessions. Checks use the existing usage reader; opening the panel does not send a warm-up prompt. Cached values retain their check timestamp; a passed reset is explicitly marked.
+Source is in `suite/`; command wrappers are in `bin/`. Documentation images use synthetic data. Tests and build scripts belong in this repository: `Test-Repository.ps1` checks for private/generated files, script parse errors, encoding mistakes and whitespace, and is used by CI and release builds.
 
-- **Up/Down**, **Page Up/Down**, **Home/End**: select an account.
-- **Enter**: launch Codex in the current terminal and return to the panel when it exits.
-- **R / A**: refresh the selected account / all accounts.
-- **/**: filter account names; **Esc** clears the filter or exits.
-- **L / N**: log in to the selected account / create and log in to a new account.
-- **D**: open desktop Deck, including its scheduling and warm-up settings.
-- **M**: toggle email masking (masked by default). **Q**: quit.
-
-`codex-auth status` prints a cached snapshot without network requests. Redirected input/output also uses snapshot mode so scripts never hang waiting for a key. Existing `list`, account launch, login and deletion commands remain available. The panel stores usage results in `deck/terminal-cache.json`, separate from the desktop writer, and reads the latest records from both caches. No new dependencies are required.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and screenshot generation, [CHANGELOG.md](CHANGELOG.md) for release history, and [LICENSE](LICENSE) for the MIT license.
