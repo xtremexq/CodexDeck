@@ -18,9 +18,14 @@ jobs:
         run: |
           ./suite/Test-Deck.ps1
           ./suite/Test-DeckScheduler.ps1
+          ./suite/Test-DeckBackup.ps1
+          ./suite/Test-DeckAccountTools.ps1
+          ./suite/Test-DeckFailover.ps1
           ./suite/Test-CodexAuth.ps1
           ./suite/Test-DeckTerminal.ps1
           ./suite/Test-CodexLoopUsage.ps1
+      - name: Failover proxy regression tests
+        run: node ./suite/Test-DeckFailover.cjs
       - name: WPF smoke test
         run: powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File ./suite/Codex-Deck.ps1 -SmokeTest
       - name: Installer payload

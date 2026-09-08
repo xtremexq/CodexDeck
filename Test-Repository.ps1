@@ -1,7 +1,7 @@
 ﻿$ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {
-    $tracked = @(git ls-files)
+    $tracked = @(git ls-files --cached --others --exclude-standard)
     if ($LASTEXITCODE -ne 0 -or !$tracked.Count) { throw 'Run from a Git checkout with staged/tracked files.' }
     foreach ($path in $tracked) {
         if ($path -match '(^|/)(accounts|deleted-accounts|runs|sessions)/|(^|/)(auth\.json|config\.toml|\.env)(\.|$)|\.(log|pem|key|pfx|p12)$|\.bak') { throw "Private/generated path tracked: $path" }

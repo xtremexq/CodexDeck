@@ -1,25 +1,32 @@
-﻿param([switch]$SmokeTest, [switch]$Demo, [switch]$Attach, [string]$ScreenshotPath, [switch]$LifecycleTest, [switch]$PreviewExpanded, [ValidateSet('Panel','Widget')][string]$PreviewMode='Widget')
+﻿param([switch]$SmokeTest, [switch]$Demo, [switch]$Attach, [switch]$Background, [switch]$OpenSettings, [string]$ScreenshotPath, [switch]$LifecycleTest, [switch]$PreviewExpanded, [ValidateSet('Panel','Widget')][string]$PreviewMode='Widget')
 if($LifecycleTest){$Demo=$true}
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Deck.Core.ps1')
+. (Join-Path $PSScriptRoot 'Deck.Backup.ps1')
 $script:suite = $PSScriptRoot
 $script:root = Join-Path $suite 'deck'
 $script:settings = if($SmokeTest -or $Demo){Get-DeckDefaults}else{Get-DeckSettings $root}
 $script:cache = @{}; $script:nextCheck = @{}; $script:resets = @{}; $script:history = @{}
-$script:expandedRows=@{}; $script:profiles=@{}; $script:profileStamps=@{}; $script:cacheVersion=0; $script:lastPicker=[DateTimeOffset]::MinValue
-$script:task = $null; $script:lastRequest = [DateTimeOffset]::MinValue
+$script:rowPools=@{}; $script:rowControls=@{}; $script:rowStyle=''; $script:expandedRows=@{}; $script:profiles=@{}; $script:profileStamps=@{}; $script:cacheVersion=0; $script:lastPicker=[DateTimeOffset]::MinValue
+$script:tasks = @{}; $script:batchAccounts=@(); $script:batchUntil=[DateTimeOffset]::MinValue; $script:task = $null; $script:lastRequest = [DateTimeOffset]::MinValue
 $script:quit = $false; $script:allProfiles = $false
 $script:sessions = @(); $script:notice = 'Ready'; $script:lastRender = ''
+$script:pins=@(if(-not $SmokeTest -and -not $Demo){Read-DeckJson (Join-Path $root 'pins.json')})
+$script:viewStates=@{}
+if(-not $SmokeTest -and -not $Demo){
+    $savedViews=Read-DeckJson (Join-Path $root 'views.json')
+    foreach($mode in @('Panel','Widget')){if($savedViews.$mode){$viewStates[$mode]=$savedViews.$mode}}
+}
 # Named mutex is user/session scoped. Other launches signal the existing window.
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $created = $false
 $mutex = [Threading.Mutex]::new($true, "Local\CodexDeck-$sid", [ref]$created)
 if (-not $created -and -not $SmokeTest -and -not $Demo) {
-    if (-not $Attach) { Write-DeckJson (Join-Path $root 'show.json') @{ At=[DateTimeOffset]::UtcNow.ToString('o') } }
+    if (-not $Attach) { Write-DeckJson (Join-Path $root 'show.json') @{ At=[DateTimeOffset]::UtcNow.ToString('o'); OpenSettings=[bool]$OpenSettings } }
     $mutex.Dispose(); exit
 }
 if (-not $SmokeTest -and -not $Demo) {
-    foreach ($entry in @(Read-DeckJson (Join-Path $root 'cache.json'))) {
+    foreach ($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $root 'cache.json')))) {
         if ($entry.Account -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') {
             $cache[$entry.Account] = $entry
             if($entry.CheckedAt){$nextCheck[$entry.Account]=Get-DeckNextCheck $settings $entry ([DateTimeOffset]$entry.CheckedAt)}
@@ -28,9 +35,11 @@ if (-not $SmokeTest -and -not $Demo) {
     foreach ($entry in @(Read-DeckJson (Join-Path $root 'warmup.json'))) {
         if ($entry.Account) { $history[$entry.Account]=$entry }
     }
+    $savedResets=Read-DeckJson (Join-Path $root 'warmup-resets.json')
     foreach ($key in $cache.Keys) {
         $w = $cache[$key].Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
         if ($w.ResetsAtUnix) { $resets[$key]=[long]$w.ResetsAtUnix }
+        if($savedResets.$key){$resets[$key]=[long]$savedResets.$key}
     }
 }
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
@@ -46,14 +55,14 @@ public static class DeckTaskbarIdentity {
 $script:window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
 $script:appIcon=[Windows.Media.Imaging.BitmapImage]::new([uri](Join-Path $root 'assets/codex-deck.png'))
 $window.Icon=$appIcon; $window.FindName('AppLogo').Source=$appIcon
-foreach ($name in 'AccountPicker','SettingsButton','LaunchButton','ConfigButton','NewButton','AllButton','CheckButton','Summary','StatusLine','Cards','ModeButton','CloseButton','LaunchBar','ActionBar','Brand','Subtitle','LayoutRoot','Disclaimer','Header') {
+foreach ($name in 'AccountPicker','SettingsButton','LaunchButton','ConfigButton','NewButton','AllButton','CheckButton','Summary','StatusLine','Cards','ModeButton','CloseButton','LaunchBar','ActionBar','Brand','Subtitle','LayoutRoot','Disclaimer','Header','WidgetFilter','CardScroll') {
     Set-Variable -Name $name -Value $window.FindName($name) -Scope Script
 }
 # Native caption hit testing covers the top padding, logo, text and gaps too.
 # The old Header-only mouse handler left the surrounding margin undraggable.
 $chrome=[Windows.Shell.WindowChrome]::new(); $chrome.CaptionHeight=54; $chrome.ResizeBorderThickness='5'; $chrome.GlassFrameThickness='0'; $chrome.CornerRadius='10'
 [Windows.Shell.WindowChrome]::SetWindowChrome($window,$chrome)
-foreach($button in @($ModeButton,$SettingsButton,$CloseButton)) {
+foreach($button in @($ModeButton,$SettingsButton,$CloseButton,$WidgetFilter)) {
     [Windows.Shell.WindowChrome]::SetIsHitTestVisibleInChrome($button,$true)
 }
 function New-DeckText([string]$Text, [string]$Color='#EAF0FA', [double]$Size=12) {
@@ -63,6 +72,7 @@ function New-DeckText([string]$Text, [string]$Color='#EAF0FA', [double]$Size=12)
     return $textBlock
 }
 function New-DeckQuotaTrack($Quota,[string]$Color) {
+    $Color=Get-DeckQuotaColor $Quota
     $grid=[Windows.Controls.Grid]::new(); $grid.Margin='0,6,0,0'
     foreach($width in @('48','*','42')){$col=[Windows.Controls.ColumnDefinition]::new(); $col.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$grid.ColumnDefinitions.Add($col)}
     $label=New-DeckText $Quota.Label '#8898AD' 10; $label.VerticalAlignment='Center'; [void]$grid.Children.Add($label)
@@ -75,46 +85,172 @@ function New-DeckQuotaTrack($Quota,[string]$Color) {
     $text=New-DeckText $percent $Color 11; $text.TextAlignment='Right'; [Windows.Controls.Grid]::SetColumn($text,2); [void]$grid.Children.Add($text)
     return $grid
 }
-function Update-DeckWidgetHeight {
-    if($widget -and $settings.WidgetAutoHeight){
-        $Cards.Measure([Windows.Size]::new(($window.Width-28),[double]::PositiveInfinity))
-        $workArea=[Windows.SystemParameters]::WorkArea
-        $window.Height=[Math]::Max(150,[Math]::Min($workArea.Height,($Cards.DesiredSize.Height+124)))
-        if(-not [double]::IsNaN($window.Top) -and $window.Top+$window.Height -gt $workArea.Bottom){$window.Top=[Math]::Max($workArea.Top,$workArea.Bottom-$window.Height)}
+function Save-DeckView {
+    if($script:widget){$settings.WidgetWidth=[int]$window.Width; $settings.WidgetHeight=[int]$window.Height}
+    else{$settings.Width=[int]$window.Width; $settings.Height=[int]$window.Height}
+    $mode=if($widget){'Widget'}else{'Panel'}
+    $viewStates[$mode]=[pscustomobject]@{Left=$window.Left;Top=$window.Top;Expanded=@($expandedRows.Keys | Where-Object {$expandedRows[$_]})}
+    if(-not $SmokeTest -and -not $Demo){
+        Write-DeckJson (Join-Path $root 'settings.json') $settings
+        Write-DeckJson (Join-Path $root 'views.json') $viewStates
     }
 }
+function Update-DeckWidgetHeight {
+    if($script:sizing){return}
+    $script:sizing=$true
+    try{
+        $window.Content.UpdateLayout()
+        $width=[Math]::Max(100,$window.Width-2-$LayoutRoot.Margin.Left-$LayoutRoot.Margin.Right-9)
+        $Cards.Measure([Windows.Size]::new($width,[double]::PositiveInfinity))
+        $window.Content.Measure([Windows.Size]::new($window.Width,[double]::PositiveInfinity))
+        $overhead=2+$LayoutRoot.Margin.Top+$LayoutRoot.Margin.Bottom
+        foreach($section in $LayoutRoot.Children){if($section -ne $CardScroll){$overhead+=$section.DesiredSize.Height}}
+        $Cards.Measure([Windows.Size]::new($width,[double]::PositiveInfinity))
+        $collapsed=0
+        $expanded=0
+        foreach($card in $Cards.Children){
+            if($card -isnot [Windows.Controls.Border]){continue}
+            if($card.Child.IsExpanded){$expanded=[Math]::Max($expanded,$card.DesiredSize.Height)}
+            else{$collapsed=[Math]::Max($collapsed,$card.DesiredSize.Height)}
+        }
+        if($collapsed -eq 0){$collapsed=if($widget){47}else{34}}
+        $rows=if($widget){2}else{3}
+        $required=if($expanded -gt 0){$expanded}else{$rows*$collapsed}
+        $workArea=[Windows.SystemParameters]::WorkArea
+        $window.MinHeight=[Math]::Min($workArea.Height,[Math]::Ceiling($overhead+$required+2))
+        if($script:defaultViewHeight){
+            $window.Height=$window.MinHeight+$(if($widget -or $expanded -gt 0){0}else{$collapsed/2})
+            $script:defaultViewHeight=$false
+        }elseif($window.Height -lt $window.MinHeight){$window.Height=$window.MinHeight}
+        if($window.Height -gt $workArea.Height){$window.Height=$workArea.Height}
+    }finally{$script:sizing=$false}
+}
 function New-DeckExpander([string]$Name,$Header,$Details) {
-    $expander=[Windows.Controls.Expander]::new(); $expander.Header=$Header; $expander.Content=$Details
+    $expander=[Windows.Controls.Expander]::new(); $expander.Header=$Header; $expander.Resources['DetailsMode']=$Details
+    if($expandedRows[$Name]){$expander.Content=if($Details -eq 'Widget'){New-DeckWidgetDetails $Name}else{New-DeckPanelDetails $Name}}
     $expander.IsExpanded=[bool]$expandedRows[$Name]; $expander.Tag=$Name
     $handler={param($sender,$eventArgs)
         $script:expandedRows[[string]$sender.Tag]=$sender.IsExpanded
+        if($sender.IsExpanded -and -not $sender.Content){$sender.Content=if($sender.Resources['DetailsMode'] -eq 'Widget'){New-DeckWidgetDetails ([string]$sender.Tag)}else{New-DeckPanelDetails ([string]$sender.Tag)}}
         # Expansion events precede the template visibility/layout update.
         [void]$window.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Loaded,[Action]{Update-DeckWidgetHeight})
     }
     $expander.Add_Expanded($handler); $expander.Add_Collapsed($handler)
     return $expander
 }
-function New-DeckWidgetCard([string]$Name,$Row,$Profile,[int]$Count) {
-    $card=[Windows.Controls.Border]::new(); $card.CornerRadius='6'; $card.Padding=if($settings.Compact){'8,5'}else{'9,6'}; $card.Margin='0,0,0,4'; $card.BorderThickness='1'; $card.BorderBrush='#33373D'; $card.Background=[Windows.Media.LinearGradientBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#1C1E22'),[Windows.Media.ColorConverter]::ConvertFromString('#101113'),90)
-    $stack=[Windows.Controls.StackPanel]::new(); $card.Child=$stack
-    $head=[Windows.Controls.Grid]::new()
-    foreach($width in @('14','*','Auto')){$col=[Windows.Controls.ColumnDefinition]::new(); $col.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$head.ColumnDefinitions.Add($col)}
-    $dot=[Windows.Shapes.Ellipse]::new(); $dot.Width=5; $dot.Height=5; $dot.HorizontalAlignment='Left'; $dot.VerticalAlignment='Center'; $dot.Fill=if($Count){'#69DEC0'}else{'#65738A'}; [void]$head.Children.Add($dot)
-    $title=New-DeckText $Name '#E4EBF5' 12; $title.FontWeight='SemiBold'; [Windows.Controls.Grid]::SetColumn($title,1); [void]$head.Children.Add($title)
+function Show-DeckDelete([string]$Name, [switch]$TestUI) {
+    $dialog=[Windows.Window]::new(); $dialog.Owner=$window; $dialog.WindowStartupLocation='CenterOwner'
+    $dialog.WindowStyle='None'; $dialog.ResizeMode='NoResize'; $dialog.Width=380; $dialog.SizeToContent='Height'
+    $dialog.Background='#101113'; $dialog.Foreground='#E4E7EC'; $dialog.Icon=$appIcon; $dialog.Resources.MergedDictionaries.Add($window.Resources)
+    $surface=[Windows.Controls.Border]::new(); $surface.BorderBrush='#56383F'; $surface.BorderThickness='1'; $surface.CornerRadius='8'; $dialog.Content=$surface
+    $panel=[Windows.Controls.StackPanel]::new(); $panel.Margin='22'; $surface.Child=$panel
+    [void]$panel.Children.Add((New-DeckText ('Delete '+$Name+'?') '#F17D8D' 17))
+    [void]$panel.Children.Add((New-DeckText 'The account will be moved to local recovery storage. Connected accounts must be disconnected first. Terminals are never closed by this action.' '#9AA5AD' 12))
+    $errorText=New-DeckText '' '#F17D8D' 11; $errorText.Margin='0,12,0,12'; [void]$panel.Children.Add($errorText)
+    $buttons=[Windows.Controls.StackPanel]::new(); $buttons.Orientation='Horizontal'; $buttons.HorizontalAlignment='Right'; [void]$panel.Children.Add($buttons)
+    $cancel=[Windows.Controls.Button]::new(); $cancel.Content='Cancel'; $cancel.IsCancel=$true; $cancel.IsDefault=$true; [void]$buttons.Children.Add($cancel)
+    $delete=[Windows.Controls.Button]::new(); $delete.Content='Delete account'; $delete.Foreground='#F17D8D'; [void]$buttons.Children.Add($delete)
+    $cancel.Add_Click({$dialog.Close()})
+    $delete.Add_Click({
+        try{
+            if($SmokeTest -or $Demo){throw 'Deletion is unavailable in preview mode.'}
+            if($tasks.ContainsKey($Name)){throw 'Wait for this account check or warm-up to finish.'}
+            Move-DeckAccountToRecovery $suite $Name
+            foreach($map in @($cache,$profiles,$profileStamps,$manualChecks,$nextCheck,$history,$expandedRows)){$map.Remove($Name)}
+            $script:notice='Deleted '+$Name+' / saved in local recovery storage'; $script:lastRender=''
+            Update-DeckPicker; Render-Deck; $dialog.Close()
+        }catch{$errorText.Text=$_.Exception.Message}
+    })
+    if($TestUI){return $dialog}
+    [void]$dialog.ShowDialog()
+}
+function New-DeckEntryMenu([string]$Name) {
+    if($script:sharedEntryMenu){return $script:sharedEntryMenu}
+    $menu=[Windows.Controls.ContextMenu]::new(); $menu.Resources=$window.Resources
+    foreach($action in @('Open terminal','Check account','Account config','Warm up now','Toggle automatic warm-up','Pause / resume warm-up','Expand / collapse','Pin / unpin','Delete account')){
+        $item=[Windows.Controls.MenuItem]::new(); $item.Header=$action; $item.Tag=@{Account=$Name;Action=$action}
+        if($action -eq 'Delete account'){
+            $separator=[Windows.Controls.Separator]::new(); $separator.Background='#363A41'; $separator.Margin='8,4'; [void]$menu.Items.Add($separator)
+            $item.Foreground='#F17D8D'
+        }
+        $item.Add_Click({param($sender,$eventArgs)
+            $account=$sender.Tag.Account
+            switch($sender.Tag.Action){
+                'Open terminal' {if(-not $SmokeTest -and -not $Demo){Open-DeckTerminal $account}}
+                'Check account' {
+                    if($tasks.ContainsKey($account)){return}
+                    $now=[DateTimeOffset]::UtcNow; $at=$cache[$account].CheckedAt
+                    $manualChecks[$account]=$now
+                    $script:notice='Check queued: '+$account; $script:lastRender=''; Render-Deck
+                }
+                'Warm up now' {
+                    if(-not $SmokeTest -and -not $Demo){try{Request-DeckWarmup $suite $account -NoStart; $script:notice='Warm-up queued: '+$account; Invoke-DeckTick}catch{$script:notice=$_.Exception.Message}}
+                }
+                'Toggle automatic warm-up' {
+                    if(-not $SmokeTest -and -not $Demo){try{$script:settings=Set-DeckWarmupControl $root $account; $script:nextCheck=@{}; $script:lastRender=''; Render-Deck}catch{$script:notice=$_.Exception.Message}}
+                }
+                'Pause / resume warm-up' {
+                    if(-not $SmokeTest -and -not $Demo){$script:settings=Set-DeckWarmupControl $root -Pause; $script:nextCheck=@{}; $script:lastRender=''; Render-Deck}
+                }
+                'Account config' {if(-not $SmokeTest -and -not $Demo){Edit-DeckConfig (Join-Path $suite ('accounts/'+$account+'/config.toml')) $account}}
+                'Expand / collapse' {
+                    foreach($card in $Cards.Children){if($card -is [Windows.Controls.Border] -and $card.Child.Tag -eq $account){$card.Child.IsExpanded=-not $card.Child.IsExpanded}}
+                }
+                'Pin / unpin' {
+                    if($account -in $pins){$script:pins=@($pins | Where-Object {$_ -ne $account})}else{$script:pins=@($pins)+$account}
+                    if(-not $SmokeTest -and -not $Demo){Write-DeckJson (Join-Path $root 'pins.json') @($pins)}
+                    $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker; $script:lastRender=''; Render-Deck
+                }
+                'Delete account' {Show-DeckDelete $account}
+            }
+        })
+        [void]$menu.Items.Add($item)
+    }
+    $menu.Add_Opened({param($sender,$eventArgs)
+        $account=[string]$sender.PlacementTarget.Child.Tag
+        foreach($item in $sender.Items){if($item -is [Windows.Controls.MenuItem]){
+            $item.Tag.Account=$account
+            if($item.Tag.Action -eq 'Toggle automatic warm-up'){
+                $selected=Test-DeckWarmupSelected $settings $account
+                $item.Header=if($selected){'Disable automatic warm-up'}else{'Enable automatic warm-up (uses quota)'}
+                $item.IsCheckable=$true; $item.IsChecked=$selected; $item.IsEnabled=-not $settings.WarmupAllPaid
+                $item.ToolTip=if($settings.WarmupAllPaid){'Managed by All paid accounts in Settings'}else{'Runs in the tray, even without an open account terminal'}
+            }
+            if($item.Tag.Action -eq 'Pause / resume warm-up'){$item.Header=if($settings.WarmupEnabled){'Pause all automatic warm-ups'}else{'Resume automatic warm-ups'}}
+        }}
+    })
+    $script:sharedEntryMenu=$menu
+    return $menu
+}
+function New-DeckHealthSummary([string]$Name,$Record,[int]$Size=10,$Existing=$null) {
+    $text=if($Existing){$Existing}else{New-DeckText '' '#929CA4' $Size}
+    $text.Inlines.Clear()
+    $text.TextWrapping='NoWrap'; $text.VerticalAlignment='Center'
+    $health=Get-DeckHealth $Record
+    $color=switch($health){'Ready'{'#69DEC0'} 'Low'{'#DCB675'} 'Exhausted'{'#F17D8D'} 'Limit reached'{'#F17D8D'} default{'#929CA4'}}
+    $run=[Windows.Documents.Run]::new($health); $run.Foreground=$color; [void]$text.Inlines.Add($run)
+    if($settings.ShowQuota){foreach($quota in $Record.Windows){
+        $expired=$quota.ResetsAtUnix -and [long]$quota.ResetsAtUnix -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $pct=if($null -eq $quota.RemainingPct){'?'}else{[string]$quota.RemainingPct+'%'}
+        $run=[Windows.Documents.Run]::new('  '+$quota.Label+' '+$pct+$(if($expired){'*'}else{''}))
+        $run.Foreground=Get-DeckQuotaColor $quota; [void]$text.Inlines.Add($run)
+    }}
+    $suffix=if($tasks.ContainsKey($Name) -or $manualChecks.ContainsKey($Name)){' · checking'}elseif($Record.Error){' · check failed'}else{''}
+    $suffixRun=[Windows.Documents.Run]::new($suffix); [void]$text.Inlines.Add($suffixRun); $text.Tag=$suffixRun
+    return $text
+}
+function New-DeckWidgetDetails([string]$Name) {
+    $Row=$cache[$Name]; $Profile=$profiles[$Name]
     $plan=if($Row.PlanType){$Row.PlanType}else{$Profile.PlanType}
-    if($settings.ShowPlan){$badge=New-DeckText $(if($plan){$plan.ToUpperInvariant()}else{'?'}) '#8394AD' 9; $badge.VerticalAlignment='Center'; [Windows.Controls.Grid]::SetColumn($badge,2); [void]$head.Children.Add($badge)}
-    [void]$stack.Children.Add($head)
+    $stack=[Windows.Controls.StackPanel]::new()
     if($settings.WidgetShowEmail -and $settings.ShowEmail){
         $email=if($Row.Email){$Row.Email}else{$Profile.Email}; if($settings.MaskEmail){$email=$email -replace '^(.).*(@.*)$','$1***$2'}
         if($email){[void]$stack.Children.Add((New-DeckText $email '#8C9DB4' 10))}
     }
-    $stale=-not $Row.CheckedAt -or ([DateTimeOffset]::Now-[DateTimeOffset]$Row.CheckedAt).TotalMinutes -gt ($settings.PollMinutes+2)
-    $color=if($stale -or $Row.Status -notin @('available','blocked')){'#DCB675'}elseif($Row.Status -eq 'blocked'){'#F17D8D'}else{'#69DEC0'}
+    $color='#69DEC0'
+    [void]$stack.Children.Add((New-DeckText ((Get-DeckHealth $Row)+' · percentages remaining; * reset passed, check again') '#929CA4' 10))
+    if($Row.Error){[void]$stack.Children.Add((New-DeckText ('Last check failed: '+$Row.Error) '#DCB675' 10))}
     if($settings.ShowQuota){
-        if(-not $Row){[void]$stack.Children.Add((New-DeckText 'Waiting for first check' '#8394AD' 10))}
-        elseif($stale){[void]$stack.Children.Add((New-DeckText 'Cached / awaiting update' '#DCB675' 10))}
-        elseif($Row.Status -eq 'blocked'){[void]$stack.Children.Add((New-DeckText $(if(@($Row.Windows | Where-Object Dead).Count){'Quota exhausted'}else{'Limit reached'}) '#F17D8D' 10))}
-        elseif($Row.Status -ne 'available'){[void]$stack.Children.Add((New-DeckText 'Quota unavailable' '#DCB675' 10))}
         foreach($quota in $Row.Windows){[void]$stack.Children.Add((New-DeckQuotaTrack $quota $color))}
     }
     if($settings.ShowResets -and $settings.WidgetShowResets){
@@ -126,18 +262,40 @@ function New-DeckWidgetCard([string]$Name,$Row,$Profile,[int]$Count) {
                 $parts+=$quota.Label+' '+$short; $tips+=$quota.Label+': '+$at.ToString('ddd dd MMM HH:mm zzz')
             }
         }
-        if($parts.Count){$reset=New-DeckText ('Reset  '+($parts -join '  /  ')) '#8293AA' 10; $reset.Margin='0,7,0,0'; $reset.ToolTip=$tips -join "`n"; [void]$stack.Children.Add($reset)}
+        if($parts.Count){$reset=New-DeckText ('Reset  '+($parts -join '  /  ')) '#8293AA' 10; $reset.Margin='0,7,0,0'; [void]$stack.Children.Add($reset)}
     }
+    if($settings.ShowPlan -and $plan){$stack.Children.Insert(0,(New-DeckText $plan.ToUpperInvariant() '#8394AD' 10))}
+    return $stack
+}
+function New-DeckWidgetCard([string]$Name,$Row,$Profile,[int]$Count) {
+    $card=[Windows.Controls.Border]::new(); $card.CornerRadius='6'; $card.Padding=if($settings.Compact){'8,5'}else{'9,6'}; $card.Margin='0,0,0,4'; $card.BorderThickness='1'; $card.BorderBrush='#33373D'; $card.Background=[Windows.Media.LinearGradientBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#1C1E22'),[Windows.Media.ColorConverter]::ConvertFromString('#101113'),90)
+    $stack=[Windows.Controls.StackPanel]::new(); $card.Child=$stack
+    $head=[Windows.Controls.Grid]::new()
+    foreach($width in @('14','*','Auto')){$col=[Windows.Controls.ColumnDefinition]::new(); $col.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$head.ColumnDefinitions.Add($col)}
+    $dot=[Windows.Shapes.Ellipse]::new(); $dot.Width=5; $dot.Height=5; $dot.HorizontalAlignment='Left'; $dot.VerticalAlignment='Center'; $dot.Fill=if($Count){'#69DEC0'}else{'#65738A'}; [void]$head.Children.Add($dot)
+    $title=New-DeckText ($(if($Name -in $pins){'★ '}else{''})+$Name) '#E4EBF5' 12; $title.FontWeight='SemiBold'; [Windows.Controls.Grid]::SetColumn($title,1); [void]$head.Children.Add($title)
+    $plan=if($Row.PlanType){$Row.PlanType}else{$Profile.PlanType}
+    if($settings.ShowPlan){$badge=New-DeckText $(if($plan){$plan.ToUpperInvariant()}else{'?'}) '#8394AD' 9; $badge.VerticalAlignment='Center'; [Windows.Controls.Grid]::SetColumn($badge,2); [void]$head.Children.Add($badge)}
+    [void]$stack.Children.Add($head)
     if($settings.ShowPlan){$head.Children.RemoveAt($head.Children.Count-1)}
-    $parts=@()
-    if($settings.ShowQuota){foreach($quota in $Row.Windows){$pct=if($null -eq $quota.RemainingPct){'?'}else{[string]$quota.RemainingPct+'%'}; $parts+=($quota.Label+' '+$pct)}}
-    if(-not $parts.Count){$parts+= $(if($Row.Status -eq 'error'){'Check failed'}elseif($Row.Status -eq 'blocked'){'Limit reached'}elseif($Row){$Row.Status}else{'Not checked'})}
-    $summary=New-DeckText ($parts -join '  ') $color 10; $summary.TextWrapping='NoWrap'; $summary.VerticalAlignment='Center'; [Windows.Controls.Grid]::SetColumn($summary,2); [void]$head.Children.Add($summary)
+    $summary=New-DeckHealthSummary $Name $Row 9
+    if($settings.WidgetOneLine){
+        $head.ColumnDefinitions[0].Width=[Windows.GridLength]::new(11)
+        $head.ColumnDefinitions[1].Width=[Windows.GridLength]::new(1,[Windows.GridUnitType]::Star)
+        $head.ColumnDefinitions[2].Width=[Windows.GridLength]::new(2,[Windows.GridUnitType]::Star)
+        $title.VerticalAlignment='Center'; $summary.TextTrimming='CharacterEllipsis'
+        [Windows.Controls.Grid]::SetColumn($summary,2)
+        $card.Padding='8,5'; $card.Margin='0,0,0,4'
+    }else{
+        foreach($i in 1..2){$rd=[Windows.Controls.RowDefinition]::new(); $rd.Height=[Windows.GridLength]::Auto; [void]$head.RowDefinitions.Add($rd)}
+        [Windows.Controls.Grid]::SetRow($summary,1); [Windows.Controls.Grid]::SetColumnSpan($summary,3)
+    }
+    [void]$head.Children.Add($summary)
     $title.TextWrapping='NoWrap'; $title.TextTrimming='CharacterEllipsis'; $title.Margin='0,0,6,0'; $title.FontSize=11
     $stack.Children.Remove($head); $card.Child=$null
-    if($settings.ShowPlan -and $plan){$stack.Children.Insert(0,(New-DeckText $plan.ToUpperInvariant() '#8394AD' 10))}
-    $card.Child=New-DeckExpander $Name $head $stack
-    $card.ToolTip='Connected terminals: '+$Count+'. Quota and connection are separate.'
+    $card.Resources['HealthSummary']=$summary; $card.Resources['ConnectionDot']=$dot; $card.Resources['Title']=$title
+    $card.Child=New-DeckExpander $Name $head 'Widget'
+    $card.ContextMenu=New-DeckEntryMenu $Name
     return $card
 }
 function Set-DeckAppearance {
@@ -146,28 +304,40 @@ function Set-DeckAppearance {
 }
 function Set-DeckMode([string]$Mode, [switch]$Initial) {
     if (-not $Initial) {
-        if ($script:widget) {$settings.WidgetWidth=[int]$window.Width; $settings.WidgetHeight=[int]$window.Height}
-        else {$settings.Width=[int]$window.Width; $settings.Height=[int]$window.Height}
+        Save-DeckView
     }
     $script:widget=$Mode -ne 'Panel'; $settings.ViewMode=$Mode
     $visibility=if($widget){'Collapsed'}else{'Visible'}
-    foreach($control in @($LaunchBar,$ActionBar,$Subtitle,$Disclaimer,$SettingsButton)){$control.Visibility=$visibility}
-    $window.MinWidth=if($widget){280}else{560}; $window.MinHeight=if($widget){150}else{300}
+    foreach($control in @($LaunchBar,$ActionBar,$Subtitle,$SettingsButton)){$control.Visibility=$visibility}
+    $WidgetFilter.Visibility=if($widget){'Visible'}else{'Collapsed'}
+    $window.MinWidth=if($widget){238}else{476}; $window.MinHeight=100
     $window.Width=if($widget){$settings.WidgetWidth}else{[Math]::Max($window.MinWidth,$settings.Width)}
-    $window.Height=if($widget){$settings.WidgetHeight}else{$settings.Height}
+    $savedHeight=if($widget){$settings.WidgetHeight}else{$settings.Height}
+    $script:defaultViewHeight=$savedHeight -le 0
+    $window.Height=[Math]::Max(100,$savedHeight)
+    $view=$viewStates[$(if($widget){'Widget'}else{'Panel'})]
+    $script:expandedRows=@{}
+    if($view){
+        foreach($name in $view.Expanded){if($name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){$expandedRows[$name]=$true}}
+        if($null -ne $view.Left -and $null -ne $view.Top -and -not [double]::IsNaN([double]$view.Left) -and -not [double]::IsNaN([double]$view.Top)){
+            $screen=[Windows.Forms.Screen]::FromPoint([Drawing.Point]::new([int]$view.Left,[int]$view.Top)).WorkingArea
+            $window.Left=[Math]::Max($screen.Left,[Math]::Min($screen.Right-$window.Width,[double]$view.Left))
+            $window.Top=[Math]::Max($screen.Top,[Math]::Min($screen.Bottom-100,[double]$view.Top))
+        }
+    }
     $LayoutRoot.Margin=if($widget){'12'}else{'20'}
     $chrome.CaptionHeight=if($widget){54}else{62}
     $Brand.FontSize=if($widget){13}else{17}; $Brand.Margin='0'
-    $ModeButton.Content=if($widget){[string][char]0x2197}else{[string][char]0x2199}
+    $ModeButton.Content.Data=[Windows.Media.Geometry]::Parse($(if($widget){'M 1,11 L 11,1 M 3,1 L 11,1 L 11,9'}else{'M 11,1 L 1,11 M 1,3 L 1,11 L 9,11'}))
     $ModeButton.ToolTip=if($widget){'Open control panel'}else{'Floating widget'}
     $script:lastRender=''
     if(-not $SmokeTest -and -not $Demo){Write-DeckJson (Join-Path $root 'settings.json') $settings}
     if($Mode -eq 'Tray'){$window.Hide()}elseif(-not $Initial){$window.Show(); [void]$window.Activate()}
 }
 function Get-DeckAccounts {
-    if($SmokeTest -or $Demo){return 'account1'}
+    if($SmokeTest -or $Demo){if($script:testPickerNames){return $script:testPickerNames}; return 'account1'}
     @(Get-ChildItem -LiteralPath (Join-Path $suite 'accounts') -Directory -ErrorAction SilentlyContinue |
-        Where-Object Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' | Sort-Object @{Expression={if($_.Name -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},Name | ForEach-Object Name)
+        Where-Object Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' | Sort-Object @{Expression={if($_.Name -in $pins){0}else{1}}},@{Expression={if($_.Name -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},Name | ForEach-Object Name)
 }
 function Update-DeckPicker {
     if(([DateTimeOffset]::UtcNow-$lastPicker).TotalSeconds -lt 15){return}
@@ -189,29 +359,30 @@ function Update-DeckPicker {
     foreach($item in $AccountPicker.Items){
         $name=[string]$item.Tag
         if(-not $settings.AccountPickerUsage){$item.Content=$name; continue}
-        $row=$cache[$name]; $stack=[Windows.Controls.StackPanel]::new()
-        [void]$stack.Children.Add((New-DeckText $name '#E4EBF5' 12))
-        $usage=[Windows.Controls.TextBlock]::new(); $usage.FontSize=10; $usage.Margin='0,3,0,0'
+        $row=$cache[$name]
+        $line=[Windows.Controls.TextBlock]::new(); $line.FontSize=11; $line.TextWrapping='NoWrap'; $line.TextTrimming='CharacterEllipsis'
+        $title=[Windows.Documents.Run]::new($(if($name -in $pins){'★ '}else{''})+$name+'  '); $title.Foreground='#E4EBF5'; $title.FontWeight='SemiBold'; [void]$line.Inlines.Add($title)
+        $usage=[Windows.Controls.TextBlock]::new(); $usage.FontSize=10
         foreach($quota in $row.Windows){
             $used=$quota.UsedPct
             if($null -eq $used -and $null -ne $quota.RemainingPct){$used=100-$quota.RemainingPct}
             $label=switch([long]$quota.DurationSeconds){18000 {'5h'} 604800 {'Weekly'} default {$quota.Label}}
             if([long]$quota.DurationSeconds -ge 2419200 -and [long]$quota.DurationSeconds -le 2764800){$label='Monthly'}
-            $reset=if($quota.ResetsAtUnix){[DateTimeOffset]::FromUnixTimeSeconds([long]$quota.ResetsAtUnix).ToLocalTime().ToString('dd MMM HH:mm')}else{'reset unknown'}
+            $reset=if($quota.ResetsAtUnix){[DateTimeOffset]::FromUnixTimeSeconds([long]$quota.ResetsAtUnix).ToLocalTime().ToString('dd/MM HH:mm')}else{'reset unknown'}
             $run=[Windows.Documents.Run]::new(('{0} {1} / {2}   ' -f $label,$(if($null -eq $used){'?'}else{('{0:0}%' -f $used)}),$reset))
             $run.Foreground=if($null -eq $used){'#929CA4'}elseif($used -ge 90){'#F17D8D'}elseif($used -ge 70){'#E7B16A'}else{'#69DEC0'}
             [void]$usage.Inlines.Add($run)
         }
         if(-not $usage.Inlines.Count){$usage.Text='Usage unavailable'; $usage.Foreground='#929CA4'}
         $usage.ToolTip='Percentage used / next local reset. Windows are shown as reported by the account.'
-        [void]$stack.Children.Add($usage)
+        foreach($run in @($usage.Inlines)){ [void]$usage.Inlines.Remove($run); [void]$line.Inlines.Add($run) }
         $age='Never'
         if($row.CheckedAt){
             $seconds=[Math]::Max(0,([DateTimeOffset]::Now-[DateTimeOffset]$row.CheckedAt).TotalSeconds)
             $age=if($seconds -ge 2592000){[Math]::Floor($seconds/2592000).ToString()+'mo'}elseif($seconds -ge 604800){[Math]::Floor($seconds/604800).ToString()+'w'}elseif($seconds -ge 86400){[Math]::Floor($seconds/86400).ToString()+'d'}elseif($seconds -ge 3600){[Math]::Floor($seconds/3600).ToString()+'h'}elseif($seconds -ge 60){[Math]::Floor($seconds/60).ToString()+'m'}else{[Math]::Floor($seconds).ToString()+'s'}
         }
-        [void]$stack.Children.Add((New-DeckText ('Last checked: '+$age) '#858B92' 9))
-        $item.Content=$stack
+        $ageRun=[Windows.Documents.Run]::new('  Last checked: '+$age); $ageRun.Foreground='#858B92'; $ageRun.FontSize=9; [void]$line.Inlines.Add($ageRun)
+        $item.Content=$line
     }
 }
 function Select-DeckFolder([string]$InitialFolder, [switch]$TestUI) {
@@ -251,13 +422,14 @@ function Select-DeckFolder([string]$InitialFolder, [switch]$TestUI) {
     [void]$picker.ShowDialog()
     return $state.Path
 }
-function Open-DeckTerminal([string]$Account) {
+function Open-DeckTerminal([string]$Account,[switch]$NewAccount) {
     if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') { return }
     $folder=$settings.DefaultFolder
     if($settings.AlwaysAskFolder -or -not (Test-Path -LiteralPath $folder -PathType Container)){$folder=Select-DeckFolder $folder}
     if(-not $folder){return}
     $auth = (Join-Path $HOME '.local/bin/codex-auth.cmd').Replace("'", "''")
     $code = "Set-Location -LiteralPath '" + $folder.Replace("'", "''") + "'; & '$auth' '$Account'"
+    if($NewAccount){$code+=' -NewAccount'}
     Start-Process powershell.exe -ArgumentList ('-NoProfile -NoExit -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))) | Out-Null
 }
 function Edit-DeckConfig([string]$Path, [string]$Label) {
@@ -273,6 +445,7 @@ function Edit-DeckConfig([string]$Path, [string]$Label) {
     $editor=[Windows.Controls.TextBox]::new(); $editor.Text=$original; $editor.AcceptsReturn=$true; $editor.AcceptsTab=$true
     $editor.VerticalScrollBarVisibility='Auto'; $editor.HorizontalScrollBarVisibility='Auto'; $editor.FontFamily='Consolas'
     $editor.Background='#192232'; $editor.Foreground='#EAF0FA'; $editor.Margin='0,12,0,0'; [void]$dock.Children.Add($editor)
+    $settingsError=New-DeckText '' '#F17D8D'; [Windows.Controls.DockPanel]::SetDock($settingsError,'Bottom'); $dock.Children.Insert(0,$settingsError)
     $save.Add_Click({
         try {
             $current=if(Test-Path -LiteralPath $Path){[IO.File]::ReadAllText($Path)}else{''}
@@ -282,7 +455,7 @@ function Edit-DeckConfig([string]$Path, [string]$Label) {
             if (Test-Path -LiteralPath $Path) { Copy-Item -LiteralPath $Path -Destination ($Path+'.bak-deck-'+[guid]::NewGuid().ToString('N')) }
             [IO.File]::WriteAllText($Path,$editor.Text,[Text.UTF8Encoding]::new($false))
             $dialog.Close()
-        } catch { [void][Windows.MessageBox]::Show($dialog,$_.Exception.Message,'Could not save') }
+        } catch { $settingsError.Text=$_.Exception.Message }
     }.GetNewClosure())
     [void]$dialog.ShowDialog()
 }
@@ -301,12 +474,13 @@ function Show-DeckSettings {
     $tabs=[Windows.Controls.TabControl]::new(); [void]$dock.Children.Add($tabs)
     $groups=[ordered]@{
         Appearance=@('ViewMode','Compact','AlwaysOnTop','CloseToTray','AutoStart','OpacityPercent','FontSize','DefaultFolder','AlwaysAskFolder')
-        Details=@('AccountPickerUsage','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WidgetAutoHeight')
+        Details=@('AccountPickerUsage','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets')
         Checks=@('AutoCheck','PollMinutes','MinimumGapSeconds')
-        'Usage Warmup'=@('WarmupEnabled','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
+        Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
+        'Usage Warmup'=@('WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupEnabled','WarmupAllPaid','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
     }
-    $descriptions=@{Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Checks='Automatic checks and request spacing. Check also works manually.';'Usage Warmup'='Choose accounts and a model for scheduled warm-up requests.'}
-    $labels=@{AccountPickerUsage='Usage and reset times in account picker';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Time between requests (seconds)';WarmupEnabled='Enable scheduled warm-up';WarmupAccounts='Accounts (comma-separated names)';WarmupModel='Model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
+    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; only the selected fallback accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='All modes send a small real prompt in the background. Choose after-reset, daily local times, or both for selected paid accounts. Right-click any signed-in account to warm it now. Success requires an assistant reply. Closing the window keeps enabled schedules running in the tray.'}
+    $labels=@{FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Fallback selection';FailoverAccounts='Fallback accounts in order (comma-separated names)';AccountPickerUsage='Usage and reset times in account picker';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up (master switch)';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Start in background when signing into Windows';WarmupAllPaid='All Plus or higher (including future accounts)';WarmupAccounts='Additional accounts (type to find; select one or more)';WarmupModel='Model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
     $panels=@{}; $controls=@{}
     foreach($group in $groups.Keys){
         $tab=[Windows.Controls.TabItem]::new(); $tab.Header=$group
@@ -316,7 +490,7 @@ function Show-DeckSettings {
         $panels[$group]=$panel; [void]$tabs.Items.Add($tab)
     }
     foreach ($key in $settings.Keys) {
-        if ($key -in @('Width','Height','WidgetWidth','WidgetHeight')) { continue }
+        if ($key -in @('Width','Height','WidgetWidth','WidgetHeight','WidgetAutoHeight')) { continue }
         $group=@($groups.Keys | Where-Object { $key -in $groups[$_] })[0]
         if(-not $group){$group='Appearance'}
         $panel=$panels[$group]
@@ -331,39 +505,58 @@ function Show-DeckSettings {
                 $cachedModels=Read-DeckJson (Join-Path $root 'models.json')
                 foreach($model in @(Get-DeckModelNames @($settings.WarmupModel,'gpt-5.6-luna',$cachedModels.Models))){[void]$control.Items.Add([string]$model)}
                 $control.SelectedItem=$settings.WarmupModel; $control.ToolTip='Warm-up uses low reasoning effort. Loading models from Codex...'
+            }elseif($key -eq 'WarmupAccounts'){
+                $control=[Windows.Controls.ListBox]::new(); $control.SelectionMode='Multiple'; $control.MaxHeight=150
+                $control.IsTextSearchEnabled=$true; $control.Background='#111315'; $control.Foreground='#E4EAF4'; $control.BorderBrush='#363C42'
+                $search=[Windows.Controls.TextBox]::new(); $search.ToolTip='Find an existing account'; $search.Margin='0,0,10,6'; $search.Tag=$control
+                $search.Add_TextChanged({param($sender,$eventArgs)
+                    $query=$sender.Text; $list=$sender.Tag
+                    $list.Items.Filter=[Predicate[object]]{param($value) [string]$value -like ('*'+$query+'*')}.GetNewClosure()
+                }); [void]$panel.Children.Add($search)
+                foreach($account in @(Get-DeckAccounts)){[void]$control.Items.Add($account); if($account -in @($settings.WarmupAccounts -split '[,;\s]+')){[void]$control.SelectedItems.Add($account)}}
+            }elseif($key -eq 'FailoverMode'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('Ordered','Best')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]
             }elseif($key -eq 'ViewMode'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('Panel','Widget','Tray')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]}else{$control=[Windows.Controls.TextBox]::new(); $control.Text=[string]$settings[$key]}
             $control.Margin='0,0,10,16'; $control.MinHeight=34
         }
         $controls[$key]=$control; [void]$panel.Children.Add($control)
     }
+    . (Join-Path $suite 'Deck.SettingsExtras.ps1')
+    $settingsError=New-DeckText '' '#F17D8D'; [Windows.Controls.DockPanel]::SetDock($settingsError,'Bottom'); $dock.Children.Insert(0,$settingsError)
     $save.Add_Click({
         try {
             $updated=Get-DeckDefaults
             foreach ($key in $settings.Keys) {
                 if (-not $controls.ContainsKey($key)) { $updated[$key]=$settings[$key]; continue }
                 if ($settings[$key] -is [bool]) { $updated[$key]=[bool]$controls[$key].IsChecked }
-                elseif ($key -in @('WarmupModel','ViewMode')) { $updated[$key]=[string]$controls[$key].SelectedItem }
+                elseif ($key -eq 'WarmupAccounts') { $updated[$key]=@($controls[$key].SelectedItems) -join ',' }
+                elseif ($key -in @('WarmupModel','ViewMode','FailoverMode')) { $updated[$key]=[string]$controls[$key].SelectedItem }
                 elseif ($settings[$key] -is [int]) { $updated[$key]=[int]$controls[$key].Text }
                 else { $updated[$key]=$controls[$key].Text.Trim() }
             }
             if(-not $updated.AlwaysAskFolder -and -not (Test-Path -LiteralPath $updated.DefaultFolder -PathType Container)){throw 'Choose an existing terminal start folder, or enable Always ask.'}
+            if ($updated.FailoverMode -notin @('Ordered','Best')) { throw 'Choose Ordered or Best failover selection.' }
+            if ($updated.FailoverEnabled -or $updated.FailoverAccounts) {
+                . (Join-Path $suite 'Deck.Failover.ps1')
+                $validated=Resolve-DeckFailoverPool $suite $updated.FailoverAccounts Ordered
+                $updated.FailoverAccounts=$validated.Pool -join ','
+            }
             if ($updated.WarmupModel -notmatch '^gpt-[a-zA-Z0-9.-]+$') { throw 'Enter a model ID, e.g. gpt-5.6-luna.' }
             if ($updated.ViewMode -notin @('Panel','Widget','Tray')) { throw 'View Mode must be Panel, Widget, or Tray.' }
             foreach ($name in @($updated.WarmupAccounts -split '[,;\s]+' | Where-Object { $_ })) {
                 if ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -notin @(Get-DeckAccounts)) { throw "Unknown warm-up account: $name" }
             }
-            if ($updated.WarmupEnabled -and -not $updated.WarmupAccounts) { throw 'Choose warm-up accounts (comma-separated account names).' }
-            if ($updated.WarmupEnabled -and -not $settings.WarmupEnabled) {
-                if ([Windows.MessageBox]::Show($dialog,'Enable real, quota-consuming automatic requests for the selected paid accounts?','Enable warm-up','YesNo','Warning') -ne 'Yes') { return }
-            }
+            if ($updated.WarmupEnabled -and -not $updated.WarmupAllPaid -and -not $updated.WarmupAccounts) { throw 'Select at least one warm-up account.' }
+            $updated.WarmupTimes=ConvertTo-DeckWarmupTimes $updated.WarmupTimes
+            if($updated.WarmupTimedEnabled -and -not $updated.WarmupTimes){throw 'Enter at least one daily time.'}
             Write-DeckJson (Join-Path $root 'settings.json') $updated
-            if(-not $updated.AutoCheck){$script:pendingWarm=$null}
+            Sync-DeckWarmupStartup $suite $updated
+            if(-not $updated.WarmupEnabled){$script:pendingWarm=@{}}
             foreach($account in @($nextCheck.Keys)){if($cache[$account].CheckedAt){$nextCheck[$account]=Get-DeckNextCheck $updated $cache[$account] ([DateTimeOffset]$cache[$account].CheckedAt)}}
             if($updated.Compact -and -not $settings.Compact){$script:expandedRows=@{}}
             $script:settings=Get-DeckSettings $root; Set-DeckAppearance; Set-DeckMode $settings.ViewMode; $script:lastRender=''; $dialog.Close()
-        } catch { [void][Windows.MessageBox]::Show($dialog,$_.Exception.Message,'Settings not saved') }
+        } catch { $settingsError.Text=$_.Exception.Message }
     })
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel}}
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -392,24 +585,98 @@ function Show-DeckSettings {
         [void]$dialog.ShowDialog()
     }finally{$modelTimer.Stop(); if($modelState.Task){Stop-DeckTask $modelState.Task; $modelState.Task.Process.Dispose()}}
 }
+function New-DeckPanelDetails([string]$Name) {
+    $row=$cache[$Name]; $profile=$profiles[$Name]; $connected=@($sessions | Where-Object Account -eq $Name)
+    $plan=if($row.PlanType){$row.PlanType}else{$profile.PlanType}
+    $displayEmail=if($row.Email){$row.Email}else{$profile.Email}
+    $status=Get-DeckHealth $row; $quotaColor='#69DEC0'
+        $detailPanel=[Windows.Controls.StackPanel]::new(); $detailPanel.Margin='12,2,12,6'
+        $divider=[Windows.Controls.Border]::new(); $divider.Height=1; $divider.Background='#30343A'; $divider.Margin='0,0,0,10'; [void]$detailPanel.Children.Add($divider)
+        if($settings.ShowQuota){foreach($w in $row.Windows){[void]$detailPanel.Children.Add((New-DeckQuotaTrack $w $quotaColor))}}
+        $fields=[ordered]@{}
+        $fields['Status']=$status+' · percentages remaining; * reset passed, check again'
+        if($settings.ShowEmail){$fields['Email']=if($displayEmail){if($settings.MaskEmail){$displayEmail -replace '^(.).*(@.*)$','$1***$2'}else{$displayEmail}}else{'Unavailable'}}
+        if($settings.ShowPlan){$fields['Plan']=if($plan){$plan}else{'Unavailable'}}
+        $fields['Reset credits']=Format-DeckResetCredits $row
+        if($settings.ShowSessionCount){$fields['Terminals']=[string]$connected.Count}
+        if($settings.ShowModel){$fields['Model']=$profile.Model+' / '+$profile.Effort}
+        if($settings.ShowUptime -and $connected.Count){$fields['Uptime']=[string][int]([DateTimeOffset]::Now-[DateTimeOffset]($connected | Sort-Object StartedAt | Select-Object -First 1).StartedAt).TotalMinutes+' min'}
+        if($settings.ShowResets){foreach($w in $row.Windows){if($w.ResetsAtUnix){$fields[$w.Label+' reset']=[DateTimeOffset]::FromUnixTimeSeconds([long]$w.ResetsAtUnix).ToLocalTime().ToString('ddd dd MMM · HH:mm')}}}
+        if($settings.ShowCheckedAt){$fields['Last check']=if($row.CheckedAt){([DateTimeOffset]$row.CheckedAt).ToLocalTime().ToString('dd MMM · HH:mm')}else{'Not checked'}}
+        if($settings.ShowSource){$fields['Source']=if($row.Source){$row.Source}else{'Not checked'}}
+        if($settings.ShowProcessIds){$fields['Process IDs']=($connected | ForEach-Object ProcessId)-join ', '}
+        if($settings.ShowFolder){$fields['Folders']=($connected | ForEach-Object Folder | Select-Object -Unique)-join "`n"}
+        if($settings.ShowWarmup -or (Test-DeckWarmupSelected $settings $name)){$fields['Warm-up']=Get-DeckWarmupStatus $settings $(if($row){$row}else{@{Account=$name}}) $history[$name]}
+        if($settings.ShowCredits){$fields['Credits']=if($null -ne $row.Credits){($row.Credits.PSObject.Properties | ForEach-Object { $_.Name+': '+$_.Value }) -join ' · '}else{'Not provided by Codex'}}
+        if($row.Error){$fields['Check error']=$row.Error}
+        foreach($key in @($fields.Keys)){
+            if([string]::IsNullOrWhiteSpace([string]$fields[$key])){$fields[$key]='Unavailable'}
+            $line=[Windows.Controls.Grid]::new(); $line.Margin='0,4,0,4'
+            $col=[Windows.Controls.ColumnDefinition]::new(); $col.Width=[Windows.GridLength]::new(108); [void]$line.ColumnDefinitions.Add($col)
+            [void]$line.ColumnDefinitions.Add([Windows.Controls.ColumnDefinition]::new())
+            [void]$line.Children.Add((New-DeckText $key '#7F8997' 11))
+            $value=New-DeckText ([string]$fields[$key]) '#C8D0DB' 11; [Windows.Controls.Grid]::SetColumn($value,1); [void]$line.Children.Add($value)
+            [void]$detailPanel.Children.Add($line)
+        }
+    return $detailPanel
+}
 function Render-Deck {
     $names = @($sessions | ForEach-Object Account | Select-Object -Unique)
-    if ($allProfiles -and -not $widget) { $names=@(Get-DeckAccounts) }
-    $names=@($names | Sort-Object @{Expression={if($_ -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},{$_})
+    if ($allProfiles) { $names=@(Get-DeckAccounts) }
+    $names=@($names | Sort-Object @{Expression={if($_ -in $pins){0}else{1}}},@{Expression={if($_ -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},{$_})
     $Summary.Text="{0} connected accounts  /  {1} terminals  /  warm-up {2}" -f @($sessions | ForEach-Object Account | Select-Object -Unique).Count,$sessions.Count,$(if($settings.WarmupEnabled){'on'}else{'off'})
-    if($widget){$Summary.Text="{0} online  /  {1} terminals" -f $names.Count,$sessions.Count}
-    $StatusLine.Text = if ($task) { "$($task.Kind): $($task.Account)..." } else { $(if($settings.AutoCheck){"$notice / auto-check every $($settings.PollMinutes)m"}else{"$notice / auto-check off"}) }
-    if($widget -and -not $task){$StatusLine.Text='Checks '+$(if($settings.AutoCheck){'on'}else{'off'})+'  /  warm-up '+$(if($settings.WarmupEnabled){'on'}else{'off'})}
-    $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + $allProfiles + '/' + ($manualChecks.Keys -join ',') + '/' + $task.Account
+    if($widget){$Summary.Text="{0} online  /  {1} terminals" -f @($sessions | ForEach-Object Account | Select-Object -Unique).Count,$sessions.Count}
+    $warming=@($tasks.Values | Where-Object Kind -eq 'Warm-up').Count
+    $StatusLine.Text = if ($tasks.Count) { "Checking $($tasks.Count-$warming) / warming $warming…" } else { $(if($settings.AutoCheck){"$notice / auto-check every $($settings.PollMinutes)m"}else{"$notice / auto-check off"}) }
+    if($widget -and -not $tasks.Count){$StatusLine.Text='Checks '+$(if($settings.AutoCheck){'on'}else{'off'})+'  /  warm-up '+$(if($settings.WarmupEnabled){'on'}else{'off'})}
+    $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + $allProfiles + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
     if ($signature -eq $lastRender) { return }
-    $script:lastRender=$signature; $Cards.Children.Clear()
+    $script:lastRender=$signature
+    $style=(@('Compact','FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupAllPaid','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
+    if($style -ne $rowStyle){
+        $poolKey=[string]$widget; $pool=$rowPools[$poolKey]
+        if($pool -and $pool.Style -eq $style){$script:rowControls=$pool.Controls}else{$script:rowControls=@{}; $rowPools[$poolKey]=@{Style=$style;Controls=$rowControls}}
+        $script:rowStyle=$style
+    }
+    $rendered=[Collections.Generic.List[Windows.UIElement]]::new()
+    $built=0
     if (-not $names.Count) {
-        [void]$Cards.Children.Add((New-DeckText 'Your deck is clear. Pick an account and launch a terminal. Already-running sessions attach after their next codex-auth launch.' '#9BB5D9' 14)); return
+        $Cards.Children.Clear()
+        [void]$Cards.Children.Add((New-DeckText 'Your deck is clear. Pick an account and launch a terminal. Already-running sessions attach after their next codex-auth launch.' '#9BB5D9' 14)); Update-DeckWidgetHeight; return
     }
     foreach ($name in $names) {
         $connected=@($sessions | Where-Object Account -eq $name); $row=$cache[$name]
         $profile=$profiles[$name]
-        if($widget){[void]$Cards.Children.Add((New-DeckWidgetCard $name $row $profile $connected.Count)); continue}
+        $rowKey=($connected.ProcessId -join ',')+'/'+($connected.Folder -join ',')+'/'+$profileStamps[$name]+'/'+($name -in $pins)+'/'+[DateTimeOffset]::Now.ToString('yyyyMMddHHmm')+'/'+$row.Error+'/'+$row.CheckedAt+'/'+$history[$name].Outcome
+        $healthKey=[string]$tasks.ContainsKey($name)+'/'+$manualChecks.ContainsKey($name)
+        $saved=$rowControls[$name]
+        if($saved){
+            if($saved.Key -ne $rowKey -or -not [object]::ReferenceEquals($saved.Record,$row)){
+                $health=$saved.Card.Resources['HealthSummary']
+                [void](New-DeckHealthSummary $name $row ([int]$health.FontSize) $health)
+                $dot=$saved.Card.Resources['ConnectionDot']; $color=if($connected.Count){'#69DEC0'}else{'#65738A'}
+                if($dot -is [Windows.Shapes.Ellipse]){$dot.Fill=$color}else{$dot.Foreground=$color}
+                $saved.Card.Resources['Title'].Text=$(if($name -in $pins){'★ '}else{''})+$name
+                $info=$saved.Card.Resources['AccountInfo']
+                if($info){
+                    $plan=if($row.PlanType){$row.PlanType}else{$profile.PlanType}
+                    $email=if($row.Email){$row.Email}else{$profile.Email}
+                    if($settings.MaskEmail){$email=$email -replace '^(.).*(@.*)$','$1***$2'}
+                    $meta=@(); if($settings.ShowPlan){$meta+=$(if($plan){$plan.ToUpperInvariant()}else{'?'})}; if($settings.ShowEmail -and $email){$meta+=$email}
+                    $info.Text=$meta -join '  /  '
+                }
+                $saved.Card.Child.Content=if($expandedRows[$name]){if($widget){New-DeckWidgetDetails $name}else{New-DeckPanelDetails $name}}else{$null}
+                $saved.Key=$rowKey; $saved.Record=$row
+            }
+            $saved.Card.Child.IsExpanded=[bool]$expandedRows[$name]
+            if($saved.HealthKey -ne $healthKey){
+                $health=$saved.Card.Resources['HealthSummary']; $health.Tag.Text=if($tasks.ContainsKey($name) -or $manualChecks.ContainsKey($name)){' · checking'}elseif($row.Error){' · check failed'}else{''}
+                $saved.HealthKey=$healthKey
+            }
+            $rendered.Add($saved.Card); continue
+        }
+        $built++
+        if($widget){$card=New-DeckWidgetCard $name $row $profile $connected.Count; $rowControls[$name]=@{Key=$rowKey;HealthKey=$healthKey;Record=$row;Card=$card}; $rendered.Add($card); continue}
         $plan=if($row.PlanType){$row.PlanType}else{$profile.PlanType}
         $displayEmail=if($row.Email){$row.Email}else{$profile.Email}
         $card=[Windows.Controls.Border]::new(); $card.CornerRadius='6'; $card.Margin='0,0,0,5'; $card.Padding=if($settings.Compact){'8,5'}else{'10,8'}
@@ -419,134 +686,167 @@ function Render-Deck {
         foreach($width in @('12','90','*','Auto')){$col=[Windows.Controls.ColumnDefinition]::new(); $col.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$grid.ColumnDefinitions.Add($col)}
         $dot=New-DeckText ([string][char]0x25CF) $(if($connected.Count){'#69DEC0'}else{'#60646B'}) 9
         $dot.VerticalAlignment='Center'; [void]$grid.Children.Add($dot)
-        $title=New-DeckText $name '#E4E7EC' $settings.FontSize; $title.FontWeight='SemiBold'; $title.VerticalAlignment='Center'; $title.TextWrapping='NoWrap'; $title.TextTrimming='CharacterEllipsis'; $title.ToolTip=$name; [Windows.Controls.Grid]::SetColumn($title,1); [void]$grid.Children.Add($title)
+        $title=New-DeckText ($(if($name -in $pins){'★ '}else{''})+$name) '#E4E7EC' $settings.FontSize; $title.FontWeight='SemiBold'; $title.VerticalAlignment='Center'; $title.TextWrapping='NoWrap'; $title.TextTrimming='CharacterEllipsis'; [Windows.Controls.Grid]::SetColumn($title,1); [void]$grid.Children.Add($title)
         $meta=@(); if($settings.ShowPlan){$meta+=$(if($plan){$plan.ToUpperInvariant()}else{'?'})}
         if($settings.ShowEmail -and $displayEmail){$email=$displayEmail; if($settings.MaskEmail){$email=$email -replace '^(.).*(@.*)$','$1***$2'}; $meta+=$email}
         $info=New-DeckText ($meta -join '  /  ') '#858B95' ($settings.FontSize-1); $info.TextWrapping='NoWrap'; $info.TextTrimming='CharacterEllipsis'; $info.Margin='0,0,12,0'; $info.VerticalAlignment='Center'; [Windows.Controls.Grid]::SetColumn($info,2); [void]$grid.Children.Add($info)
-        $stale=-not $row.CheckedAt -or ([DateTimeOffset]::Now-[DateTimeOffset]$row.CheckedAt).TotalMinutes -gt ($settings.PollMinutes+2)
-        $status=if($task -and $task.Account -eq $name){'Checking...'}elseif($manualChecks.ContainsKey($name)){'Queued'}elseif(-not $row){'Not checked'}elseif($row.Status -eq 'error'){'Check failed'}elseif($stale){'Cached'}elseif($row.Status -eq 'blocked'){if(@($row.Windows | Where-Object Dead).Count){'Quota exhausted'}else{'Limit reached'}}elseif($row.Status -eq 'available'){'Ready'}else{'Unknown'}
-        $quotaColor=if($stale){'#DCB675'}elseif($row.Status -eq 'blocked'){'#F17D8D'}elseif($row.Status -eq 'available'){'#69DEC0'}else{'#DCB675'}
-        $quota=@($status)
-        if($settings.ShowQuota){foreach($w in $row.Windows){$pct=if($null -eq $w.RemainingPct){'?'}else{[string]$w.RemainingPct+'%'}; $quota+=($w.Label+' '+$pct)} }
-        $text=New-DeckText ($quota -join '   ') $quotaColor ($settings.FontSize-1); $text.TextWrapping='NoWrap'; $text.VerticalAlignment='Center'; [Windows.Controls.Grid]::SetColumn($text,3); [void]$grid.Children.Add($text)
-        $details=@()
-        if($settings.ShowModel){$details+=$profile.Model+' / '+$profile.Effort}
-        if($settings.ShowUptime -and $connected.Count){$start=($connected | Sort-Object StartedAt | Select-Object -First 1).StartedAt; $details+='Open '+[int]([DateTimeOffset]::Now-[DateTimeOffset]$start).TotalMinutes+'m'}
-        if($settings.ShowProcessIds -and $connected.Count){$details+='PID '+(($connected | ForEach-Object ProcessId)-join ',')}
-        if($settings.ShowSource -and $row.Source){$details+='via '+$row.Source}
-        if($settings.ShowCheckedAt -and $row.CheckedAt){$details+='checked '+([DateTimeOffset]$row.CheckedAt).ToLocalTime().ToString('HH:mm')}
-        if($settings.ShowCredits -and $null -ne $row.Credits){$details+='Credits '+($row.Credits | ConvertTo-Json -Compress)}
-        if($settings.ShowWarmup -and $history[$name]){$details+='warm-up: '+$history[$name].Outcome}
-        $tips=@($name,($meta -join ' / '),($connected.Count.ToString()+' connected terminals'), 'Percentages show quota remaining.')
-        if($settings.ShowResets){foreach($w in $row.Windows){if($w.ResetsAtUnix){$tips+=($w.Label+' resets '+[DateTimeOffset]::FromUnixTimeSeconds([long]$w.ResetsAtUnix).ToLocalTime().ToString('ddd dd MMM HH:mm'))}}}
-        $tips+=$details
-        if($settings.ShowFolder){$tips+=@($connected | ForEach-Object Folder | Select-Object -Unique)}
-        if($row.Error){$tips+=$row.Error}
-        $card.ToolTip=$tips -join "`n"
-        $detailPanel=[Windows.Controls.StackPanel]::new(); $detailPanel.Margin='12,2,12,6'
-        $divider=[Windows.Controls.Border]::new(); $divider.Height=1; $divider.Background='#30343A'; $divider.Margin='0,0,0,10'; [void]$detailPanel.Children.Add($divider)
-        if($settings.ShowQuota){foreach($w in $row.Windows){[void]$detailPanel.Children.Add((New-DeckQuotaTrack $w $quotaColor))}}
-        $fields=[ordered]@{}
-        $fields['Status']=$status
-        if($settings.ShowEmail){$fields['Email']=if($displayEmail){if($settings.MaskEmail){$displayEmail -replace '^(.).*(@.*)$','$1***$2'}else{$displayEmail}}else{'Unavailable'}}
-        if($settings.ShowPlan){$fields['Plan']=if($plan){$plan}else{'Unavailable'}}
-        if($settings.ShowSessionCount){$fields['Terminals']=[string]$connected.Count}
-        if($settings.ShowModel){$fields['Model']=$profile.Model+' / '+$profile.Effort}
-        if($settings.ShowUptime -and $connected.Count){$fields['Uptime']=[string][int]([DateTimeOffset]::Now-[DateTimeOffset]($connected | Sort-Object StartedAt | Select-Object -First 1).StartedAt).TotalMinutes+' min'}
-        if($settings.ShowResets){foreach($w in $row.Windows){if($w.ResetsAtUnix){$fields[$w.Label+' reset']=[DateTimeOffset]::FromUnixTimeSeconds([long]$w.ResetsAtUnix).ToLocalTime().ToString('ddd dd MMM · HH:mm')}}}
-        if($settings.ShowCheckedAt){$fields['Last check']=if($row.CheckedAt){([DateTimeOffset]$row.CheckedAt).ToLocalTime().ToString('dd MMM · HH:mm')}else{'Not checked'}}
-        if($settings.ShowSource){$fields['Source']=if($row.Source){$row.Source}else{'Not checked'}}
-        if($settings.ShowProcessIds){$fields['Process IDs']=($connected | ForEach-Object ProcessId)-join ', '}
-        if($settings.ShowFolder){$fields['Folders']=($connected | ForEach-Object Folder | Select-Object -Unique)-join "`n"}
-        if($settings.ShowWarmup){$fields['Warm-up']=if($history[$name]){$history[$name].Outcome}elseif($settings.WarmupEnabled){'Enabled / no attempts'}else{'Off / no attempts'}}
-        if($settings.ShowCredits){$fields['Credits']=if($null -ne $row.Credits){($row.Credits.PSObject.Properties | ForEach-Object { $_.Name+': '+$_.Value }) -join ' · '}else{'Not provided by Codex'}}
-        if($row.Error){$fields['Check error']=$row.Error}
-        foreach($key in $fields.Keys){
-            if([string]::IsNullOrWhiteSpace([string]$fields[$key])){$fields[$key]='Unavailable'}
-            $line=[Windows.Controls.Grid]::new(); $line.Margin='0,4,0,4'
-            $col=[Windows.Controls.ColumnDefinition]::new(); $col.Width=[Windows.GridLength]::new(108); [void]$line.ColumnDefinitions.Add($col)
-            [void]$line.ColumnDefinitions.Add([Windows.Controls.ColumnDefinition]::new())
-            [void]$line.Children.Add((New-DeckText $key '#7F8997' 11))
-            $value=New-DeckText ([string]$fields[$key]) '#C8D0DB' 11; [Windows.Controls.Grid]::SetColumn($value,1); [void]$line.Children.Add($value)
-            [void]$detailPanel.Children.Add($line)
-        }
-        $card.Child=$null; $card.Child=New-DeckExpander $name $grid $detailPanel
-        [void]$Cards.Children.Add($card)
+        $status=Get-DeckHealth $row
+        $quotaColor='#69DEC0'
+        $text=New-DeckHealthSummary $name $row ($settings.FontSize-1); [Windows.Controls.Grid]::SetColumn($text,3); [void]$grid.Children.Add($text)
+        $card.ContextMenu=New-DeckEntryMenu $name
+        $card.Resources['HealthSummary']=$text; $card.Resources['ConnectionDot']=$dot; $card.Resources['Title']=$title; $card.Resources['AccountInfo']=$info
+        $card.Child=$null; $card.Child=New-DeckExpander $name $grid 'Panel'
+        $rowControls[$name]=@{Key=$rowKey;HealthKey=$healthKey;Record=$row;Card=$card}; $rendered.Add($card)
     }
-    Update-DeckWidgetHeight
+    $structureChanged=$false
+    # Retain existing visuals and scroll position; only insert/remove changed rows.
+    for($index=0;$index -lt $rendered.Count;$index++){
+        $card=$rendered[$index]
+        if($index -lt $Cards.Children.Count -and [object]::ReferenceEquals($Cards.Children[$index],$card)){continue}
+        $structureChanged=$true
+        if($Cards.Children.Contains($card)){$Cards.Children.Remove($card)}
+        $Cards.Children.Insert($index,$card)
+    }
+    while($Cards.Children.Count -gt $rendered.Count){$structureChanged=$true; $Cards.Children.RemoveAt($Cards.Children.Count-1)}
+    if($structureChanged -or $built -gt 0 -or $script:defaultViewHeight){Update-DeckWidgetHeight}
+
 }
 function Invoke-DeckTick {
     if($SmokeTest -or $Demo){Render-Deck; return}
+    $settingsSignal=Join-Path $root 'warmup-settings-changed.json'
+    if(Test-Path -LiteralPath $settingsSignal){
+        Remove-Item -LiteralPath $settingsSignal -ErrorAction SilentlyContinue
+        $freshSettings=Get-DeckSettings $root
+        foreach($key in @($settings.Keys | Where-Object {$_ -like 'Warmup*'})){$settings[$key]=$freshSettings[$key]}
+        $script:nextCheck=@{}; $script:pendingWarm=@{}; $script:lastRender=''
+    }
     $script:sessions=@(Get-DeckSessions $root); Update-DeckPicker
     $signal=Join-Path $root 'show.json'
-    if(Test-Path -LiteralPath $signal){Remove-Item -LiteralPath $signal -ErrorAction SilentlyContinue; $window.Show(); $window.WindowState='Normal'; [void]$window.Activate()}
+    if(Test-Path -LiteralPath $signal){$request=Read-DeckJson $signal; Remove-Item -LiteralPath $signal -ErrorAction SilentlyContinue; $window.Show(); $window.WindowState='Normal'; [void]$window.Activate(); if($request.OpenSettings){Show-DeckSettings}}
     $now=[DateTimeOffset]::UtcNow; $unix=$now.ToUnixTimeSeconds()
-    if($task){
+    Add-DeckTimedWarmups $suite $settings @(Get-DeckAccounts) $cache $now.ToLocalTime()
+    $tickWatch=[Diagnostics.Stopwatch]::StartNew(); $cacheDirty=$false; $yieldTick=$false
+    foreach($task in @($tasks.Values)){
         $timeout=($now-$task.Started).TotalSeconds -gt 120
         if($timeout){Stop-DeckTask $task}
-        if($task.Process.HasExited){
+        if($task.Process.HasExited -and ($timeout -or ($task.Out.IsCompleted -ne $false -and $task.Err.IsCompleted -ne $false))){
             $account=$task.Account; $success=(-not $timeout -and $task.Process.ExitCode -eq 0)
             if($task.Kind -eq 'Check'){
                 try{
                     if(-not $success){throw 'Check process failed or timed out.'}
-                    $result=@($task.Out.Result | ConvertFrom-Json)[0]
+                    $records=@(Expand-DeckCheckRecords ($task.Out.Result | ConvertFrom-Json))
+                    if($records.Count -ne 1){throw 'Expected exactly one account result.'}
+                    $result=$records[0]
                     if($result.Account -ne $account){throw 'Unexpected account in response.'}
                     $result | Add-Member NoteProperty CheckedAt $now.ToString('o') -Force
+                    if($result.Status -eq 'error'){throw $result.Error}
                     $cache[$account]=$result
                     $script:cacheVersion++
-                    $previous=$resets[$account]
+                    $previous=Get-DeckWarmupReset $result $resets[$account] $unix
+                    if($previous){$resets[$account]=$previous}
                     $five=$result.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
                     # Warm-up is evaluated only from a fresh successful check, never stale disk data.
-                    $eligible= @($sessions | Where-Object Account -eq $account).Count -gt 0 -and (Test-DeckWarmup $settings $result $previous $history[$account] $unix)
-                    if($eligible){$script:pendingWarm=@{Account=$account; Reset=$previous; Record=$result; At=$unix}}
+                    $eligible= (Test-DeckWarmup $settings $result $previous $history[$account] $unix)
+                    if($eligible){$pendingWarm[$account]=@{Account=$account; Reset=$previous; Record=$result; At=$unix}}
                     if($five.ResetsAtUnix -and [long]$five.ResetsAtUnix -gt $unix -and (-not $previous -or $five.UsedPct -gt 0 -or $unix -gt ([long]$previous+3600))){$resets[$account]=[long]$five.ResetsAtUnix}
                     $nextCheck[$account]=Get-DeckNextCheck $settings $result $now
-                    Write-DeckJson (Join-Path $root 'cache.json') @($cache.Values)
+                    $cacheDirty=$true
                     $script:notice="Updated $account at $($now.ToLocalTime().ToString('HH:mm'))"
                 }catch{
                     $nextCheck[$account]=$now.AddMinutes(20); $script:notice="Check failed: $account (20m backoff)"
-                    $cache[$account]=[pscustomobject]@{Account=$account;Status='error';CheckedAt=$now.ToString('o');Windows=@();Error=$_.Exception.Message}
-                    $script:cacheVersion++; Write-DeckJson (Join-Path $root 'cache.json') @($cache.Values)
+                    if($cache[$account]){$cache[$account] | Add-Member NoteProperty Error $_.Exception.Message -Force}else{$cache[$account]=[pscustomobject]@{Account=$account;Status='error';Windows=@();Error=$_.Exception.Message}}
+                    $script:cacheVersion++; $cacheDirty=$true
                 }
             }else{
-                $history[$account].Outcome=if($success){'sent'}elseif($timeout){'timed out / no retry'}else{'failed / no retry'}
+                $reply=if($success){Get-DeckWarmupReply $task.Out.Result}else{$null}
+                $history[$account].Outcome=if($reply){'Replied: '+$reply}elseif($timeout){'Timed out / reply unconfirmed'}elseif($success){'No assistant reply / unconfirmed'}else{'Request failed'}
+                $history[$account] | Add-Member NoteProperty Reply ([string]$reply) -Force
+                $history[$account] | Add-Member NoteProperty CompletedAt $unix -Force
                 Write-DeckJson (Join-Path $root 'warmup.json') @($history.Values)
-                $nextCheck[$account]=$now.AddSeconds(60); $script:notice="Warm-up $account : $($history[$account].Outcome)"
+                $manualChecks[$account]=$now; $nextCheck[$account]=$now; $script:notice="Warm-up $account : $($history[$account].Outcome)"
             }
-            $task.Process.Dispose(); $script:task=$null; $script:lastRender=''
+            $task.Process.Dispose(); $tasks.Remove($account); $script:lastRender=''
         }
     }
-    if(-not $task -and ($settings.AutoCheck -or $manualChecks.Count) -and ($now-$lastRequest).TotalSeconds -ge $settings.MinimumGapSeconds){
-        if($script:pendingWarm -and $settings.AutoCheck){
-            $pending=$script:pendingWarm; $script:pendingWarm=$null; $account=$pending.Account
-            if(($unix-$pending.At) -lt 120 -and @($sessions | Where-Object Account -eq $account).Count -and (Test-DeckWarmup $settings $pending.Record $pending.Reset $history[$account] $unix)){
+    if($cacheDirty){Write-DeckJson (Join-Path $root 'warmup-resets.json') $resets; Write-DeckJson (Join-Path $root 'cache.json') @($cache.Values); $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker}
+    Invoke-DeckQueuedWarmups $suite $settings $tasks $history $unix
+    if($tasks.Count -lt 8 -and ($settings.AutoCheck -or $settings.WarmupEnabled -or $manualChecks.Count)){
+        foreach($warmAccount in @($pendingWarm.Keys)){
+            if(-not $settings.WarmupEnabled -or $tasks.Count -ge 8){break}; if($tasks.ContainsKey($warmAccount)){continue}
+            $pending=$pendingWarm[$warmAccount]; $pendingWarm.Remove($warmAccount); $account=$pending.Account
+            if(($unix-$pending.At) -lt 120 -and (Test-DeckWarmup $settings $pending.Record $pending.Reset $history[$account] $unix)){
                 # Persist BEFORE sending: crashes/restarts must never duplicate a request.
-                $history[$account]=[pscustomobject]@{Account=$account; Reset=$pending.Reset; AttemptAt=$unix; Outcome='attempted / result pending'}
+                $history[$account]=[pscustomobject]@{Account=$account; Reset=$pending.Reset; AttemptAt=$unix; Outcome='Sending / waiting for reply';Mode='Reset';Reply=''}
                 Write-DeckJson (Join-Path $root 'warmup.json') @($history.Values)
-                $script:task=Start-DeckTask (Get-DeckWarmupCode $suite $account $settings.WarmupModel) 'Warm-up' $account
+                $tasks[$account]=Start-DeckTask (Get-DeckWarmupCode $suite $account $settings.WarmupModel) 'Warm-up' $account
                 $script:lastRequest=$now
             }
         }
-        if(-not $task){
-            $automatic=@(); if($settings.AutoCheck){$automatic=@($sessions | ForEach-Object Account | Select-Object -Unique); if($allProfiles -and -not $widget){$automatic=@(Get-DeckAccounts)}}
+        if($tasks.Count -lt 8){
+            $automatic=@(); if($settings.AutoCheck){$automatic=@($sessions | ForEach-Object Account | Select-Object -Unique); if($allProfiles){$automatic=@(Get-DeckAccounts)}}
+            if($settings.WarmupEnabled -and $settings.WarmupResetEnabled){
+                $automatic+=@(Get-DeckAccounts | Where-Object {(Test-DeckWarmupSelected $settings $_) -and (-not $cache[$_].PlanType -or $cache[$_].PlanType -in @('plus','pro','team','business','enterprise','edu'))})
+                $automatic=@($automatic | Select-Object -Unique)
+            }
             $due=@(Get-DeckDueAccounts $automatic $manualChecks $nextCheck $now)
-            if($due.Count){$account=$due[0]; $script:task=Start-DeckTask (Get-DeckCheckCode $suite $account) 'Check' $account; $manualChecks.Remove($account); $script:lastRequest=$now}
+            foreach($account in $due){
+                if($tasks.Count -ge 8){break}; if($tasks.ContainsKey($account)){continue}
+                if($window -and $tickWatch.ElapsedMilliseconds -ge 35){$yieldTick=$true; break}
+                $tasks[$account]=Start-DeckTask (Get-DeckCheckCode $suite $account) 'Check' $account; $manualChecks.Remove($account)
+            }
 
         }
     }
+    if($batchAccounts.Count -and -not @($batchAccounts | Where-Object { $tasks.ContainsKey($_) -or $manualChecks.ContainsKey($_) }).Count){
+        $script:batchAccounts=@(); $script:batchUntil=$now.AddSeconds($settings.MinimumGapSeconds)
+        $script:notice='List check complete'
+    }
+    $CheckButton.IsEnabled=-not $batchAccounts.Count -and $now -ge $batchUntil
+    $CheckButton.Content=if($batchAccounts.Count){'Checking…'}elseif($now -lt $batchUntil){'Check ('+[int][Math]::Ceiling(($batchUntil-$now).TotalSeconds)+'s)'}else{'Check'}
     Render-Deck
+    if($yieldTick -and -not $script:tickQueued){
+        $script:tickQueued=$true
+        [void]$window.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Background,[Action]{
+            $script:tickQueued=$false; Invoke-DeckTick
+        })
+    }
 }
 $script:manualChecks=@{}
-$script:pendingWarm=$null
+$script:pendingWarm=@{}
 $script:widget=$false
 $ModeButton.Add_Click({Set-DeckMode $(if($widget){'Panel'}else{'Widget'}); Render-Deck})
 $CloseButton.Add_Click({$window.Close()})
+$AccountPicker.Add_DropDownOpened({
+    $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker
+    # Measure the complete one-line contents, including unselected accounts.
+    $popup=$AccountPicker.Template.FindName('PART_Popup',$AccountPicker)
+    if($popup){
+        $longest=0
+        foreach($item in $AccountPicker.Items){
+            $content=$item.Content
+            if($content -isnot [Windows.FrameworkElement]){$content=New-DeckText ([string]$content) '#E4EBF5' ([int]$AccountPicker.FontSize); $content.TextWrapping='NoWrap'}
+            $content.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity))
+            $longest=[Math]::Max($longest,$content.DesiredSize.Width)
+        }
+        # Item padding, popup border/padding and scrollbar gutter.
+        $popup.Child.Width=[Math]::Min([Windows.SystemParameters]::WorkArea.Width-32,[Math]::Max($AccountPicker.ActualWidth,[Math]::Ceiling($longest+42)))
+    }
+})
 $LaunchButton.Add_Click({Open-DeckTerminal ([string]$AccountPicker.SelectedValue)})
 $configMenu=[Windows.Controls.ContextMenu]::new()
 $configMenu.Resources=$window.Resources
 $accountConfigItem=[Windows.Controls.MenuItem]::new(); $accountConfigItem.Header='Account config'
 $defaultsItem=[Windows.Controls.MenuItem]::new(); $defaultsItem.Header='Global defaults'; $defaultsItem.ToolTip='Template for new accounts; not the selected account.'
 [void]$configMenu.Items.Add($accountConfigItem); [void]$configMenu.Items.Add($defaultsItem)
+$bestItem=[Windows.Controls.MenuItem]::new(); $bestItem.Header='Recommend best account'
+$bestItem.Add_Click({
+    $names=@(Get-DeckAccounts)
+    $choice=@(Get-DeckRecommendations $names $cache) | Select-Object -First 1
+    if($choice){$AccountPicker.SelectedValue=$choice.Account; $script:notice=$choice.Account+': '+$choice.Reason}
+    else{$script:notice='No fresh usable account. Check accounts first.'}
+    $script:lastRender=''; Render-Deck
+})
+[void]$configMenu.Items.Add($bestItem)
 $ConfigButton.ContextMenu=$configMenu
 $ConfigButton.Add_Click({
     $accountConfigItem.IsEnabled=$null -ne $AccountPicker.SelectedValue
@@ -556,18 +856,26 @@ $ConfigButton.Add_Click({
 $accountConfigItem.Add_Click({if($AccountPicker.SelectedValue){Edit-DeckConfig (Join-Path $suite ('accounts/'+$AccountPicker.SelectedValue+'/config.toml')) ([string]$AccountPicker.SelectedValue)}})
 $defaultsItem.Add_Click({Edit-DeckConfig (Join-Path $HOME '.codex/config.toml') 'Global defaults'})
 $SettingsButton.Add_Click({Show-DeckSettings})
-$AllButton.Add_Click({$script:allProfiles=-not $allProfiles; $AllButton.Content=if($allProfiles){'Connected only'}else{'Show all'}; $script:lastRender=''; Render-Deck})
-$CheckButton.ToolTip='Check visible accounts. Show all includes disconnected profiles. Requests are staggered.'
+$toggleProfiles={
+    $script:allProfiles=-not $allProfiles
+    $AllButton.Content=if($allProfiles){'Connected only'}else{'Show all'}
+    $WidgetFilter.ToolTip=if($allProfiles){'Showing all / click for connected only'}else{'Showing connected / click for all accounts'}
+    $WidgetFilter.Foreground=if($allProfiles){'#69DEC0'}else{'#9AA5AD'}
+    $script:lastRender=''; Render-Deck
+}
+$AllButton.Add_Click($toggleProfiles); $WidgetFilter.Add_Click($toggleProfiles)
+$CheckButton.ToolTip='Check visible accounts. Show all includes disconnected profiles. Up to eight checks run together. A list cooldown starts when they finish.'
 $CheckButton.Add_Click({
+    if($batchAccounts.Count -or [DateTimeOffset]::UtcNow -lt $batchUntil){return}
     $names=@($sessions | ForEach-Object Account | Select-Object -Unique)
-    if($allProfiles -and -not $widget){$names=@(Get-DeckAccounts)}
+    if($allProfiles){$names=@(Get-DeckAccounts)}
     $now=[DateTimeOffset]::UtcNow
     foreach($name in $names){
-        if($task -and $task.Account -eq $name){continue}
+        if($tasks.ContainsKey($name)){continue}
         $at=$cache[$name].CheckedAt
-        $manualChecks[$name]=if($at){$earliest=([DateTimeOffset]$at).AddSeconds(60); if($earliest -gt $now){$earliest}else{$now}}else{$now}
+        $manualChecks[$name]=$now
     }
-    $script:notice="Check queued: $($manualChecks.Count) accounts"; $script:lastRender=''; Render-Deck
+    $script:batchAccounts=@($names); $script:notice="Checking $($names.Count) accounts"; $script:lastRender=''; Render-Deck
 })
 $NewButton.Add_Click({
     $names=@(Get-DeckAccounts); $number=1
@@ -588,7 +896,7 @@ $NewButton.Add_Click({
         $name=$input.Text.Trim()
         if($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -match '^(con|prn|aux|nul|com[0-9]|lpt[0-9]|list)$'){$errorText.Text='Use 1–40 letters, numbers, underscores or hyphens; start with a letter.'; return}
         if(Test-Path -LiteralPath (Join-Path $suite "accounts/$name")){$errorText.Text='That account already exists. Choose another name.'; return}
-        Open-DeckTerminal $name; $dialog.Close()
+        Open-DeckTerminal $name -NewAccount; $dialog.Close()
     })
     $dialog.Add_ContentRendered({[void]$input.Focus(); $input.SelectAll()})
     [void]$dialog.ShowDialog()
@@ -603,7 +911,8 @@ $show.Add_Click({$window.Show(); $window.WindowState='Normal'; [void]$window.Act
 $tray.Add_DoubleClick({$window.Show(); $window.WindowState='Normal'; [void]$window.Activate()})
 $exit.Add_Click({$script:quit=$true; $window.Close()})
 $window.Add_Closing({param($sender,$eventArgs)
-    if($settings.CloseToTray -and -not $quit -and -not $SmokeTest -and (-not $Demo -or $LifecycleTest)){
+    Save-DeckView
+    if(($settings.CloseToTray -or $settings.WarmupEnabled -or @($tasks.Values | Where-Object Kind -eq 'Warm-up').Count) -and -not $quit -and -not $SmokeTest -and (-not $Demo -or $LifecycleTest)){
         $eventArgs.Cancel=$true; $tray.Visible=$true; $window.Hide()
         if(-not $script:trayHintShown -and -not $LifecycleTest){$tray.ShowBalloonTip(3500,'Codex Deck is still running','Open it from the green Deck icon in the notification area (possibly under the ^ overflow arrow).',[Windows.Forms.ToolTipIcon]::Info); $script:trayHintShown=$true}
         return
@@ -613,9 +922,10 @@ $window.Add_Closing({param($sender,$eventArgs)
         Write-DeckJson (Join-Path $root 'settings.json') $settings
     }
 })
-$window.Width=$settings.Width; $window.Height=$settings.Height; Set-DeckAppearance; Update-DeckPicker
+$window.Width=$settings.Width; $window.Height=[Math]::Max(100,$settings.Height); Set-DeckAppearance; Update-DeckPicker
 Set-DeckMode $settings.ViewMode -Initial
-$window.Add_ContentRendered({if($settings.ViewMode -eq 'Tray' -and $Attach){$window.Hide()}})
+$window.Add_SizeChanged({if(-not $script:sizing){[void]$window.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Loaded,[Action]{Update-DeckWidgetHeight})}})
+$window.Add_ContentRendered({if($Background -or ($settings.ViewMode -eq 'Tray' -and $Attach)){$window.Hide()}})
 $timer=[Windows.Threading.DispatcherTimer]::new(); $timer.Interval=[TimeSpan]::FromSeconds(2)
 $timer.Add_Tick({try{Invoke-DeckTick}catch{$script:notice='Companion error: '+$_.Exception.Message; $StatusLine.Text=$notice}})
 try{
@@ -626,18 +936,60 @@ try{
     if($SmokeTest -or $Demo){Set-DeckMode $PreviewMode -Initial}
     Invoke-DeckTick
     if($SmokeTest){
-        $settings.AccountPickerUsage=$true; $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker
+        $settingsTest=Show-DeckSettings -TestUI
+        if (-not $settingsTest.Controls.ContainsKey('FailoverEnabled') -or $settingsTest.Controls.FailoverMode.Items.Count -ne 2 -or $settingsTest.Controls.FailoverEnabled.IsChecked) { throw 'Failover Settings controls/default failed.' }
+        $settingsTest.Dialog.Close()
+        'PASS: Settings includes opt-in failover, selection mode and saved account pool.'
+
+        function Find-DeckVisual($node,[type]$type){
+            if($node -is $type){$node}
+            for($i=0;$i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($node);$i++){Find-DeckVisual ([Windows.Media.VisualTreeHelper]::GetChild($node,$i)) $type}
+        }
+        $script:testPickerNames=@('account1','account2'); $settings.AccountPickerUsage=$true; $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker
         $pickerEntry=@($AccountPicker.Items | Where-Object Tag -eq 'account1')[0]
-        if(($pickerEntry.Content.Children[1].Inlines | ForEach-Object Text) -notmatch '5h 28%' -or $pickerEntry.Content.Children[2].Text -notmatch '^Last checked: '){throw ("Account picker usage details failed: "+$pickerEntry.Content.Children[1].Text+" | "+$pickerEntry.Content.Children[2].Text)}
+        if((($pickerEntry.Content.Inlines | ForEach-Object Text) -join '') -notmatch '5h 28%' -or $pickerEntry.Content.TextWrapping -ne 'NoWrap'){throw ('Picker: '+ [string]::Join('|',@($pickerEntry.Content.Inlines | ForEach-Object Text)))}
         $AccountPicker.SelectedValue='account1'
         if($AccountPicker.SelectedValue -ne 'account1'){throw 'Account picker identity lost.'}
+        # Exercise the actual dropdown, including an unselected account.
+        $otherEntry=@($AccountPicker.Items | Where-Object Tag -ne 'account1')[0]
+        if($otherEntry){
+            $otherName=[string]$otherEntry.Tag; $previousRecord=$cache[$otherName]
+            $record=$cache.account1 | ConvertTo-Json -Depth 20 | ConvertFrom-Json; $record.Account=$otherName
+            $cache[$otherName]=$record
+            Set-DeckMode 'Panel' -Initial; $window.Show(); $window.UpdateLayout(); $AccountPicker.ApplyTemplate() | Out-Null; $AccountPicker.IsDropDownOpen=$true
+            [Windows.Forms.Application]::DoEvents()
+            $popup=$AccountPicker.Template.FindName('PART_Popup',$AccountPicker); $popup.Child.UpdateLayout()
+            $otherEntry.ApplyTemplate() | Out-Null
+            $presenter=@(Find-DeckVisual $otherEntry ([Windows.Controls.ContentPresenter]))[0]
+            $visibleText=($presenter.Content.Inlines | ForEach-Object Text) -join ''
+            if(-not $presenter -or $visibleText -notmatch '5h 28%' -or $visibleText -notmatch 'Last checked:'){throw 'Unselected dropdown account is missing usage/reset details'}
+            $longest=0
+            foreach($item in $AccountPicker.Items){$item.Content.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity)); $longest=[Math]::Max($longest,$item.Content.DesiredSize.Width)}
+            $expectedWidth=[Math]::Min([Windows.SystemParameters]::WorkArea.Width-32,[Math]::Max($AccountPicker.ActualWidth,[Math]::Ceiling($longest+42)))
+            if([Math]::Abs($popup.Child.ActualWidth-$expectedWidth) -gt 1 -or $otherEntry.ActualHeight -gt 40){throw 'Usage dropdown does not fit its longest line or rows are not compact'}
+            $AccountPicker.IsDropDownOpen=$false; Set-DeckMode $PreviewMode -Initial
+            if($previousRecord){$cache[$otherName]=$previousRecord}else{$cache.Remove($otherName)}
+            Write-Output 'PASS: open account picker renders usage/reset details on unselected rows in a compact content-sized popup.'
+        }
+
+        $script:testPickerNames=$null
         $folderUI=Select-DeckFolder $HOME -TestUI
         if($folderUI.PathBox.Text -ne $HOME -or $folderUI.Folders.Items.Count -eq 0){throw 'Folder picker initialization failed.'}
         $folderUI.Dialog.Close()
+        if(-not $settings.WidgetOneLine){throw 'One-line widget entries must default on'}
+        $single=New-DeckWidgetCard 'account1' $cache.account1 $profiles.account1 1
+        $single.Measure([Windows.Size]::new(220,[double]::PositiveInfinity))
+        if([Windows.Controls.Grid]::GetRow($single.Resources['HealthSummary']) -ne 0){throw 'Widget summary is not inline'}
+        $settings.WidgetOneLine=$false
+        $double=New-DeckWidgetCard 'account1' $cache.account1 $profiles.account1 1
+        $double.Measure([Windows.Size]::new(220,[double]::PositiveInfinity))
+        if($single.DesiredSize.Height -ge $double.DesiredSize.Height){throw 'One-line widget did not reduce row height'}
+        $settings.WidgetOneLine=$true
         $settingsUI=Show-DeckSettings -TestUI
         if(@($settingsUI.Controls.WarmupModel.Items | Where-Object {$_ -isnot [string] -or $_ -notmatch '^gpt-' }).Count){throw 'Model picker contains a non-model item.'}
         if($settingsUI.Controls.WarmupModel -isnot [Windows.Controls.ComboBox] -or $settingsUI.Controls.WarmupModel.SelectedItem -ne $settings.WarmupModel){throw 'Model selector failed.'}
         foreach($control in $settingsUI.Controls.Values){if($control.Margin.Bottom -lt 14){throw 'Settings spacing failed.'}}
+        if(@($settingsUI.Tabs.Items | ForEach-Object Header) -notcontains 'Backup' -or @($settingsUI.Tabs.Items | ForEach-Object Header) -notcontains 'About'){throw 'Backup/About tabs missing'}
         $settingsUI.Dialog.Close()
         $window.Content.Measure([Windows.Size]::new($window.Width,$window.Height)); $window.Content.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $window.Content.UpdateLayout()
         if($Cards.Children.Count -ne 1){throw 'Smoke test card rendering failed.'}
@@ -661,6 +1013,7 @@ try{
         }
         foreach($key in @('ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCredits','ShowSessionCount','ShowUptime','ShowWarmup','ShowCheckedAt')){$settings[$key]=$true}
         Set-DeckMode 'Panel' -Initial; Render-Deck
+        $Cards.Children[0].Child.IsExpanded=$true
         $detailLabels=@($Cards.Children[0].Child.Content.Children | Where-Object {$_ -is [Windows.Controls.Grid]} | ForEach-Object {$_.Children[0].Text})
         foreach($label in @('Status','Email','Plan','Terminals','Model','Uptime','Last check','Source','Process IDs','Folders','Warm-up','Credits')){if($label -notin $detailLabels){throw "Missing expanded field: $label"}}
         if($LaunchBar.Visibility -ne 'Visible' -or $Cards.Children.Count -ne 1){throw 'Panel mode failed.'}
@@ -669,19 +1022,98 @@ try{
         $menuSurface=[Windows.Media.VisualTreeHelper]::GetChild($configMenu,0)
         if($menuSurface -isnot [Windows.Controls.Border] -or $menuSurface.Background.ToString() -ne '#FF141619'){throw 'Configs menu background template failed.'}
         if(-not $window.Icon -or -not $settingsUI.Dialog.Icon){throw 'Application window icon missing.'}
-        if($configMenu.Items.Count -ne 2 -or $ConfigButton.Content -ne 'Configs' -or [Windows.Controls.Grid]::GetColumn($NewButton) -ne 0){throw 'Account controls layout failed.'}
+        if($configMenu.Items.Count -ne 3 -or $ConfigButton.Content -ne 'Configs' -or [Windows.Controls.Grid]::GetColumn($NewButton) -ne 0){throw 'Account controls layout failed.'}
 
         if($chrome.CaptionHeight -ne 62){throw 'Panel caption does not cover top padding.'}
-        foreach($button in @($ModeButton,$SettingsButton,$CloseButton)) {
+        foreach($button in @($ModeButton,$SettingsButton,$CloseButton,$WidgetFilter)) {
             if(-not [Windows.Shell.WindowChrome]::GetIsHitTestVisibleInChrome($button)){throw 'Caption button would be intercepted by dragging.'}
         }
         Set-DeckMode 'Widget' -Initial
         if($chrome.CaptionHeight -ne 54){throw 'Widget caption does not cover top padding.'}
         Render-Deck
+        $savedSessions=$sessions
+        $script:sessions=@(1..4 | ForEach-Object {[pscustomobject]@{Account="account$_";ProcessId=$PID;StartedAt=[DateTimeOffset]::Now.ToString('o')}})
+        foreach($testMode in @('Panel','Widget')){
+            $viewStates.Clear(); Set-DeckMode $testMode -Initial; $script:expandedRows=@{}; $script:lastRender=''; Render-Deck
+            $window.Height=$window.MinHeight
+            $window.Content.Measure([Windows.Size]::new($window.Width,$window.Height)); $window.Content.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $window.Content.UpdateLayout()
+            $count=if($widget){2}else{3}
+            $needed=0; for($index=0;$index -lt $count;$index++){$needed+=$Cards.Children[$index].DesiredSize.Height}
+            if($CardScroll.ViewportHeight+1 -lt $needed){throw "$testMode minimum clips collapsed entries: $($CardScroll.ViewportHeight) / $needed"}
+            $before=$window.Height; $Cards.Children[0].Child.IsExpanded=$true
+            $window.Content.UpdateLayout(); Update-DeckWidgetHeight
+            $window.Content.Measure([Windows.Size]::new($window.Width,$window.Height)); $window.Content.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $window.Content.UpdateLayout()
+            if($window.Height -lt $before -or $CardScroll.ViewportHeight+1 -lt $Cards.Children[0].DesiredSize.Height){throw "$testMode expansion shrinks or clips the entry"}
+            if($Cards.Children[0].ToolTip){throw 'Entry hover overlay remains'}
+            $entryMenu=$Cards.Children[0].ContextMenu
+            if($entryMenu.Items.Count -ne 10 -or $entryMenu.Items[9].Foreground.ToString() -ne '#FFF17D8D'){throw 'Entry actions or red Delete missing'}
+            $entryMenu.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+            if(-not $manualChecks.ContainsKey('account1')){throw 'Entry check did not queue its account'}
+            $rememberWidth=$window.Width+25; $rememberHeight=$window.Height+35
+            $window.Width=$rememberWidth; $window.Height=$rememberHeight
+            Set-DeckMode $(if($widget){'Panel'}else{'Widget'}); Render-Deck
+            Set-DeckMode $testMode; Render-Deck
+            if([Math]::Abs($window.Width-$rememberWidth) -gt 1 -or [Math]::Abs($window.Height-$rememberHeight) -gt 1 -or -not $Cards.Children[0].Child.IsExpanded){throw "$testMode state was not restored: $($window.Width)/$rememberWidth, $($window.Height)/$rememberHeight, expanded=$($Cards.Children[0].Child.IsExpanded)"}
+        }
+        $script:sessions=@(1..40 | ForEach-Object {[pscustomobject]@{Account="account$_";ProcessId=$PID;StartedAt=[DateTimeOffset]::Now.ToString('o')}})
+        foreach($session in $sessions){$record=$cache.account1 | ConvertTo-Json -Depth 20 | ConvertFrom-Json; $record.Account=$session.Account; $cache[$session.Account]=$record}
+        foreach($testMode in @('Panel','Widget')){
+            $watch=[Diagnostics.Stopwatch]::StartNew()
+            $viewStates.Clear(); Set-DeckMode $testMode -Initial; $script:expandedRows=@{}; $script:lastRender=''; Render-Deck
+            Write-Output ("{0} 40 populated rows: {1} ms" -f $testMode,$watch.ElapsedMilliseconds)
+            $window.Width=$window.MinWidth; $window.Height=$window.MinHeight
+            $window.Content.Measure([Windows.Size]::new($window.Width,$window.Height)); $window.Content.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $window.Content.UpdateLayout()
+            $bar=$CardScroll.Template.FindName('PART_VerticalScrollBar',$CardScroll)
+            $track=@(Find-DeckVisual $bar ([Windows.Controls.Primitives.Track]))[0]
+            if($bar.ActualWidth -gt 8 -or $bar.Maximum -le 0 -or [Math]::Abs($track.ViewportSize-$CardScroll.ViewportHeight) -gt 1 -or $track.Thumb.ActualHeight -gt $bar.ActualHeight){throw "$testMode crowded scrollbar sizing failed: width=$($bar.ActualWidth), requested=$($bar.Width), min=$($bar.MinWidth), style=$($bar.Style), max=$($bar.Maximum), viewport=$($track.ViewportSize)/$($CardScroll.ViewportHeight), thumb=$($track.Thumb.ActualHeight)/$($bar.ActualHeight)"}
+            $CardScroll.ScrollToEnd(); $window.Content.UpdateLayout()
+            if([Math]::Abs($CardScroll.VerticalOffset-$CardScroll.ScrollableHeight) -gt 1){throw "$testMode cannot scroll to last account"}
+        }
+        foreach($testMode in @('Panel','Widget')){
+            Set-DeckMode $testMode -Initial; $script:expandedRows=@{}; $script:lastRender=''; Render-Deck
+            $originalCards=@($Cards.Children)
+            $menu=$Cards.Children[1].ContextMenu; $menu.PlacementTarget=$Cards.Children[1]
+            $menu.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.ContextMenu]::OpenedEvent))
+            if($menu.Items[1].Tag.Account -ne $Cards.Children[1].Child.Tag){throw 'Shared entry menu targets the wrong account'}
+
+            $settings.Width+=1; $settings.WidgetHeight+=1; $script:lastRender=''; Render-Deck
+            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Children[$index])){throw 'Geometry change rebuilt account controls'}}
+            $fullSessions=$sessions; $script:sessions=@($sessions[0]); $script:lastRender=''; Render-Deck
+            $script:sessions=$fullSessions; $script:lastRender=''; $filterWatch=[Diagnostics.Stopwatch]::StartNew(); Render-Deck
+            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Children[$index])){throw 'Filter switch rebuilt cached rows'}}
+            Write-Output ("{0}: cached 40-account list restored in {1} ms." -f $testMode,$filterWatch.ElapsedMilliseconds)
+            foreach($session in $sessions){$manualChecks[$session.Account]=[DateTimeOffset]::UtcNow}
+            $watch=[Diagnostics.Stopwatch]::StartNew(); $script:lastRender=''; Render-Deck
+            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Children[$index])){throw 'Checking rebuilt unchanged rows'}}
+            Write-Output ("{0} 40-account Check state update: {1} ms (rows retained)" -f $testMode,$watch.ElapsedMilliseconds)
+            $manualChecks.Clear()
+            $CardScroll.ScrollToEnd(); $window.Content.UpdateLayout()
+            $beforeOffset=$CardScroll.VerticalOffset; $beforeExtent=$CardScroll.ExtentHeight
+            foreach($session in $sessions){
+                $record=$cache[$session.Account] | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+                $record.CheckedAt=[DateTimeOffset]::UtcNow.ToString('o'); $record.Windows[0].RemainingPct=17
+                $cache[$session.Account]=$record
+            }
+            $script:lastRender=''; Render-Deck; $window.Content.UpdateLayout()
+            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Children[$index])){throw 'Completed checks replaced account rows'}}
+            if([Math]::Abs($CardScroll.VerticalOffset-$beforeOffset) -gt 1 -or [Math]::Abs($CardScroll.ExtentHeight-$beforeExtent) -gt 1){throw 'Completed checks disturbed scroll position or extent'}
+            if($Cards.Children[0].Resources['HealthSummary'].Text -notmatch '17%'){throw 'Retained row did not display new quota'}
+            Write-Output "${testMode}: completed results retain rows, quota updates, scroll offset and extent."
+            $script:rowControls=@{}; $Cards.Children.Clear(); $script:lastRender=''
+            $watch=[Diagnostics.Stopwatch]::StartNew(); Render-Deck
+            if($Cards.Children.Count -ne 40){throw 'Account list was not presented in a single render'}
+            if(@($Cards.Children | Where-Object {$_.Child.Content}).Count){throw 'Collapsed rows eagerly built details'}
+            Write-Output ("{0}: all 40 rows presented together in {1} ms." -f $testMode,$watch.ElapsedMilliseconds)
+        }
+        $deletePreview=Show-DeckDelete 'account1' -TestUI
+        if($deletePreview.WindowStyle -ne 'None' -or -not $deletePreview.Icon){throw 'Delete confirmation is not themed'}
+        $deletePreview.Close()
+        $script:sessions=$savedSessions; $script:lastRender=''; Render-Deck
         $perf=[Diagnostics.Stopwatch]::StartNew(); for($i=0;$i -lt 100;$i++){Render-Deck}; $perf.Stop()
         'Unchanged render pass: {0:N2} ms average (100 passes).' -f ($perf.Elapsed.TotalMilliseconds/100)
         'PASS: WPF constructed and synthetic account card rendered; no network calls or warm-ups.'
     }else{
+        if(-not $Demo){Sync-DeckWarmupStartup $suite $settings}
         $timer.Start()
         # ShowDialog ends when hidden, which used to dispose the tray icon. A real
         # application message loop stays alive while the main window is hidden.
@@ -708,6 +1140,7 @@ try{
                 }catch{$script:lifecycleFailure=$_.Exception.Message; $script:quit=$true; $lifeTimer.Stop(); $app.Shutdown()}
             }); $lifeTimer.Start()
         }
+        if($OpenSettings){$window.Add_ContentRendered({if(-not $script:openedInitialSettings){$script:openedInitialSettings=$true; Show-DeckSettings}})}
         [void]$app.Run($window)
         if($LifecycleTest){if($lifecycleFailure){throw $lifecycleFailure}; 'PASS: real application close-to-tray, persistent icon, restore, view switching, and quit. No network or warm-ups.'}
     }
@@ -715,6 +1148,6 @@ try{
     [IO.File]::AppendAllText((Join-Path $root 'errors.log'),([DateTimeOffset]::Now.ToString('o')+"`n"+$_.ToString()+"`n"+$_.ScriptStackTrace+"`n"))
     throw
 }finally{
-    $timer.Stop(); Stop-DeckTask $task; if($task){$task.Process.Dispose()}; $tray.Dispose(); $deckIcon.Dispose()
+    $timer.Stop(); foreach($worker in @($tasks.Values)){Stop-DeckTask $worker; $worker.Process.Dispose()}; $tray.Dispose(); $deckIcon.Dispose()
     if($created){$mutex.ReleaseMutex()}; $mutex.Dispose()
 }

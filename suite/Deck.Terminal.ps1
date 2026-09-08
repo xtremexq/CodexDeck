@@ -35,7 +35,7 @@ function Get-DeckTerminalHealth($Record) {
     if ($Record.Status -ne 'available') { return 'Unavailable' }
     return 'Ready'
 }
-function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true) {
+function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}) {
     $lines = [Collections.Generic.List[object]]::new()
     function Add-Line([string]$Text, [string]$Color = 'Gray', [string]$Background = 'Black') {
         $lines.Add(@{ Text = (ConvertTo-DeckTerminalText $Text ([Math]::Max(1,$Width - 1))); Color = $Color; Background = $Background })
@@ -45,7 +45,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     Add-Line '  Usage remaining  |  cached instantly, fresh checks in background' 'DarkGray'
     Add-Line ('  Filter: {0}' -f $(if ($Filter) { $Filter } else { 'all accounts  (/ to search)' })) 'Cyan'
     Add-Line ('  {0,-18} {1,-9} {2,-18} {3,-18} {4}' -f 'ACCOUNT','PLAN','PRIMARY','WEEKLY','STATE') 'DarkGray'
-    $pageSize = [Math]::Max(1, $Height - 15)
+    $pageSize = [Math]::Max(1, $Height - 18)
     $start = [int]([Math]::Floor($Selected / $pageSize) * $pageSize)
     for ($i = $start; $i -lt [Math]::Min($Names.Count, $start + $pageSize); $i++) {
         $name = $Names[$i]; $row = $Cache[$name]; $profile = $Profiles[$name]
@@ -72,16 +72,22 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
         $resets = foreach ($window in $row.Windows) {
             if ($window.ResetsAtUnix) { '{0}: {1}' -f $window.Label,([DateTimeOffset]::FromUnixTimeSeconds([long]$window.ResetsAtUnix).ToLocalTime().ToString('MMM dd HH:mm')) }
         }
-        Add-Line ('  Window resets (primary = 5H or plan window): ' + ($resets -join '  /  ')) 'DarkGray'
+        Add-Line ('  Window resets (primary = 5H or plan window): ' + ($resets -join '  /  ') + ' | Reset credits: ' + (Format-DeckResetCredits $row)) 'DarkGray'
         $connected = @($Sessions | Where-Object Account -eq $name)
-        Add-Line ('  Sessions: ' + (($connected | ForEach-Object { '{0} @ {1}' -f $_.ProcessId,$_.Folder }) -join ' | ')) 'DarkGray'
+        if ($connected.Count) { Add-Line ('  Sessions: ' + (($connected | ForEach-Object { '{0} @ {1}' -f $_.ProcessId,$_.Folder }) -join ' | ')) 'DarkGray' }
     }
+    if ($WarmupSettings) {
+        $warmState=if($Names.Count){Get-DeckWarmupStatus $WarmupSettings $(if($Cache[$Names[$Selected]]){$Cache[$Names[$Selected]]}else{@{Account=$Names[$Selected]}}) $WarmupHistory[$Names[$Selected]]}else{'No account selected'}
+        Add-Line ('  AUTO WARM-UP: '+$(if($WarmupSettings.WarmupEnabled){'ON'}else{'PAUSED'})+' | '+$warmState) 'Yellow'
+    }
+    Add-Line '  WARMUP   U run now  T daily times  W select account  P pause/resume' 'DarkMagenta'
     Add-Line ('  ' + $Notice) 'Yellow'
-    Add-Line '  Up/Down select  Enter launch  R refresh  A refresh all  / search' 'Cyan'
-    Add-Line '  L login  N new account  D desktop Deck  M mask email  Q quit' 'Cyan'
+    Add-Line '  NAVIGATE Up/Down select  Enter launch  / search  B best  Q quit' 'Gray'
+    Add-Line '  MANAGE   R refresh  A all  H history  F failover  F2 rename  L login  N new' 'DarkGray'
+    Add-Line '  DISPLAY  D desktop Deck  S settings  M mask email' 'DarkGray'
     return $lines.ToArray()
 }
-function Read-DeckTerminalInput([string]$Prompt) {
+function Read-DeckTerminalInput([string]$Prompt, [int]$MaxLength = 40) {
     [Console]::Write($Prompt + ': ')
     $value = ''
     while ($true) {
@@ -91,7 +97,7 @@ function Read-DeckTerminalInput([string]$Prompt) {
         if (($key.Key -eq 'Backspace' -or [int]$key.KeyChar -eq 8) -and $value.Length) {
             $value = $value.Substring(0,$value.Length - 1)
             [Console]::Write("`b `b")
-        } elseif (-not [char]::IsControl($key.KeyChar) -and $value.Length -lt 40) {
+        } elseif (-not [char]::IsControl($key.KeyChar) -and $value.Length -lt $MaxLength) {
             $value += $key.KeyChar; [Console]::Write($key.KeyChar)
         }
     }
@@ -101,16 +107,22 @@ function Show-DeckTerminal {
     . (Join-Path $SuiteRoot 'Deck.Core.ps1')
     $root = Join-Path $SuiteRoot 'deck'
     $accountRoot = Join-Path $SuiteRoot 'accounts'
+    $warmSettings=Get-DeckSettings $root
     $cache = Get-DeckTerminalCache $root
     $profiles = @{}; $tasks = @{}; $attempted = @{}; $pending = [Collections.Generic.Queue[string]]::new()
     $selected = 0; $filter = ''; $notice = 'Ready. Fresh checks start automatically for missing or stale usage.'; $mask = $true
     $interactive = -not $Snapshot -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
     if (-not $interactive) { $notice = 'Cached snapshot. Run codex-auth in a terminal for live checks and actions.' }
+    if($interactive -and $warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}
     $oldColor = [Console]::ForegroundColor; $oldBackground = [Console]::BackgroundColor
     $oldCursor = $true
     if ($interactive) { $oldCursor = [Console]::CursorVisible; [Console]::CursorVisible = $false; Clear-Host; $lastFrame = '' }
     try {
         do {
+            $warmSettings=Get-DeckSettings $root
+            $warmHistory=@{}; foreach($entry in @(Read-DeckJson (Join-Path $root 'warmup.json'))){if($entry.Account){$warmHistory[$entry.Account]=$entry}}
+            # Merge fresh scheduler results without starting a second warm-up executor.
+            foreach($entry in (Get-DeckTerminalCache $root).Values){if(-not $cache[$entry.Account] -or [string]$entry.CheckedAt -gt [string]$cache[$entry.Account].CheckedAt){$cache[$entry.Account]=$entry}}
             $names = @(Get-ChildItem -LiteralPath $accountRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' } | Sort-Object @{Expression={ if ($_.Name -match '^account(\d+)$') { [int]$Matches[1] } else { [int]::MaxValue } }},Name | ForEach-Object Name)
             foreach ($name in $names) {
                 if (-not $profiles.ContainsKey($name)) { $profiles[$name] = Get-DeckProfile $SuiteRoot $name }
@@ -152,9 +164,9 @@ function Show-DeckTerminal {
             $visible = @($names | Where-Object { -not $filter -or $_.IndexOf($filter,[StringComparison]::OrdinalIgnoreCase) -ge 0 })
             $selected = [Math]::Max(0,[Math]::Min($selected,$visible.Count - 1))
             $sessions = @(Get-DeckSessions $root)
-            $width = 110; $height = [Math]::Max(25,$visible.Count + 15)
+            $width = 110; $height = [Math]::Max(25,$visible.Count + 18)
             if ($interactive) { $width = [Console]::WindowWidth; $height = [Console]::WindowHeight }
-            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask)
+            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory)
             if (-not $interactive) { $frame | ForEach-Object { Write-Output $_.Text }; return }
             $signature = "$width/$height/" + (($frame | ForEach-Object { $_.Text + $_.Color + $_.Background }) -join "`n")
             if ($signature -ne $lastFrame) {
@@ -184,11 +196,73 @@ function Show-DeckTerminal {
                 'DownArrow' { $selected = [Math]::Min($visible.Count - 1,$selected + 1) }
                 'Home' { $selected = 0 }
                 'End' { $selected = [Math]::Max(0,$visible.Count - 1) }
-                'PageUp' { $selected = [Math]::Max(0,$selected - [Math]::Max(1,$height - 15)) }
-                'PageDown' { $selected = [Math]::Min($visible.Count - 1,$selected + [Math]::Max(1,$height - 15)) }
+                'PageUp' { $selected = [Math]::Max(0,$selected - [Math]::Max(1,$height - 18)) }
+                'PageDown' { $selected = [Math]::Min($visible.Count - 1,$selected + [Math]::Max(1,$height - 18)) }
+                'B' {
+                    $choice = @(Get-DeckRecommendations $names $cache) | Select-Object -First 1
+                    if ($choice) { $filter=''; $selected=[array]::IndexOf($names,$choice.Account); $notice=$choice.Account+': '+$choice.Reason }
+                    else { $notice='No fresh usable account. Press A to refresh; unknown/exhausted accounts are excluded.' }
+                }
+                'H' {
+                    [Console]::CursorVisible=$true
+                    try { Show-DeckHistoryBrowser $SuiteRoot $AuthScript } catch { $notice=$_.Exception.Message }
+                    finally { [Console]::CursorVisible=$false; Clear-Host; $lastFrame='' }
+                }
+                'F' {
+                    [Console]::CursorVisible=$true; Clear-Host
+                    try {
+                        $pool=Read-DeckTerminalInput 'Failover pool: comma-separated accounts (empty cancels)' 820
+                        if ($pool) {
+                            $mode=Read-DeckTerminalInput 'Mode: Ordered or Best (empty cancels)'
+                            if ($mode) {
+                                if ($mode -notin @('Ordered','Best')) { throw 'Choose Ordered or Best.' }
+                                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $AuthScript -Failover $mode -FailoverAccounts $pool
+                                $notice="Failover session returned (exit $LASTEXITCODE)."
+                            }
+                        }
+                    } catch { $notice=$_.Exception.Message }
+                    finally { [Console]::CursorVisible=$false; Clear-Host; $lastFrame='' }
+                }
+                'F2' {
+                    if ($name) {
+                        [Console]::CursorVisible=$true; Clear-Host
+                        try {
+                            if ($tasks.Count -or $pending.Count) { throw 'Wait for queued checks to finish before renaming.' }
+                            $newName=Read-DeckTerminalInput ('Rename '+$name+' to (empty cancels)')
+                            if ($newName) {
+                                $notice=Rename-DeckAccount $SuiteRoot $name $newName
+                                $profiles.Remove($name); $cache=Get-DeckTerminalCache $root; $attempted.Remove($name)
+                            }
+                        } catch { $notice=$_.Exception.Message }
+                        finally { [Console]::CursorVisible=$false; Clear-Host; $lastFrame='' }
+                    }
+                }
                 'M' { $mask = -not $mask }
                 'R' { if ($name -and -not $tasks.ContainsKey($name) -and -not $pending.Contains($name)) { $pending.Enqueue($name); $notice = "Queued $name." } }
                 'A' { foreach ($item in $names) { if (-not $tasks.ContainsKey($item) -and -not $pending.Contains($item)) { $pending.Enqueue($item) } }; $notice = 'All accounts queued (three checks at a time).' }
+                'U' {
+                    try { Request-DeckWarmup $SuiteRoot $name; $notice='Warm-up queued in background for '+$name+'. Success requires an assistant reply.' } catch { $notice=$_.Exception.Message }
+                }
+                'T' {
+                    [Console]::CursorVisible=$true; Clear-Host
+                    try {
+                        Write-Host ('Daily warm-up (local time): '+$warmSettings.WarmupTimes)
+                        $times=Read-DeckTerminalInput 'Times HH:mm separated by commas; off disables; empty cancels'
+                        if($times){
+                            if($times -eq 'off'){$times=''}
+                            $warmSettings=Set-DeckWarmupTimes $SuiteRoot $times
+                            $notice='Daily warm-up: '+$(if($warmSettings.WarmupTimedEnabled){$warmSettings.WarmupTimes+' (local)'}else{'off'})
+                        }
+                    } catch { $notice=$_.Exception.Message }
+                    finally { [Console]::CursorVisible=$false; Clear-Host; $lastFrame='' }
+                }
+                'W' {
+                    try{$warmSettings=Set-DeckWarmupControl $root $name; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice='Warm-up selection saved. The tray scheduler continues after this dashboard closes.'}catch{$notice=$_.Exception.Message}
+                }
+                'P' {
+                    try{$warmSettings=Set-DeckWarmupControl $root -Pause; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice='Warm-up '+$(if($warmSettings.WarmupEnabled){'resumed in tray.'}else{'paused; in-flight requests may finish.'})}catch{$notice=$_.Exception.Message}
+                }
+                'S' { Start-DeckCompanion $SuiteRoot -OpenSettings; $notice='Desktop Settings opened.' }
                 'D' { Start-DeckCompanion $SuiteRoot; $notice = 'Desktop Deck opened; use its settings for scheduling and warm-up.' }
                 default {
                     if ($key.KeyChar -eq '/') {
@@ -223,4 +297,46 @@ function Show-DeckTerminal {
         foreach ($task in $tasks.Values) { Stop-DeckTask $task; $task.Process.Dispose() }
         if ($interactive) { [Console]::ForegroundColor = $oldColor; [Console]::BackgroundColor = $oldBackground; [Console]::CursorVisible = $oldCursor; Clear-Host }
     }
+}
+
+function Show-DeckHistoryBrowser([string]$SuiteRoot, [string]$AuthScript, [string]$Filter = '') {
+    if (-not [Console]::IsOutputRedirected) { Clear-Host; Write-Host 'Loading local session history...' -ForegroundColor Cyan }
+    $rows=@(Get-DeckSessionHistory $SuiteRoot $Filter)
+    if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
+        $rows | Select-Object Account,Id,UpdatedAt,Folder,Provider
+        return
+    }
+    $offset=0; $message='Search matches account, folder, provider or session ID. No conversation contents are read.'
+    do {
+        Clear-Host
+        Write-Host 'CODEX DECK / SESSION HISTORY' -ForegroundColor Cyan
+        Write-Host (ConvertTo-DeckTerminalText ('Filter: '+$Filter+' | '+$rows.Count+' sessions'))
+        $size=[Math]::Max(1,[Console]::WindowHeight-9)
+        for($i=$offset; $i -lt [Math]::Min($rows.Count,$offset+$size); $i++) {
+            $row=$rows[$i]
+            Write-Host (ConvertTo-DeckTerminalText ('{0,3}. {1} | {2} | {3} | {4}' -f ($i+1),$row.Account,$row.UpdatedAt.ToLocalTime().ToString('MMM dd HH:mm'),$row.Folder,$row.Id) ([Math]::Max(1,[Console]::WindowWidth-1)))
+        }
+        if(-not $rows.Count){Write-Host 'No local sessions match. Only supported rollout metadata is listed.'}
+        Write-Host (ConvertTo-DeckTerminalText $message) -ForegroundColor Yellow
+        $inputValue=Read-DeckTerminalInput 'Number resumes | N next | P previous | / search | R reload | Q back'
+        switch($inputValue.ToUpperInvariant()) {
+            'Q' { return }
+            'N' { if($offset+$size -lt $rows.Count){$offset+=$size}; continue }
+            'P' { $offset=[Math]::Max(0,$offset-$size); continue }
+            '/' { $Filter=Read-DeckTerminalInput 'Search (empty = all)'; $rows=@(Get-DeckSessionHistory $SuiteRoot $Filter); $offset=0; continue }
+            'R' { $rows=@(Get-DeckSessionHistory $SuiteRoot $Filter); $offset=0; continue }
+        }
+        $number=0
+        if(-not [int]::TryParse($inputValue,[ref]$number) -or $number -lt 1 -or $number -gt $rows.Count){continue}
+        $row=$rows[$number-1]
+        # Re-read metadata to avoid launching a stale or replaced selection.
+        $current=@(Get-DeckSessionHistory $SuiteRoot $row.Id | Where-Object { $_.Account -eq $row.Account -and $_.Id -eq $row.Id }) | Select-Object -First 1
+        if(-not $current){$message='Session no longer exists. Reload the list.'; continue}
+        if(-not $current.Folder -or -not (Test-Path -LiteralPath $current.Folder -PathType Container)){$message='Original working folder is unavailable; restore it before resuming.'; continue}
+        Push-Location -LiteralPath $current.Folder
+        try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $AuthScript $current.Account resume $current.Id
+            $message='Session returned (exit '+$LASTEXITCODE+').'
+        } finally { Pop-Location }
+    } while($true)
 }

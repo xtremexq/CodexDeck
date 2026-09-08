@@ -63,3 +63,10 @@ Assert ($report -match '\[FREE\]' -and $report -match '\[PLUS\]' -and $report -m
 Assert ($report -notmatch '\x1b') 'Plain report contains ANSI'
 Write-Output $report
 Write-Output 'PASS: report grouping, plan badges, tiny/unknown balances, reset countdowns, sanitization and plain output.'
+
+Assert ((Convert-ResetCreditResponse @{credits=@()}).Status -eq 'available') 'Empty valid credit response treated as failure'
+$creditResult=Convert-ResetCreditResponse @{credits=@(@{status='available';expires_at='2030-01-01T00:00:00Z'})}
+Assert ($creditResult.Items.Count -eq 1 -and $creditResult.Items[0].ExpiresAtUnix -gt 0) 'Single reset credit lost through array unrolling'
+Assert ((Convert-ResetCreditResponse @{}).Status -eq 'unavailable') 'Malformed credit response treated as zero'
+Assert ((Convert-ResetCreditResponse @{credits=@(@{status='available';expires_at='invalid'})}).Items[0].Status -eq 'unknown') 'Invalid expiry treated as usable credit'
+'PASS: reset credit empty/single/malformed responses and invalid dates.'

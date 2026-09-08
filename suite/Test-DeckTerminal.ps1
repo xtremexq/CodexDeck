@@ -18,7 +18,7 @@ $empty = @(Get-DeckTerminalFrame @() @{} @{} @() @{} 0 60 25 '' 'Ready')
 Assert (($empty.Text -join "`n") -match 'No matching accounts') 'Missing empty state'
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('deck-terminal-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'deck'))
-Copy-Item (Join-Path $PSScriptRoot 'Deck.Core.ps1') (Join-Path $fixture 'Deck.Core.ps1')
+foreach($file in 'Deck.Core.ps1','Deck.AccountTools.ps1'){Copy-Item (Join-Path $PSScriptRoot $file) (Join-Path $fixture $file)}
 Write-DeckJson (Join-Path $fixture 'deck/cache.json') @(@{Account='account1';CheckedAt='2026-01-01T00:00:00Z';Status='available'})
 Write-DeckJson (Join-Path $fixture 'deck/terminal-cache.json') @(@{Account='account1';CheckedAt='2026-01-02T00:00:00Z';Status='blocked'})
 Assert ((Get-DeckTerminalCache (Join-Path $fixture 'deck')).account1.Status -eq 'blocked') 'Newest cache not selected'
@@ -30,3 +30,15 @@ $freeCache = @{account1=@{Status='available';Windows=@(@{Label='30-day';Duration
 $freeFrame = @(Get-DeckTerminalFrame @('account1') $freeCache $profiles @() @{} 0 110 25 '' 'Ready')
 Assert (($freeFrame.Text -join "`n") -match '42%') 'Free plan quota missing'
 'PASS: free plan primary quota.'
+
+$settings=Set-DeckWarmupControl (Join-Path $fixture 'deck') 'account1'
+Assert ($settings.WarmupEnabled -and $settings.WarmupAccounts -eq 'account1') 'Terminal selection did not opt in'
+$settings=Set-DeckWarmupControl (Join-Path $fixture 'deck') -Pause
+Assert (-not $settings.WarmupEnabled -and $settings.WarmupAccounts -eq 'account1') 'Pause lost account selection'
+$frame=@(Get-DeckTerminalFrame $names @{} $profiles @() @{} 39 100 25 '' 'Ready' $true $settings @{})
+Assert ($frame.Count -le 24 -and ($frame.Text -join "`n") -match 'AUTO WARM-UP: PAUSED') 'Warm-up state missing or overflowing'
+Assert (Test-Path (Join-Path $fixture 'deck/warmup-settings-changed.json')) 'Scheduler was not signaled'
+'PASS: shared warm-up selection, pause, scheduler signal and compact status.'
+
+Assert (($frame.Text -join "`n") -notmatch 'Sessions:') 'Empty sessions line shown'
+Assert (@($frame | Where-Object { $_.Text -match 'NAVIGATE|MANAGE|WARMUP' -and $_.Color -eq 'Cyan' }).Count -eq 0) 'Shortcut groups still cyan'

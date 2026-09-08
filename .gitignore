@@ -28,5 +28,5 @@ Desktop.ini
 .idea/
 .vscode/
 
-# Encrypted account exports remain private.
+# Encrypted account exports are private too.
 *.cdeck

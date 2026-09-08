@@ -4,7 +4,7 @@ if (-not (Test-Path -LiteralPath $sourcePath)) { $sourcePath=Join-Path $PSScript
 $tokens=$null; $errors=$null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($sourcePath, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors -join '; ') }
-foreach ($name in 'Remove-CodexAccount','Normalize-AccountName','Ensure-FreeAccountDefaults','Read-TextFile','Write-TextFile','Normalize-Newlines') {
+foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Normalize-AccountName','Ensure-FreeAccountDefaults','Read-TextFile','Write-TextFile','Normalize-Newlines') {
     $definition=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $true)
     . ([scriptblock]::Create($definition.Extent.Text))
 }
@@ -21,6 +21,13 @@ Remove-CodexAccount (Normalize-AccountName '1')
 if (Test-Path -LiteralPath (Join-Path $accountsRoot 'account1')) { throw 'Account not removed' }
 $archive = @(Get-ChildItem -LiteralPath (Join-Path $fixture 'deleted-accounts') -Directory)
 if ($archive.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path $archive[0].FullName 'marker.ps1'))) { throw 'Recovery copy missing' }
+$NewAccount=$true
+$existing=Join-Path $accountsRoot 'existing'
+[void][IO.Directory]::CreateDirectory($existing)
+[IO.File]::WriteAllText((Join-Path $existing 'auth.json'),'synthetic sentinel')
+$refused=$false; try{Initialize-AccountDirectory 'EXISTING' (Join-Path $accountsRoot 'EXISTING')}catch{$refused=$true}
+if(-not $refused -or [IO.File]::ReadAllText((Join-Path $existing 'auth.json')) -ne 'synthetic sentinel'){throw 'New account overwrote or accepted an existing case-insensitive name'}
+$NewAccount=$false
 $newAccount = Join-Path $accountsRoot 'account2'
 New-Item -ItemType Directory -Path $newAccount | Out-Null
 Ensure-FreeAccountDefaults $newAccount

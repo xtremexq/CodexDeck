@@ -3,6 +3,14 @@ param(
     [Parameter(Position = 0)]
     [string]$Account,
 
+    [switch]$NewAccount,
+    [switch]$Best,
+    [switch]$History,
+    [string]$RenameTo,
+    [ValidateSet('Off','Ordered','Best')]
+    [string]$Failover = 'Off',
+    [string[]]$FailoverAccounts,
+
     [Alias('Delete')]
     [switch]$Del,
 
@@ -557,6 +565,7 @@ function Initialize-AccountDirectory {
     }
 
     if (Test-Path -LiteralPath $AccountDir -PathType Container) {
+        if($NewAccount){throw 'That account already exists. Choose another name in Deck.'}
         return [pscustomobject]@{
             Created = $false
             Source = $null
@@ -564,7 +573,14 @@ function Initialize-AccountDirectory {
         }
     }
 
-    New-Item -ItemType Directory -Path $AccountDir -Force | Out-Null
+    if(-not ('DeckAccountDirectory' -as [type])){
+        Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class DeckAccountDirectory { [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool CreateDirectory(string path, IntPtr security); }'
+    }
+    if(-not [DeckAccountDirectory]::CreateDirectory($AccountDir,[IntPtr]::Zero)){
+        $errorCode=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        if($errorCode -eq 183 -and -not $NewAccount){return [pscustomobject]@{Created=$false;Source=$null;SkipConfigSync=$false}}
+        throw 'The account directory could not be created exclusively. It may already exist; nothing was overwritten.'
+    }
 
     foreach ($relativeDirectory in @("log", "memories", "sessions", "tmp", ".tmp")) {
         New-Item -ItemType Directory -Path (Join-Path $AccountDir $relativeDirectory) -Force | Out-Null
@@ -616,6 +632,11 @@ function Show-Usage {
     Write-Host "Usage: codex-auth [dashboard|status|accountN|N|list] [codex args...]"
     Write-Host "  codex-auth          Interactive account dashboard"
     Write-Host "  codex-auth status   Cached dashboard snapshot (no network)"
+    Write-Host "  codex-auth -Best    Launch the recommended fresh account"
+    Write-Host "  codex-auth -History [filter]   Browse/resume local sessions"
+    Write-Host "  codex-auth old -RenameTo new  Rename an inactive account"
+    Write-Host "  codex-auth -Failover Ordered -FailoverAccounts account1,account2"
+    Write-Host "  codex-auth -Failover Best -FailoverAccounts account1,account2"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  codex-auth account1"
@@ -672,6 +693,35 @@ function Use-CodexNodePath {
     }
 }
 
+if ($Failover -ne 'Off') {
+    if ($Best -or $History -or $RenameTo -or $Del -or $NewAccount) { throw 'Do not combine failover with other account actions.' }
+    $runtimeRoot = Split-Path -Parent $accountsRoot
+    . (Join-Path $runtimeRoot 'Deck.Failover.ps1')
+    $failoverChoice = Resolve-DeckFailoverPool $runtimeRoot ($FailoverAccounts -join ',') $Failover $Account
+    $Account = $failoverChoice.Account
+} elseif ($FailoverAccounts) { throw '-FailoverAccounts requires -Failover Ordered or Best.' }
+if ($Best -or $History -or $RenameTo) {
+    if (@($Best.IsPresent,$History.IsPresent,[bool]$RenameTo | Where-Object { $_ }).Count -ne 1 -or $Del -or $NewAccount) { throw 'Choose only one maintenance action.' }
+    $runtimeRoot = Split-Path -Parent $accountsRoot
+    . (Join-Path $runtimeRoot 'Deck.Core.ps1')
+    . (Join-Path $runtimeRoot 'Deck.Terminal.ps1')
+    if ($RenameTo) {
+        if ($CodexArgs) { throw 'Rename does not accept Codex arguments.' }
+        Rename-DeckAccount $runtimeRoot (Normalize-AccountName $Account) (Normalize-AccountName $RenameTo)
+        exit 0
+    }
+    if ($History) {
+        if ($CodexArgs) { throw 'History does not accept Codex arguments.' }
+        Show-DeckHistoryBrowser $runtimeRoot $PSCommandPath $Account
+        exit 0
+    }
+    if ($Account) { throw '-Best chooses the account; omit an explicit account name.' }
+    $names = @(Get-AccountDirectories | ForEach-Object Name)
+    $choice = @(Get-DeckRecommendations $names (Get-DeckTerminalCache (Join-Path $runtimeRoot 'deck'))) | Select-Object -First 1
+    if (-not $choice) { throw 'No fresh usable account. Refresh usage in codex-auth first.' }
+    $Account = $choice.Account
+    Write-Host ($Account+': '+$choice.Reason)
+}
 if ($Del) {
     if ($CodexArgs) { throw '-del cannot be combined with Codex arguments.' }
     Remove-CodexAccount -Name (Normalize-AccountName $Account)
@@ -711,7 +761,22 @@ if ($accountName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $accountName -mat
     throw 'Account names must start with a letter and contain at most 40 letters, numbers, underscores or hyphens.'
 }
 $accountDir = Join-Path $accountsRoot $accountName
+if ($Failover -eq 'Off' -and -not $PSBoundParameters.ContainsKey('Failover')) {
+    $runtimeRoot = Split-Path -Parent $accountsRoot
+    $failoverModule = Join-Path $runtimeRoot 'Deck.Failover.ps1'
+    if (Test-Path -LiteralPath $failoverModule) {
+        . (Join-Path $runtimeRoot 'Deck.Core.ps1')
+        . $failoverModule
+        $launchSettings = Get-DeckSettings (Join-Path $runtimeRoot 'deck')
+        if (Test-DeckAutomaticFailover $launchSettings $false $CodexArgs ([bool]$NewAccount)) {
+            $Failover=$launchSettings.FailoverMode
+            $failoverChoice=Resolve-DeckFailoverPool $runtimeRoot $launchSettings.FailoverAccounts $Failover $accountName
+        }
+    }
+}
 
+
+[void][IO.Directory]::CreateDirectory($accountsRoot)
 $bootstrapResult = Initialize-AccountDirectory -AccountName $accountName -AccountDir $accountDir
 
 if ($bootstrapResult.Created) {
@@ -741,10 +806,27 @@ try {
         if ((Get-DeckSettings $deckRoot).AutoStart) { Start-DeckCompanion $suiteRoot }
     }
 } catch { Write-Warning "Codex Deck could not attach: $($_.Exception.Message)" }
+$failoverProxy = $null
+$failoverSessions = @()
 try {
-    & codex @CodexArgs
+    if ($Failover -ne 'Off') {
+        $failoverProxy = Start-DeckFailover $suiteRoot $failoverChoice.Pool $Failover $accountName
+        foreach ($poolAccount in $failoverChoice.Pool) {
+            $failoverSessions += Register-DeckSession (Join-Path $suiteRoot 'deck') $poolAccount (Get-Location).Path
+        }
+        Write-Host ('Failover '+$Failover+' | pool: '+($failoverChoice.Pool -join ', ')+' | active: '+$accountName)
+        Write-Host 'Session history stays in the starting account. Only explicit quota rejections can switch accounts.'
+        $launchArgs = @($CodexArgs) + @(Get-DeckFailoverArguments $failoverProxy.BaseUrl)
+        & codex @launchArgs
+    } else { & codex @CodexArgs }
     $codexExitCode = $LASTEXITCODE
 } finally {
+    if ($failoverProxy) {
+        $failoverProxy.Process.StandardInput.Close()
+        if (-not $failoverProxy.Process.WaitForExit(2000)) { $failoverProxy.Process.Kill() }
+        $failoverProxy.Process.Dispose()
+    }
+    foreach ($marker in $failoverSessions) { Remove-Item -LiteralPath $marker -ErrorAction SilentlyContinue }
     if ($deckSession -and (Test-Path -LiteralPath $deckSession)) {
         Remove-Item -LiteralPath $deckSession -ErrorAction SilentlyContinue
     }

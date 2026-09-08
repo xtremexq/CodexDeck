@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 setlocal
 set "__SELF=%~f0"
 set "__TMPFILE=%TEMP%\Run-CodexLoopUsage-%RANDOM%%RANDOM%.ps1"
@@ -374,7 +374,11 @@ function Invoke-UsageReadViaHttp {
         "Cache-Control"      = "no-cache"
     }
 
-    return Invoke-RestMethod -Uri "https://chatgpt.com/backend-api/wham/usage" -Headers $headers -Method Get -TimeoutSec 20
+    $usage = Invoke-RestMethod -Uri "https://chatgpt.com/backend-api/wham/usage" -Headers $headers -Method Get -TimeoutSec 20
+    $resetCredits = $null
+    try { $resetCredits = Invoke-RestMethod -Uri "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits" -Headers $headers -Method Get -TimeoutSec 8 } catch { }
+    $usage | Add-Member NoteProperty DeckResetCredits (Convert-ResetCreditResponse $resetCredits) -Force
+    return $usage
 }
 
 function Convert-ResetTimestamp {
@@ -441,7 +445,7 @@ function New-UsageRecord {
     param([string]$AccountName, [string]$Email, [string]$PlanType,
         [object[]]$Windows, [object]$Allowed, [object]$LimitReached,
         [object]$Credits, [object]$SpendControlReached, [object]$ReachedType,
-        [object]$AdditionalLimits, [object]$ModelUsage, [string]$Source)
+        [object]$AdditionalLimits, [object]$ModelUsage, [string]$Source, [object]$ResetCredits)
     $blocked = $Allowed -eq $false -or $LimitReached -eq $true -or $SpendControlReached -eq $true -or
         -not [string]::IsNullOrWhiteSpace([string]$ReachedType) -or @($Windows | Where-Object Dead).Count -gt 0
     $unknown = $Windows.Count -eq 0 -or @($Windows | Where-Object {
@@ -453,7 +457,7 @@ function New-UsageRecord {
     $record = [ordered]@{
         Account = $AccountName; Email = $Email; PlanType = $PlanType
         Status = $status; Allowed = $Allowed; LimitReached = $LimitReached
-        Windows = @($Windows); Credits = $Credits
+        Windows = @($Windows); Credits = $Credits; ResetCredits = $ResetCredits
         CreditsUnlimited = Get-PropertyValue $Credits "unlimited"
         SpendControlReached = $SpendControlReached; RateLimitReachedType = $ReachedType
         AdditionalLimits = $AdditionalLimits; ModelUsage = $ModelUsage
@@ -470,6 +474,26 @@ function New-UsageRecord {
     [pscustomobject]$record
 }
 
+function Convert-ResetCreditResponse($Payload) {
+    $items = $null
+    if ($Payload -is [System.Collections.IDictionary]) {
+        if ($Payload.Contains('credits')) { $items = $Payload['credits'] }
+    } elseif ($null -ne $Payload -and $Payload.PSObject.Properties['credits']) {
+        $items = $Payload.PSObject.Properties['credits'].Value
+    }
+    if ($null -eq $items -or $items -isnot [array]) { return [pscustomobject]@{Status='unavailable';Items=@();CheckedAt=[DateTimeOffset]::UtcNow.ToString('o')} }
+    $normalized = foreach ($item in $items) {
+        $state = [string](Get-PropertyValue $item 'status')
+        $expires = Get-PropertyValue $item 'expires_at'
+        $unix = $null
+        if ($expires) {
+            try { $unix=([DateTimeOffset]$expires).ToUnixTimeSeconds() } catch { $state='unknown' }
+        }
+        [pscustomobject]@{Status=$state;ExpiresAtUnix=$unix;ResetType=[string](Get-PropertyValue $item 'reset_type')}
+    }
+    [pscustomobject]@{Status='available';Items=@($normalized);CheckedAt=[DateTimeOffset]::UtcNow.ToString('o')}
+}
+
 function Convert-HttpUsageToRecord {
     param([string]$AccountName, [string]$Email, [object]$Usage)
     $rate = Get-PropertyValue $Usage "rate_limit"
@@ -482,7 +506,7 @@ function Convert-HttpUsageToRecord {
         -Windows $windows -Allowed (Get-PropertyValue $rate "allowed") -LimitReached (Get-PropertyValue $rate "limit_reached") `
         -Credits (Get-PropertyValue $Usage "credits") -SpendControlReached (Get-PropertyValue (Get-PropertyValue $Usage "spend_control") "reached") `
         -ReachedType (Get-PropertyValue (Get-PropertyValue $Usage "rate_limit_reached_type") "type") `
-        -AdditionalLimits (Get-PropertyValue $Usage "additional_rate_limits") -ModelUsage (Get-PropertyValue $Usage "model_usage") -Source "http"
+        -AdditionalLimits (Get-PropertyValue $Usage "additional_rate_limits") -ModelUsage (Get-PropertyValue $Usage "model_usage") -Source "http" -ResetCredits (Get-PropertyValue $Usage "DeckResetCredits")
 }
 
 function Convert-RpcUsageToRecord {

@@ -87,8 +87,8 @@ For a non-interactive view, use **`codex-auth status`**. It prints cached data w
 
 ## Desktop companion
 
-<p align="center"><img src="docs/panel.png" width="660" alt="Codex Deck desktop control panel with a synthetic account and expanded usage details"><br>
-<sub>Current main-branch desktop UI, captured with the built-in synthetic smoke test.</sub></p>
+<p align="center"><img src="docs/desktop-preview.png" width="476" alt="Codex Deck desktop control panel with a synthetic account and expanded usage details"><br>
+<sub>Desktop development preview, captured from the current local UI with synthetic data. This layout is not included in release 1.1.0.</sub></p>
 
 Run **`codex-deck`**, or press **D** in the terminal dashboard.
 
@@ -102,7 +102,9 @@ Desktop automatic checks are off by default. Enable them in Settings if you want
 
 ### Optional warm-up
 
-Warm-up is off by default and requires automatic checking plus eligible account selection. After observing an eligible paid account's five-hour reset and verifying fresh zero usage, Deck can send a small prompt after a grace period. It skips unsupported plans, unavailable quotas and missed reset windows, and records attempts to avoid repeats.
+Warm-up is off by default and requires eligible account selection. It runs independently of ordinary automatic checks and connected terminals, while Deck remains open or in the tray. After observing an eligible paid account's five-hour reset and verifying fresh zero usage, Deck can send a small prompt after a grace period. It skips unsupported plans, unavailable quotas and missed reset windows, and records attempts to avoid repeats.
+
+In the terminal dashboard, **W** toggles the selected account and **P** pauses or resumes all warm-ups. The shared tray scheduler continues after the dashboard closes. In the GUI, right-click an account for the same controls or use Settings for all paid accounts, model and reset timing. Expanded account details and the terminal show the next check or why warm-up is waiting. Quit Deck from the tray to stop scheduling.
 
 **Warm-up consumes real quota.** A successful prompt does not guarantee that a new usage timer starts. Leave it disabled if you only want monitoring.
 
@@ -176,3 +178,7 @@ To remove Deck, quit it and remove its installed scripts and command wrappers. K
 Source is in `suite/`; command wrappers are in `bin/`. Documentation images use synthetic data. Tests and build scripts belong in this repository: `Test-Repository.ps1` checks for private/generated files, script parse errors, encoding mistakes and whitespace, and is used by CI and release builds.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and screenshot generation, [CHANGELOG.md](CHANGELOG.md) for release history, and [LICENSE](LICENSE) for the MIT license.
+
+### Development account tools
+
+Best-account selection, local session history, account rename, manual reset-credit details, and opt-in live failover are documented in [Account tools](docs/ACCOUNT-TOOLS.md). These source changes are newer than the 1.1.0 release.
