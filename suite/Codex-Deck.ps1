@@ -335,6 +335,22 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
     if(-not $SmokeTest -and -not $Demo){Write-DeckJson (Join-Path $root 'settings.json') $settings}
     if($Mode -eq 'Tray'){$window.Hide()}elseif(-not $Initial){$window.Show(); [void]$window.Activate()}
 }
+function Set-DeckSavedSettings($Saved) {
+    # Settings click handlers use GetNewClosure so TestUI can invoke them after
+    # Show-DeckSettings returns. Assigning $script:settings inside that closure
+    # writes to the closure's dynamic module, leaving the live Deck settings
+    # unchanged; Set-DeckMode then persisted the old values over the new file.
+    $wasCompact=[bool]$script:settings.Compact
+    $script:settings=$Saved
+    if(-not $settings.WarmupEnabled){$script:pendingWarm=@{}}
+    foreach($account in @($nextCheck.Keys)){
+        if($cache[$account].CheckedAt){$nextCheck[$account]=Get-DeckNextCheck $settings $cache[$account] ([DateTimeOffset]$cache[$account].CheckedAt)}
+    }
+    if($settings.Compact -and -not $wasCompact){$script:expandedRows=@{}}
+    Set-DeckAppearance
+    Set-DeckMode $settings.ViewMode
+    $script:lastRender=''
+}
 function Get-DeckAccounts {
     if($SmokeTest -or $Demo){if($script:testPickerNames){return $script:testPickerNames}; return 'account1'}
     @(Get-ChildItem -LiteralPath (Join-Path $suite 'accounts') -Directory -ErrorAction SilentlyContinue |
@@ -545,9 +561,10 @@ function Show-DeckSettings {
         $controls[$key]=$control; [void]$panel.Children.Add($control)
     }
     . (Join-Path $suite 'Deck.SettingsExtras.ps1')
-    $settingsError=New-DeckText '' '#F17D8D'; [Windows.Controls.DockPanel]::SetDock($settingsError,'Bottom'); $dock.Children.Insert(0,$settingsError)
+    $settingsError=New-DeckText '' '#F17D8D'; $settingsError.Margin='0,10,0,0'; $settingsError.FontWeight='SemiBold'; [Windows.Controls.DockPanel]::SetDock($settingsError,'Bottom'); $dock.Children.Insert(0,$settingsError)
     $save.Add_Click({
         try {
+            $settingsError.Text=''; $save.Content='Save settings'; $save.IsEnabled=$false
             $updated=Get-DeckDefaults
             foreach ($key in $settings.Keys) {
                 if (-not $controls.ContainsKey($key)) { $updated[$key]=$settings[$key]; continue }
@@ -577,11 +594,10 @@ function Show-DeckSettings {
             & $saveEnvironments
             Write-DeckJson (Join-Path $root 'settings.json') $updated
             if(-not $SmokeTest){Sync-DeckWarmupStartup $suite $updated}
-            if(-not $updated.WarmupEnabled){$script:pendingWarm=@{}}
-            foreach($account in @($nextCheck.Keys)){if($cache[$account].CheckedAt){$nextCheck[$account]=Get-DeckNextCheck $updated $cache[$account] ([DateTimeOffset]$cache[$account].CheckedAt)}}
-            if($updated.Compact -and -not $settings.Compact){$script:expandedRows=@{}}
-            $script:settings=Get-DeckSettings $root; Set-DeckAppearance; Set-DeckMode $settings.ViewMode; $script:lastRender=''; $dialog.Close()
-        } catch { $settingsError.Text=$_.Exception.Message }
+            Set-DeckSavedSettings (Get-DeckSettings $root)
+            $dialog.Close()
+        } catch { $settingsError.Text='Settings were not saved: '+$_.Exception.Message; $settingsError.BringIntoView(); $save.Content='Save settings' }
+        finally {$save.IsEnabled=$true}
     }.GetNewClosure())
     if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Environment=@{Membership=$poolMembership;Members=$poolMemberList;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState}}}
     $modelState=@{Task=$null}
@@ -1204,8 +1220,10 @@ try{
         $settingsFixture=Join-Path ([IO.Path]::GetTempPath()) ('deck-settings-save-'+[guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory((Join-Path $settingsFixture 'accounts/account1'))
         [void][IO.Directory]::CreateDirectory((Join-Path $settingsFixture 'accounts/account2'))
+        Write-DeckJson (Join-Path $settingsFixture 'accounts/account1/auth.json') @{}
+        Write-DeckJson (Join-Path $settingsFixture 'accounts/account2/auth.json') @{}
         Set-DeckPoolEntry $settingsFixture pool @('*') Ordered | Out-Null
-        foreach($file in @('Deck.EnvironmentSettings.ps1','Deck.SettingsExtras.ps1','Deck.Terminal.ps1')){Copy-Item -LiteralPath (Join-Path $suite $file) -Destination $settingsFixture}
+        foreach($file in @('Deck.EnvironmentSettings.ps1','Deck.SettingsExtras.ps1','Deck.Terminal.ps1','Deck.Failover.ps1')){Copy-Item -LiteralPath (Join-Path $suite $file) -Destination $settingsFixture}
         try{
             $script:suite=$settingsFixture;$script:root=Join-Path $settingsFixture 'deck'
             $draftUI=Show-DeckSettings -TestUI
@@ -1214,10 +1232,25 @@ try{
             $shareCheck=$draftUI.Environment.Recipients.Children[0];$shareCheck.IsChecked=$true
             $shareCheck.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             $draftUI.Controls.MaskEmail.IsChecked=$true
+            $draftUI.Controls.FailoverEnabled.IsChecked=$true
+            $draftUI.Controls.FailoverMode.SelectedItem='Best'
+            $draftUI.Controls.FailoverAccounts.Text='account2'
+            $draftUI.Controls.AutoCheck.IsChecked=$true
             $draftUI.Tabs.SelectedItem=@($draftUI.Tabs.Items | Where-Object Header -eq 'Appearance')[0]
             $draftUI.Save.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             if($draftUI.Error.Text){throw $draftUI.Error.Text}
-            if((Get-DeckPoolEntry $settingsFixture pool).Accounts[0] -ne '*free' -or -not (Read-DeckJson (Join-Path $root 'settings.json')).MaskEmail){throw 'Save settings did not persist environment and another tab together.'}
+            $savedSettings=Read-DeckJson (Join-Path $root 'settings.json')
+            if((Get-DeckPoolEntry $settingsFixture pool).Accounts[0] -ne '*free' -or -not $savedSettings.MaskEmail){throw 'Save settings did not persist environment and another tab together.'}
+            if(-not $savedSettings.FailoverEnabled -or $savedSettings.FailoverMode -ne 'Best' -or $savedSettings.FailoverAccounts -ne 'account2' -or -not $savedSettings.AutoCheck){throw 'Save settings did not persist failover and general controls.'}
+            if(-not $settings.FailoverEnabled -or $settings.FailoverAccounts -ne 'account2' -or -not $settings.MaskEmail){throw 'Saved settings did not update the live Deck state.'}
+            $reopenedUI=Show-DeckSettings -TestUI
+            try{
+                foreach($key in @($settings.Keys | Where-Object {$reopenedUI.Controls.ContainsKey($_)})){
+                    $control=$reopenedUI.Controls[$key]
+                    $actual=if($settings[$key] -is [bool]){[bool]$control.IsChecked}elseif($key -eq 'WarmupAccounts'){@($control.SelectedItems) -join ','}elseif($key -in @('WarmupModel','ViewMode','FailoverMode')){[string]$control.SelectedItem}elseif($settings[$key] -is [int]){[int]$control.Text}else{$control.Text.Trim()}
+                    if($actual -ne $settings[$key]){throw "Reopened setting does not match saved value: $key"}
+                }
+            }finally{$reopenedUI.Dialog.Close()}
             if(-not @((Get-DeckSharing $settingsFixture account1).Bindings).Count){throw 'Save settings did not persist pending resource sharing.'}
             $rulesUI=Show-DeckGlobalRules $settingsFixture -TestUI
             $rulesUI.Editor.Text='Always answer hi.'
