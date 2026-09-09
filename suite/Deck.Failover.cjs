@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { pipeline } = require('node:stream');
+const zlib = require('node:zlib');
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''));
 const MAX_BODY = 32 * 1024 * 1024;
 function rank(pool, rows, now = Date.now()) {
@@ -79,7 +80,6 @@ async function createProxy(config, dependencies = {}) {
   const choices = () => (config.mode === 'Best' ? rank(pool, getRows()) : pool).filter(n => !excluded.has(n));
   let current = config.owner || choices()[0];
   if (config.owner && !pool.includes(config.owner)) throw Error('Starting account is not in the pool.');
-  const owner = current;
   if (!current) throw Error('No fresh usable pool account. Refresh usage first.');
   const secret = crypto.randomBytes(32).toString('hex');
   let busy = false;
@@ -88,21 +88,27 @@ async function createProxy(config, dependencies = {}) {
     if (req.headers.host !== `127.0.0.1:${server.address().port}` || req.headers.origin || !req.url.startsWith('/' + secret + '/')) return reply(res, 403, 'Forbidden.');
     const route = req.url.slice(secret.length + 1);
     if (!((req.method === 'POST' && ['/responses','/responses/compact'].includes(route)) || (req.method === 'GET' && /^\/models(?:\?[^#]*)?$/.test(route)))) return reply(res, 404, 'Unsupported failover route.');
-    if (busy) return reply(res, 409, 'Another request is active; concurrent failover requests are not supported.');
-    busy = true;
+    const conversation = req.method === 'POST';
+    if (conversation && busy) return reply(res, 409, 'Another request is active; concurrent failover requests are not supported.');
+    if (conversation) busy = true;
     let outbound;
     const cancel = () => { if (!res.writableFinished) outbound?.destroy(); };
     res.on('close', cancel);
     try {
-      if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') return reply(res, 415, 'Compressed requests are not supported.');
-      const body = await collect(req, MAX_BODY);
+      const encoding = req.headers['content-encoding'] || 'identity';
+      if (!['identity','gzip','deflate','br','zstd'].includes(encoding) || (encoding === 'zstd' && !zlib.zstdDecompressSync)) return reply(res, 415, 'Unsupported request compression; update Node.js for zstd support.');
+      let body = await collect(req, MAX_BODY);
+      if (encoding !== 'identity') {
+        const decode = {gzip:zlib.gunzipSync,deflate:zlib.inflateSync,br:zlib.brotliDecompressSync,zstd:zlib.zstdDecompressSync}[encoding];
+        try { body = decode(body, {maxOutputLength:MAX_BODY}); } catch { return reply(res, 400, 'Invalid or oversized compressed request.'); }
+      }
       let bound = false;
       if (req.method === 'POST') {
         let parsed; try { parsed = JSON.parse(body); } catch { return reply(res, 400, 'Expected JSON request.'); }
         bound = accountBound(parsed);
       }
-      // Bound history cannot safely move across accounts, including on a later request.
-      if (bound && current !== owner) return reply(res, 409, 'Account-scoped history cannot move between accounts. Start a new failover session.');
+      // Let the active account validate opaque history, including history it produced
+      // after a switch. Never replay an account-bound request on another account.
       let attempts = 0;
       while (!res.destroyed && attempts++ < pool.length) {
         if (excluded.has(current)) return reply(res, 429, 'Selected account quota is exhausted. Start a new session after refreshing usage.');
@@ -117,7 +123,7 @@ async function createProxy(config, dependencies = {}) {
           outbound.setTimeout(120000, () => outbound.destroy(Error('Upstream timeout.')));
           outbound.on('error', reject); outbound.end(body);
         });
-        if (req.method === 'POST' && route === '/responses' && incoming.statusCode === 429) {
+        if (conversation && incoming.statusCode === 429) {
           const rejected = await collect(incoming, 1024 * 1024);
           if (quotaRejected(429, rejected)) {
             excluded.add(used);
@@ -136,9 +142,10 @@ async function createProxy(config, dependencies = {}) {
         return;
       }
     } catch { reply(res, 502, 'Failover request failed. No retry was made for an ambiguous transport or credential error.'); }
-    finally { busy = false; res.removeListener('close', cancel); }
+    finally { if (conversation) busy = false; res.removeListener('close', cancel); }
   });
-  server.on('upgrade', (_req, socket) => socket.destroy());
+  // Codex immediately falls back to HTTP when the endpoint declines WebSockets.
+  server.on('upgrade', (_req, socket) => socket.end('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'));
   server.on('clientError', (_err, socket) => socket.destroy());
   await new Promise((resolve,reject) => { server.once('error',reject); server.listen(0, '127.0.0.1', resolve); });
   return { server, baseUrl:`http://127.0.0.1:${server.address().port}/${secret}`, account:current };

@@ -40,12 +40,28 @@ function Get-DeckEntryNames([string]$SuiteRoot) {
         Sort-Object @{Expression={ if (Test-Path -LiteralPath (Join-Path $_.FullName 'deck-entry.json')) { 0 } else { 1 } }},
         @{Expression={ if ($_.Name -match '^account(\d+)$') { [long]$Matches[1] } else { [long]::MaxValue } }},Name | ForEach-Object Name)
 }
+function Get-DeckPoolAccountPlan([string]$SuiteRoot, [string]$Name) {
+    $auth=Read-DeckEnvironmentJson (Join-Path (Get-DeckEntryDirectory $SuiteRoot $Name) 'auth.json')
+    foreach ($token in @($auth.tokens.id_token,$auth.tokens.access_token)) {
+        try {
+            $part=$token.Split('.')[1].Replace('-','+').Replace('_','/')
+            $claims=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($part.PadRight($part.Length+(4-$part.Length%4)%4,'='))) | ConvertFrom-Json
+            $plan=$claims.'https://api.openai.com/auth'.chatgpt_plan_type
+            if ($plan) { return ([string]$plan).ToLowerInvariant() }
+        } catch { }
+    }
+    return 'unknown'
+}
 function Resolve-DeckEntryPool([string]$SuiteRoot, $Entry) {
     $names = @($Entry.Accounts)
-    if ($names -contains '*') {
+    if (@($names | Where-Object { $_ -in @('*','*free','*paid') }).Count) {
         if ($names.Count -ne 1) { throw 'Use either * or an explicit pool membership.' }
+        $filter=$names[0]
         $names = @(Get-DeckEntryNames $SuiteRoot | Where-Object {
             -not (Get-DeckPoolEntry $SuiteRoot $_) -and (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$_/auth.json"))
+        } | Where-Object {
+            $filter -eq '*' -or ($filter -eq '*free' -and (Get-DeckPoolAccountPlan $SuiteRoot $_) -eq 'free') -or
+            ($filter -eq '*paid' -and (Get-DeckPoolAccountPlan $SuiteRoot $_) -in @('plus','pro','team','business','enterprise','edu'))
         })
     }
     if (-not $names.Count -or $names.Count -gt 200 -or @($names | Sort-Object -Unique).Count -ne $names.Count) { throw 'A pool needs 1-200 distinct signed-in accounts.' }
@@ -55,23 +71,24 @@ function Resolve-DeckEntryPool([string]$SuiteRoot, $Entry) {
     }
     return $names
 }
-function Set-DeckPoolEntry([string]$SuiteRoot, [string]$Name, [string[]]$Members, [string]$Mode = 'Ordered') {
+function Set-DeckPoolEntry([string]$SuiteRoot, [string]$Name, [string[]]$Members, [string]$Mode = 'Ordered', [switch]$ValidateOnly) {
     Assert-DeckEntryName $Name
     if ($Name -in @('help','list','status','dashboard','share','unshare','sharing')) { throw 'That name is reserved for a command.' }
     if ($Mode -notin @('Ordered','Best')) { throw 'Choose Ordered or Best.' }
     $entry = [pscustomobject]@{Version=1; Kind='pool'; Accounts=@($Members); Mode=$Mode}
     # Validate selected membership now. Wildcard membership can start empty and is resolved at launch.
-    if (($Members -join ',') -ne '*') { [void](Resolve-DeckEntryPool $SuiteRoot $entry) }
+    if (($Members -join ',') -notin @('*','*free','*paid')) { [void](Resolve-DeckEntryPool $SuiteRoot $entry) }
     $accounts = Join-Path $SuiteRoot 'accounts'
-    [void][IO.Directory]::CreateDirectory($accounts)
+    if (-not $ValidateOnly) { [void][IO.Directory]::CreateDirectory($accounts) }
     if ((Get-Item -LiteralPath $accounts).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked accounts root is not supported.' }
     $dir = Join-Path $accounts $Name
     if (Test-Path -LiteralPath $dir) {
         $dir = Get-DeckEntryDirectory $SuiteRoot $Name
         if (-not (Get-DeckPoolEntry $SuiteRoot $Name)) { throw 'An ordinary account already uses that name. Choose a new pooled entry name.' }
         Assert-DeckEntryIdle $SuiteRoot $Name
-    } else { [void][IO.Directory]::CreateDirectory($dir) }
+    } elseif (-not $ValidateOnly) { [void][IO.Directory]::CreateDirectory($dir) }
     if (Test-Path -LiteralPath (Join-Path $dir 'auth.json')) { throw 'A pooled entry cannot own a login.' }
+    if ($ValidateOnly) { return }
     Write-DeckEnvironmentJson (Join-Path $dir 'deck-entry.json') $entry
     foreach ($resource in @('skills','memories','rules','prompts')) { [void][IO.Directory]::CreateDirectory((Join-Path $dir $resource)) }
     return "Pooled entry $Name saved ($Mode; $($Members -join ', ')). Launch with: codex-auth $Name"
@@ -173,7 +190,7 @@ function Get-DeckAvailableResources([string]$SuiteRoot, [string]$Name) {
         }
     } finally { $ErrorActionPreference=$previousErrors; $env:CODEX_HOME=$previous; Pop-Location }
 }
-function Set-DeckResourceSharing([string]$SuiteRoot, [string]$Source, [string[]]$Targets, [string[]]$Resources, [switch]$Detach) {
+function Set-DeckResourceSharing([string]$SuiteRoot, [string]$Source, [string[]]$Targets, [string[]]$Resources, [switch]$Detach, [switch]$ValidateOnly) {
     if (-not $Targets.Count -or -not $Resources.Count) { throw 'Specify targets and resources.' }
     # All means the entries that exist now: a future account still starts isolated.
     if ($Targets -contains '*') {
@@ -194,7 +211,18 @@ function Set-DeckResourceSharing([string]$SuiteRoot, [string]$Source, [string[]]
                 Assert-DeckResource $resource
                 $binding = @($state.Bindings | Where-Object Resource -eq $resource) | Select-Object -First 1
                 if ($Detach) {
-                    if ($binding) { $plans += @{Name=$name; Dir=$dir; Resource=$resource; Binding=$binding; State=$state} }
+                    if ($binding) {
+                        if (-not $resource.StartsWith('mcp:')) {
+                            $backup=Get-DeckSharingBackupPath $dir $binding.Backup
+                            if ($binding.Backup -and -not (Test-Path -LiteralPath $backup)) { throw 'Private backup is missing; nothing was detached.' }
+                            $path=Get-DeckResourcePath $dir $resource
+                            if ($resource -eq 'AGENTS.md') {
+                                Assert-DeckPlainResource $path
+                                if ((Test-Path -LiteralPath $path) -and (Get-FileHash -LiteralPath $path).Hash -ne $binding.Hash) { throw 'Shared instructions were edited locally. Preserve those edits before unsharing.' }
+                            } else { Assert-DeckResourceLink $SuiteRoot $dir $binding }
+                        }
+                        $plans += @{Name=$name; Dir=$dir; Resource=$resource; Binding=$binding; State=$state}
+                    }
                     continue
                 }
                 if ($name -eq $Source) { throw 'Source and target must differ.' }
@@ -216,6 +244,7 @@ function Set-DeckResourceSharing([string]$SuiteRoot, [string]$Source, [string[]]
                 $plans += @{Name=$name; Dir=$dir; Resource=$resource; SourceDir=$sourceDir; State=$state}
             }
         }
+        if ($ValidateOnly) { return }
         foreach ($plan in $plans) {
             $resource = $plan.Resource; $dir = $plan.Dir
             $state = Get-DeckSharing $SuiteRoot $plan.Name

@@ -2,7 +2,7 @@
     if ($ExplicitMode -or $CreatingAccount -or -not $Settings.FailoverEnabled) { return $false }
     if (-not $Arguments) { return $true }
     if ($Arguments -contains '--help' -or $Arguments -contains '-h' -or $Arguments -contains '--version' -or $Arguments -contains '-V') { return $false }
-    return $Arguments[0] -in @('resume','fork','exec') -or $Arguments[0].StartsWith('-')
+    return $Arguments[0] -notin @('login','logout','mcp','mcp-server','completion','features','debug','app-server','cloud','apply','sandbox')
 }
 function Resolve-DeckFailoverPool([string]$SuiteRoot, [string]$Pool, [string]$Mode, [string]$StartAccount = '') {
     $names = @($Pool -split ',' | ForEach-Object { $_.Trim() } | ForEach-Object { if ($_ -match '^\d+$') { 'account'+$_ } else { $_ } })
@@ -53,12 +53,19 @@ function Start-DeckFailover([string]$SuiteRoot, [string[]]$Pool, [string]$Mode, 
 }
 function Get-DeckFailoverArguments([string]$BaseUrl, [switch]$NoAccountAuth) {
     # CLI overrides are temporary; the account's config.toml is never rewritten for routing.
-    @('-c','model_provider="deck_failover"',
-      '-c','model_providers.deck_failover.name="Deck Failover"',
-      '-c',('model_providers.deck_failover.base_url="'+$BaseUrl+'"'),
-      '-c','model_providers.deck_failover.wire_api="responses"',
-      '-c',('model_providers.deck_failover.requires_openai_auth='+$(if ($NoAccountAuth) { 'false' } else { 'true' })),
-      '-c','model_providers.deck_failover.supports_websockets=false',
-      '-c','model_providers.deck_failover.request_max_retries=0',
-      '-c','model_providers.deck_failover.stream_max_retries=0')
+    if ($NoAccountAuth) {
+        # Pools have their own history and no login. Keep their existing provider ID.
+        return @('-c','model_provider="deck_failover"',
+          '-c','model_providers.deck_failover.name="Deck Failover"',
+          '-c',('model_providers.deck_failover.base_url="'+$BaseUrl+'"'),
+          '-c','model_providers.deck_failover.wire_api="responses"',
+          '-c','model_providers.deck_failover.requires_openai_auth=false',
+          '-c','model_providers.deck_failover.supports_websockets=false',
+          '-c','model_providers.deck_failover.request_max_retries=0',
+          '-c','model_providers.deck_failover.stream_max_retries=0')
+    }
+    # Preserve the ordinary provider identity used by the native resume picker.
+    # Current Codex reserves built-in IDs, so configure its supported URL override.
+    @('-c','model_provider="openai"',
+      '-c',('openai_base_url="'+$BaseUrl+'"'))
 }

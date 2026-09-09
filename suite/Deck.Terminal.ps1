@@ -53,7 +53,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
         if (-not $five) { $five = $row.Windows | Where-Object DurationSeconds -ne 604800 | Select-Object -First 1 }
         $week = $row.Windows | Where-Object DurationSeconds -eq 604800 | Select-Object -First 1
         $state = Get-DeckTerminalHealth $row
-        if ($profile.PlanType -eq 'pool') { $state = 'Choose quota account' }
+        if ($profile.PlanType -eq 'pool') { $state = 'Pooled session' }
         if ($Tasks.ContainsKey($name)) { $state = 'Checking...' }
         $marker = if ($i -eq $Selected) { '>' } else { ' ' }
         $color = if ($state -eq 'Ready') { 'Green' } elseif ($state -in @('Check failed','Exhausted')) { 'Yellow' } else { 'Gray' }
@@ -85,7 +85,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     Add-Line ('  ' + $Notice) 'Yellow'
     Add-Line '  NAVIGATE Up/Down select  Enter launch  / search  B best  Q quit' 'Gray'
     Add-Line '  MANAGE   R refresh  A all  H history  F2 rename  L login  N new' 'DarkGray'
-    Add-Line '  DISPLAY  D desktop Deck  S settings  M mask email' 'DarkGray'
+    Add-Line '  DISPLAY  D desktop Deck  S settings  G global rules  M mask email' 'DarkGray'
     return $lines.ToArray()
 }
 function Read-DeckTerminalInput([string]$Prompt, [int]$MaxLength = 40) {
@@ -248,6 +248,7 @@ function Show-DeckTerminal {
                 'P' {
                     try{$warmSettings=Set-DeckWarmupControl $root -Pause; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice='Warm-up '+$(if($warmSettings.WarmupEnabled){'resumed in tray.'}else{'paused; in-flight requests may finish.'})}catch{$notice=$_.Exception.Message}
                 }
+                'G' { Open-DeckGlobalRules $SuiteRoot; $notice='Global Rules editor opened.' }
                 'S' { Start-DeckCompanion $SuiteRoot -OpenSettings; $notice='Desktop Settings opened.' }
                 'D' { Start-DeckCompanion $SuiteRoot; $notice = 'Desktop Deck opened; use its settings for scheduling and warm-up.' }
                 default {

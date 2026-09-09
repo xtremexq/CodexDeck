@@ -8,13 +8,15 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
+const {ruleArguments} = require('./Deck.GlobalRules.cjs');
 async function main() {
   if (!process.env.DECK_TEST_CODEX) { console.log('SKIP: set DECK_TEST_CODEX to the native Codex executable for the optional local compatibility test.'); return; }
   const fixture=fs.mkdtempSync(path.join(os.tmpdir(),'deck-failover-cli-'));
   const seen=[];
   const service=http.createServer(async (req,res)=> {
-    for await (const _ of req) { /* synthetic input only */ }
-    seen.push({url:req.url,account:req.headers['chatgpt-account-id']});
+    const parts=[];for await (const chunk of req) parts.push(chunk);
+    seen.push({url:req.url,account:req.headers['chatgpt-account-id'],body:Buffer.concat(parts).toString()});
+    if(req.url.startsWith('/models')){res.writeHead(200,{'content-type':'application/json'});res.end('{"models":[]}');return;}
     if(req.headers['chatgpt-account-id']==='a') {res.writeHead(429,{'content-type':'application/json'});res.end('{"error":{"type":"usage_limit_reached"}}');return;}
     res.writeHead(200,{'content-type':'text/event-stream'});
     const item={id:'msg_test',type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:'Synthetic failover OK',annotations:[]}]};
@@ -37,18 +39,52 @@ async function main() {
     const getArgs=spawn('powershell.exe',['-NoProfile','-Command',". '"+path.join(__dirname,'Deck.Failover.ps1').replaceAll("'","''")+"'; ConvertTo-Json -InputObject @(Get-DeckFailoverArguments '"+proxy.baseUrl+"') -Compress"],{windowsHide:true});
     let argsOutput='';getArgs.stdout.on('data',d=>argsOutput+=d);await once(getArgs,'close');
     const overrides=JSON.parse(argsOutput);
-    const args=['exec','--skip-git-repo-check','--ephemeral','-m','gpt-5.1-codex','-c','check_for_update_on_startup=false',...overrides,'Reply with the supplied synthetic response; do not use tools.'];
+    const args=['exec','--skip-git-repo-check','-m','gpt-5.1-codex','-c','check_for_update_on_startup=false','-c','features.enable_request_compression=false',...overrides,'Reply with the supplied synthetic response; do not use tools.'];
     const env={...process.env,CODEX_HOME:fixture,OPENAI_API_KEY:'synthetic-local-test',HTTP_PROXY:`http://127.0.0.1:${service.address().port}`,HTTPS_PROXY:`http://127.0.0.1:${service.address().port}`,ALL_PROXY:`http://127.0.0.1:${service.address().port}`,NO_PROXY:'127.0.0.1,localhost'};
     delete env.OPENAI_BASE_URL; delete env.OPENAI_API_KEY; delete env.CODEX_API_KEY;
-    const child=spawn(process.env.DECK_TEST_CODEX,args,{cwd:fixture,env,windowsHide:true});
-    child.stdin.end();
-    let output='';child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);
-    const timer=setTimeout(()=>child.kill(),25000);
-    const [code]=await once(child,'close');clearTimeout(timer);
-    assert.equal(code,0,output.replaceAll(proxy.baseUrl,'[local proxy]'));
-    assert.match(output,/Synthetic failover OK/);
+    async function run(argv,home=fixture){
+      const child=spawn(process.env.DECK_TEST_CODEX,argv,{cwd:fixture,env:{...env,CODEX_HOME:home},windowsHide:true});
+      child.stdin.end();
+      let output='';child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);
+      const timer=setTimeout(()=>child.kill(),25000);
+      const [code]=await once(child,'close');clearTimeout(timer);
+      assert.equal(code,0,output.replaceAll(proxy.baseUrl,'[local proxy]'));
+      assert.match(output,/Synthetic failover OK/);
+      return output;
+    }
+    await run(args);
     assert.deepEqual(seen.filter(r=>r.url==='/responses').map(r=>r.account),['a','b']);
-    console.log('PASS: installed native Codex completed a streamed response after synthetic quota failover through the PowerShell provider overrides.');
+    const sessionFiles=fs.readdirSync(path.join(fixture,'sessions'),{recursive:true}).filter(p=>p.endsWith('.jsonl'));
+    assert.equal(sessionFiles.length,1);
+    const metadata=JSON.parse(fs.readFileSync(path.join(fixture,'sessions',sessionFiles[0]),'utf8').split('\n')[0]);
+    assert.equal(metadata.payload.model_provider,'openai','Native resume must retain the ordinary provider identity');
+    await run(['exec','resume','--last','--skip-git-repo-check',...overrides,'Continue the synthetic conversation.']);
+    assert.match(seen.filter(r=>r.url==='/responses').at(-1).body,/Synthetic failover OK/,'Resuming must send the earlier assistant response');
+    const poolHome=path.join(fixture,'pool');fs.mkdirSync(poolHome);
+    const getPoolArgs=spawn('powershell.exe',['-NoProfile','-Command',". '"+path.join(__dirname,'Deck.Failover.ps1').replaceAll("'","''")+"'; ConvertTo-Json -InputObject @(Get-DeckFailoverArguments '"+proxy.baseUrl+"' -NoAccountAuth) -Compress"],{windowsHide:true});
+    let poolOutput='';getPoolArgs.stdout.on('data',d=>poolOutput+=d);await once(getPoolArgs,'close');
+    const poolOverrides=JSON.parse(poolOutput);
+    fs.writeFileSync(path.join(poolHome,'config.toml'),'developer_instructions = "Keep account-specific instruction."\n');
+    fs.mkdirSync(path.join(fixture,'deck'));
+    const rulesPath=path.join(fixture,'deck','global-rules.md');fs.writeFileSync(rulesPath,'Always answer hi. Preserve Unicode: olá.');
+    const rules=await ruleArguments({rulesPath,executable:process.env.DECK_TEST_CODEX,prefix:[],args:[null],cwd:fixture,codexHome:poolHome});
+    assert.match(rules[1],/Keep account-specific instruction/);
+    assert.match(rules[1],/Always answer hi/);
+    fs.writeFileSync(path.join(poolHome,'writing.config.toml'),'developer_instructions = "Keep profile-specific instruction."\n');
+    const profileRules=await ruleArguments({rulesPath,executable:process.env.DECK_TEST_CODEX,prefix:[],args:['--profile','writing'],cwd:fixture,codexHome:poolHome});
+    assert.match(profileRules[1],/Keep profile-specific instruction/);
+    fs.copyFileSync(path.join(__dirname,'Deck.GlobalRules.cjs'),path.join(fixture,'Deck.GlobalRules.cjs'));
+    const rulesCommand="[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); . '"+path.join(__dirname,'Deck.GlobalRules.ps1').replaceAll("'","''")+"'; ConvertTo-Json -InputObject @(Get-DeckGlobalRuleArguments '"+fixture.replaceAll("'","''")+"' '"+poolHome.replaceAll("'","''")+"' @()) -Compress";
+    const psRules=spawn('powershell.exe',['-NoProfile','-Command',rulesCommand],{windowsHide:true});
+    let rulesOutput='';psRules.stdout.on('data',d=>rulesOutput+=d);const [rulesCode]=await once(psRules,'close');
+    assert.equal(rulesCode,0);assert.deepEqual(JSON.parse(rulesOutput),rules);
+    await run(['exec','--skip-git-repo-check','-m','gpt-5.1-codex',...poolOverrides,...rules,'Synthetic pool conversation; do not use tools.'],poolHome);
+    const payload=seen.filter(r=>r.url==='/responses').at(-1).body;
+    assert.match(payload,/Always answer hi/);assert.match(payload,/Keep account-specific instruction/);assert.match(payload,/olá/);
+    assert.equal(fs.existsSync(path.join(poolHome,'auth.json')),false,'Pool must not acquire a login');
+    await run(['exec','resume','--last','--skip-git-repo-check',...poolOverrides,...rules,'Continue with the same global rules.'],poolHome);
+    assert.equal((seen.filter(r=>r.url==='/responses').at(-1).body.match(/Always answer hi/g)||[]).length,1,'Resume must not duplicate Global Rules');
+    console.log('PASS: native quota switch, retained history/provider, resume with earlier context, login-free pool, and Global Rules alongside existing account instructions.');
   } finally { proxy.server.closeAllConnections();proxy.server.close();service.closeAllConnections();service.close(); }
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

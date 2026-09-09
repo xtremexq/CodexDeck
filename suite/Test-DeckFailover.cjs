@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const zlib = require('node:zlib');
 const { once } = require('node:events');
 const { createProxy, rank, quotaRejected } = require('./Deck.Failover.cjs');
 const quota = JSON.stringify({error:{type:'usage_limit_reached'}});
@@ -32,7 +33,8 @@ async function main() {
     assert.equal(await result.text(),'data: success\n\n'); assert.deepEqual(seen.map(r=>r.account),['a','b']); assert.deepEqual(reports,['b']);
     assert.equal(seen[1].auth,'Bearer synthetic-b'); assert.equal(seen[1].headers.cookie,undefined); assert.equal(seen[1].headers['x-account-id'],undefined); assert.equal(seen[0].body,seen[1].body);
     await (await send(url)).text(); assert.equal(seen.at(-1).account,'b');
-    assert.equal((await send(url,{previous_response_id:'private'})).status,409);
+    assert.equal((await send(url,{previous_response_id:'created-on-b'})).status,200);
+    assert.equal(seen.at(-1).account,'b','The active account must be able to use its own response history after switching');
     behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
     url=await start(); assert.equal((await send(url)).status,429); assert.deepEqual(seen.map(r=>r.account),['a','b','c']);
     await send(url); assert.equal(seen.length,3,'Exhausted pool must not loop');
@@ -56,17 +58,27 @@ async function main() {
     url=await start(); assert.equal((await send(url,{}, {origin:'https://example.com'})).status,403);
     assert.equal((await fetch(url.replace(/\/[a-f0-9]+$/,'/wrong')+'/responses',{method:'POST'})).status,403);
     assert.equal((await fetch(url+'/arbitrary')).status,404); assert.equal(seen.length,0);
-    assert.equal((await send(url,{}, {'content-encoding':'gzip'})).status,415);
+    assert.equal((await send(url,{}, {'content-encoding':'gzip'})).status,400);
+    behavior=(_req,res)=>{res.writeHead(200);res.end('ok');};
+    for (const [encoding,compress] of [['gzip',zlib.gzipSync],['zstd',zlib.zstdCompressSync]]) {
+      if (!compress) continue;
+      const response=await fetch(url+'/responses',{method:'POST',headers:{'content-encoding':encoding},body:compress(Buffer.from('{"input":"compressed context"}'))});
+      assert.equal(response.status,200); await response.text();
+      assert.equal(JSON.parse(seen.at(-1).body).input,'compressed context');
+    }
     behavior=(req,res)=>{assert.equal(req.url,'/responses/compact');res.writeHead(200,{'content-type':'application/json'});res.end('{"output":[]}');};
     url=await start();
     const compact=(base,body={})=>fetch(base+'/responses/compact',{method:'POST',body:JSON.stringify(body)});
     assert.equal((await compact(url)).status,200); assert.equal(seen[0].account,'a');
     behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
-    url=await start(); assert.equal((await compact(url)).status,429); assert.equal(seen.length,1,'Compaction must not switch accounts');
+    url=await start(); assert.equal((await compact(url)).status,429); assert.equal(seen.length,3,'Full-context compaction can try the configured pool');
     behavior=(req,res)=>{res.writeHead(req.headers['chatgpt-account-id']==='a'?429:200);res.end(req.headers['chatgpt-account-id']==='a'?quota:'ok');};
     url=await start(); await (await send(url)).text();
-    assert.equal((await compact(url,{input:[{encrypted_content:'opaque'}]})).status,409);
-    assert.equal(seen.length,2,'Bound compact history must not cross accounts');
+    assert.equal((await compact(url,{input:[{encrypted_content:'created-on-b'}]})).status,200);
+    assert.equal(seen.at(-1).account,'b','Compaction after switching must reach the active account');
+    behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
+    url=await start(); assert.equal((await compact(url,{input:[{encrypted_content:'opaque'}]})).status,409);
+    assert.equal(seen.length,1,'Opaque compact history must not be retried on another account');
     behavior=(_req,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write('data: waiting\n\n');};
     url=await start(); const controller=new AbortController();
     result=await fetch(url+'/responses',{method:'POST',body:'{}',signal:controller.signal});

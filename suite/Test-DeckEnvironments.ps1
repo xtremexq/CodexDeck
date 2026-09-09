@@ -19,6 +19,19 @@ Set-DeckPoolEntry $fixture pool @('*') Ordered | Out-Null
 Assert ((Get-DeckEntryNames $fixture)[0] -eq 'pool') 'Pool was not first.'
 Assert (-not (Test-Path -LiteralPath (Join-Path $fixture 'accounts/pool/auth.json'))) 'Pool owns credentials.'
 Assert (@(Resolve-DeckEntryPool $fixture (Get-DeckPoolEntry $fixture pool)).Count -eq 3) 'Wildcard membership failed.'
+foreach($pair in @(@('account1','free'),@('account2','plus'))){
+    $payload=ConvertTo-Json -Compress @{ 'https://api.openai.com/auth'=@{chatgpt_plan_type=$pair[1]} }
+    $token='synthetic.'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload)).TrimEnd('=').Replace('+','-').Replace('/','_')+'.synthetic'
+    Write-DeckEnvironmentJson (Join-Path $fixture "accounts/$($pair[0])/auth.json") @{tokens=@{access_token=$token;account_id='synthetic'}}
+}
+Set-DeckPoolEntry $fixture freepool @('*free') Ordered | Out-Null
+Set-DeckPoolEntry $fixture paidpool @('*paid') Ordered | Out-Null
+Assert ((Resolve-DeckEntryPool $fixture (Get-DeckPoolEntry $fixture freepool)) -eq 'account1') 'Free membership includes other/unknown plans.'
+Assert ((Resolve-DeckEntryPool $fixture (Get-DeckPoolEntry $fixture paidpool)) -eq 'account2') 'Paid membership includes other/unknown plans.'
+Set-DeckPoolEntry $fixture preview @('*paid') Ordered -ValidateOnly
+Assert (-not (Test-Path -LiteralPath (Join-Path $fixture 'accounts/preview'))) 'Validation created a pooled environment.'
+Set-DeckResourceSharing $fixture account1 @('account2') @('memories') -ValidateOnly
+Assert (@((Get-DeckSharing $fixture account2).Bindings).Count -eq 0) 'Validation applied sharing.'
 Set-DeckPoolEntry $fixture selected @('account2') Best | Out-Null
 Assert ((Resolve-DeckEntryPool $fixture (Get-DeckPoolEntry $fixture selected)) -eq 'account2') 'Selected membership failed.'
 Reject { Set-DeckPoolEntry $fixture account1 @('*') Ordered } 'Ordinary account converted to pool.'

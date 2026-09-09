@@ -6,13 +6,13 @@ New accounts start with independent Codex homes. No configuration, skills, instr
 
 The installer creates a first-listed `pool` entry unless that name already exists. It has its own configuration, skills, memory and conversation history, but no login of its own. Its default membership is every signed-in ordinary account, including accounts added later. Membership does not copy or share those accounts' environments.
 
-Run `codex-auth pool` to choose a quota account and see member usage. Refresh the selected account with **R**, or choose the freshest eligible recommendation with **B**. Cached/unknown usage is not proof that a login remains valid. To start with a specific member:
+Run `codex-auth pool` to open a Codex session immediately using the pool's configured membership and rotation. Ordered starts with the first member; Best requires fresh usage checks in the regular dashboard. To start with a specific member:
 
 ```powershell
 codex-auth pool -UseAccount account1
 ```
 
-In **Settings > Environments**, save all-account or selected-account membership and Ordered/Best rotation. You can create several named pools. Equivalent PowerShell commands:
+In **Settings > Environments**, choose all signed-in accounts, all free accounts, all Plus-or-higher accounts, or selected accounts. Only the last choice shows the account list. The first three choices include matching accounts added later. Choose Ordered/Best rotation, then use **Save settings** from any settings tab. Backup and About retain their separate actions. You can create several named pools. Equivalent PowerShell commands:
 
 ```powershell
 codex-auth pool -Pool -PoolAccounts '*'
@@ -23,7 +23,7 @@ Rotation uses the existing local failover proxy and only retries explicit quota 
 
 ## Selectively share resources
 
-Open **Settings > Environments**. Choose an owner, select recipients, browse the owner's resources, then select resources and press **Share**. The owner can be a pool or an ordinary account. Close recipient terminals before changing sharing. **Unshare** restores their previous private resource where one existed.
+Open **Settings > Environments**. Choose **Share from**, select one of that owner's resources, and check its recipients. Changing the owner reloads the resource list; returning to an owner preserves pending edits. **Save settings** applies those edits together with settings from the other tabs. Unchecking restores the recipient's previous private resource where one existed. The owner can be a pool or an ordinary account. Close recipient terminals before saving sharing changes.
 
 Supported resources:
 
@@ -42,9 +42,17 @@ codex-auth sharing
 codex-auth unshare -Targets account1 -Resources memories
 ```
 
-`-Targets '*'` shares with all other entries that exist **now**, not future accounts. This differs intentionally from wildcard pool membership: adding an account always leaves its environment isolated. Sharing chains and overlapping whole-folder/individual-skill bindings are rejected. Batch operations preflight all selections, but an unexpected disk error can leave earlier selections applied; inspect **Show sharing** before retrying.
+`-Targets '*'` shares with all other entries that exist **now**, not future accounts. This differs intentionally from wildcard pool membership: adding an account always leaves its environment isolated. Sharing chains and overlapping whole-folder/individual-skill bindings are rejected. Batch operations preflight all selections, but an unexpected disk error can leave earlier selections applied; inspect `codex-auth sharing` before retrying.
 
 To opt into a one-time bootstrap when creating an account, use `codex-auth account3 -InheritFrom account1` (or `default`). This copies supported configuration resources, never credentials; subsequent edits are independent.
+
+## Global Rules
+
+Choose **Configs > Global Rules**, press **G** in the terminal dashboard, or run `codex-auth -GlobalRules`. Save plain text instructions; leave the editor blank to disable them. Rules are stored in `deck/global-rules.md`, and saving keeps a backup of the previous text.
+
+Every conversation launched through Deck or `codex-auth` loads these rules as startup developer instructions, regardless of account, pool or working folder. Existing account/profile developer instructions are preserved. Account and project `AGENTS.md` files remain untouched. Rules become part of the conversation context; they are not resent as new user messages on every turn. Already-running Codex processes keep their launch-time rules; relaunch to load edits. Resuming through a new launch loads the current rules too. Running plain `codex` bypasses Deck's launcher.
+
+This uses [Codex's developer instructions setting](https://learn.chatgpt.com/docs/config-file/config-reference). Global rules are separate from account configuration backups; back up `deck/global-rules.md` if needed.
 
 ## Backups and removal
 

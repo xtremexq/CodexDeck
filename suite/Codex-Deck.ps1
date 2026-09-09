@@ -572,15 +572,18 @@ function Show-DeckSettings {
             if ($updated.WarmupEnabled -and -not $updated.WarmupAllPaid -and -not $updated.WarmupAccounts) { throw 'Select at least one warm-up account.' }
             $updated.WarmupTimes=ConvertTo-DeckWarmupTimes $updated.WarmupTimes
             if($updated.WarmupTimedEnabled -and -not $updated.WarmupTimes){throw 'Enter at least one daily time.'}
+            if($tabs.SelectedItem -eq $environmentTab -or $environmentState.Pools.Count){& $rememberPool}
+            & $saveEnvironments -ValidateOnly
+            & $saveEnvironments
             Write-DeckJson (Join-Path $root 'settings.json') $updated
-            Sync-DeckWarmupStartup $suite $updated
+            if(-not $SmokeTest){Sync-DeckWarmupStartup $suite $updated}
             if(-not $updated.WarmupEnabled){$script:pendingWarm=@{}}
             foreach($account in @($nextCheck.Keys)){if($cache[$account].CheckedAt){$nextCheck[$account]=Get-DeckNextCheck $updated $cache[$account] ([DateTimeOffset]$cache[$account].CheckedAt)}}
             if($updated.Compact -and -not $settings.Compact){$script:expandedRows=@{}}
             $script:settings=Get-DeckSettings $root; Set-DeckAppearance; Set-DeckMode $settings.ViewMode; $script:lastRender=''; $dialog.Close()
         } catch { $settingsError.Text=$_.Exception.Message }
-    })
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss}}
+    }.GetNewClosure())
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Environment=@{Membership=$poolMembership;Members=$poolMemberList;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState}}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -865,6 +868,7 @@ $configMenu.Resources=$window.Resources
 $accountConfigItem=[Windows.Controls.MenuItem]::new(); $accountConfigItem.Header='Account config'
 $defaultsItem=[Windows.Controls.MenuItem]::new(); $defaultsItem.Header='Global defaults'; $defaultsItem.ToolTip='Template for new accounts; not the selected account.'
 [void]$configMenu.Items.Add($accountConfigItem); [void]$configMenu.Items.Add($defaultsItem)
+$globalRulesItem=[Windows.Controls.MenuItem]::new();$globalRulesItem.Header='Global Rules';$globalRulesItem.Add_Click({Show-DeckGlobalRules $suite $window});[void]$configMenu.Items.Add($globalRulesItem)
 $bestItem=[Windows.Controls.MenuItem]::new(); $bestItem.Header='Recommend best account'
 $bestItem.Add_Click({
     $names=@(Get-DeckAccounts)
@@ -950,7 +954,6 @@ $window.Add_Closing({param($sender,$eventArgs)
 $window.Width=$settings.Width; $window.Height=[Math]::Max(100,$settings.Height); Set-DeckAppearance; Update-DeckPicker
 Set-DeckMode $settings.ViewMode -Initial
 $window.Add_SizeChanged({if(-not $script:sizing){[void]$window.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Loaded,[Action]{Update-DeckWidgetHeight})}})
-$window.Add_ContentRendered({if($Background -or ($settings.ViewMode -eq 'Tray' -and $Attach)){$window.Hide()}})
 $timer=[Windows.Threading.DispatcherTimer]::new(); $timer.Interval=[TimeSpan]::FromSeconds(2)
 $timer.Add_Tick({try{Invoke-DeckTick}catch{$script:notice='Companion error: '+$_.Exception.Message; $StatusLine.Text=$notice}})
 try{
@@ -966,6 +969,20 @@ try{
         if (-not $settingsTest.Controls.ContainsKey('FailoverEnabled') -or $settingsTest.Controls.FailoverMode.Items.Count -ne 2 -or $settingsTest.Controls.FailoverEnabled.IsChecked) { throw 'Failover Settings controls/default failed.' }
         $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
         if ($headers -notcontains 'Environments') { throw 'Environment sharing Settings tab missing.' }
+        $environmentUI=$settingsTest.Environment
+        if($environmentUI.Membership.Items.Count -ne 4 -or $environmentUI.Members.Visibility -ne 'Collapsed'){throw 'Membership dropdown/default visibility failed.'}
+        $environmentUI.Membership.SelectedIndex=3
+        if($environmentUI.Members.Visibility -ne 'Visible'){throw 'Selected membership did not reveal account list.'}
+        $environmentUI.Membership.SelectedIndex=1
+        if($environmentUI.Members.Visibility -ne 'Collapsed' -or $environmentUI.State.Pools.pool.Members[0] -ne '*free'){throw 'Free membership draft failed.'}
+        $environmentUI.Resources.SelectedIndex=0
+        $recipient=$environmentUI.Recipients.Children[0]; $recipient.IsChecked=$true
+        $recipient.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        if($environmentUI.State.Changes.Count -ne 1){throw 'Sharing checkbox did not stage its change.'}
+        $environmentUI.Owner.SelectedItem='account1'
+        if(@($environmentUI.Resources.Items | ForEach-Object Resource) -contains 'memories' -or @($environmentUI.Recipients.Children | Where-Object IsChecked).Count){throw 'Owner change retained stale resources or selections.'}
+        $environmentUI.Owner.SelectedItem='pool'
+        if(-not $environmentUI.Recipients.Children[0].IsChecked){throw 'Owner change lost its pending sharing draft.'}
         if($headers -notcontains 'Checks & Warmup' -or $headers -contains 'Checks' -or $headers -contains 'Usage Warmup'){throw 'Checks and warmup must share one tab.'}
         $checkPanel=$settingsTest.Controls.AutoCheck.Parent
         if($checkPanel -ne $settingsTest.Controls.WarmupEnabled.Parent -or $checkPanel.Children.IndexOf($settingsTest.Controls.AutoCheck) -ge $checkPanel.Children.IndexOf($settingsTest.Controls.WarmupEnabled)){throw 'Checks must appear above warmup.'}
@@ -1035,9 +1052,9 @@ try{
         if($settingsUI.Controls.WarmupModel -isnot [Windows.Controls.ComboBox] -or $settingsUI.Controls.WarmupModel.SelectedItem -ne $settings.WarmupModel){throw 'Model selector failed.'}
         foreach($control in $settingsUI.Controls.Values){if($control.Margin.Bottom -lt 14){throw 'Settings spacing failed.'}}
         if(@($settingsUI.Tabs.Items | ForEach-Object Header) -notcontains 'Backup' -or @($settingsUI.Tabs.Items | ForEach-Object Header) -notcontains 'About'){throw 'Backup/About tabs missing'}
-        foreach($header in @('Backup','About','Appearance')){
+        foreach($header in @('Backup','About','Appearance','Environments','Details','Failover','Checks & Warmup')){
             $settingsUI.Tabs.SelectedItem=@($settingsUI.Tabs.Items | Where-Object Header -eq $header)[0]
-            $expected=if($header -eq 'Appearance'){'Visible'}else{'Collapsed'}
+            $expected=if($header -in @('Backup','About')){'Collapsed'}else{'Visible'}
             if($settingsUI.Save.Visibility -ne $expected){throw "Unexpected Save visibility on $header"}
         }
         if($settingsUI.SupportPrompt.Visibility -ne 'Visible'){throw 'First-visit support prompt missing'}
@@ -1093,7 +1110,7 @@ try{
         $menuSurface=[Windows.Media.VisualTreeHelper]::GetChild($configMenu,0)
         if($menuSurface -isnot [Windows.Controls.Border] -or $menuSurface.Background.ToString() -ne '#FF141619'){throw 'Configs menu background template failed.'}
         if(-not $window.Icon -or -not $settingsUI.Dialog.Icon){throw 'Application window icon missing.'}
-        if($configMenu.Items.Count -ne 3 -or $ConfigButton.Content -ne 'Configs' -or [Windows.Controls.Grid]::GetColumn($NewButton) -ne 0){throw 'Account controls layout failed.'}
+        if($configMenu.Items.Count -ne 4 -or $globalRulesItem.Header -ne 'Global Rules' -or $ConfigButton.Content -ne 'Configs' -or [Windows.Controls.Grid]::GetColumn($NewButton) -ne 0){throw 'Account controls layout failed.'}
 
         if($chrome.CaptionHeight -ne 62){throw 'Panel caption does not cover top padding.'}
         foreach($button in @($MinimizeButton,$ModeButton,$SettingsButton,$CloseButton)) {
@@ -1183,6 +1200,31 @@ try{
         $script:sessions=$savedSessions; $script:lastRender=''; Render-Deck
         $perf=[Diagnostics.Stopwatch]::StartNew(); for($i=0;$i -lt 100;$i++){Render-Deck}; $perf.Stop()
         'Unchanged render pass: {0:N2} ms average (100 passes).' -f ($perf.Elapsed.TotalMilliseconds/100)
+        $originalSuite=$suite;$originalRoot=$root;$originalSettings=$settings
+        $settingsFixture=Join-Path ([IO.Path]::GetTempPath()) ('deck-settings-save-'+[guid]::NewGuid().ToString('N'))
+        [void][IO.Directory]::CreateDirectory((Join-Path $settingsFixture 'accounts/account1'))
+        [void][IO.Directory]::CreateDirectory((Join-Path $settingsFixture 'accounts/account2'))
+        Set-DeckPoolEntry $settingsFixture pool @('*') Ordered | Out-Null
+        foreach($file in @('Deck.EnvironmentSettings.ps1','Deck.SettingsExtras.ps1','Deck.Terminal.ps1')){Copy-Item -LiteralPath (Join-Path $suite $file) -Destination $settingsFixture}
+        try{
+            $script:suite=$settingsFixture;$script:root=Join-Path $settingsFixture 'deck'
+            $draftUI=Show-DeckSettings -TestUI
+            $draftUI.Environment.Membership.SelectedIndex=1
+            $draftUI.Environment.Resources.SelectedItem=@($draftUI.Environment.Resources.Items | Where-Object Resource -eq 'skills')[0]
+            $shareCheck=$draftUI.Environment.Recipients.Children[0];$shareCheck.IsChecked=$true
+            $shareCheck.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            $draftUI.Controls.MaskEmail.IsChecked=$true
+            $draftUI.Tabs.SelectedItem=@($draftUI.Tabs.Items | Where-Object Header -eq 'Appearance')[0]
+            $draftUI.Save.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            if($draftUI.Error.Text){throw $draftUI.Error.Text}
+            if((Get-DeckPoolEntry $settingsFixture pool).Accounts[0] -ne '*free' -or -not (Read-DeckJson (Join-Path $root 'settings.json')).MaskEmail){throw 'Save settings did not persist environment and another tab together.'}
+            if(-not @((Get-DeckSharing $settingsFixture account1).Bindings).Count){throw 'Save settings did not persist pending resource sharing.'}
+            $rulesUI=Show-DeckGlobalRules $settingsFixture -TestUI
+            $rulesUI.Editor.Text='Always answer hi.'
+            $rulesUI.Save.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            if($rulesUI.Error.Text -or [IO.File]::ReadAllText((Join-Path $root 'global-rules.md')) -ne 'Always answer hi.'){throw 'Global Rules editor did not save.'}
+            'PASS: Save settings persists drafts across tabs; Global Rules editor saves plain text.'
+        }finally{$script:suite=$originalSuite;$script:root=$originalRoot;$script:settings=$originalSettings}
         'PASS: WPF constructed and synthetic account card rendered; no network calls or warm-ups.'
     }else{
         if(-not $Demo){Sync-DeckWarmupStartup $suite $settings}
@@ -1203,7 +1245,7 @@ try{
                 try{
                     $script:lifecycleStep++
                     switch($lifecycleStep){
-                        1 {$window.Close(); if($window.IsVisible -or -not $tray.Visible){throw 'Close did not preserve tray.'}}
+                        1 {if($Background -and $window.IsVisible){throw 'Background startup showed the window.'}; $window.Close(); if($window.IsVisible -or -not $tray.Visible){throw 'Close did not preserve tray.'}}
                         2 {if(-not $tray.Visible){throw 'Tray disappeared after hide.'}; $window.Show(); if(-not $window.IsVisible){throw 'Restore failed.'}}
                         3 {$focusWindow=[Windows.Window]::new(); $focusWindow.Title='Deck focus test'; $focusWindow.Width=200; $focusWindow.Height=100; $focusWindow.Show(); [void]$focusWindow.Activate(); $script:focusWindow=$focusWindow}
                         4 {if(-not $window.IsVisible -or -not $tray.Visible){throw 'Deck disappeared on focus loss.'}; $focusWindow.Close(); Set-DeckMode 'Panel'; Render-Deck; if($LaunchButton.Content -ne 'Open Terminal'){throw 'Terminal label mismatch.'}; Set-DeckMode 'Widget'; Render-Deck}
@@ -1213,7 +1255,13 @@ try{
             }); $lifeTimer.Start()
         }
         if($OpenSettings){$window.Add_ContentRendered({if(-not $script:openedInitialSettings){$script:openedInitialSettings=$true; Show-DeckSettings}})}
-        [void]$app.Run($window)
+        $app.MainWindow=$window
+        if(($Background -or ($settings.ViewMode -eq 'Tray' -and $Attach)) -and -not $OpenSettings){
+            # Run the dispatcher and tray without ever showing the desktop window.
+            [void]$app.Run()
+        }else{
+            [void]$app.Run($window)
+        }
         if($LifecycleTest){if($lifecycleFailure){throw $lifecycleFailure}; 'PASS: real application close-to-tray, persistent icon, restore, view switching, and quit. No network or warm-ups.'}
     }
 }catch{

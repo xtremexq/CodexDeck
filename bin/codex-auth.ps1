@@ -14,6 +14,7 @@ param(
     [string[]]$Resources,
     [switch]$Best,
     [switch]$History,
+    [switch]$GlobalRules,
     [string]$RenameTo,
     [ValidateSet('Off','Ordered','Best')]
     [string]$Failover = 'Off',
@@ -29,6 +30,12 @@ param(
 $accountsRoot = Join-Path $HOME ".codex-loop\accounts"
 $defaultConfigPath = Join-Path $HOME ".codex\config.toml"
 $ErrorActionPreference = 'Stop'
+if($GlobalRules){
+    $rulesSuite=Split-Path -Parent $accountsRoot
+    . (Join-Path $rulesSuite 'Deck.GlobalRules.ps1')
+    Open-DeckGlobalRules $rulesSuite
+    exit 0
+}
 
 function Remove-CodexAccount {
     param([string]$Name)
@@ -581,6 +588,7 @@ function Show-Usage {
     Write-Host "  codex-auth sharing   Show explicit sharing"
     Write-Host "  codex-auth new-name -InheritFrom account1   Explicit one-time copy"
     Write-Host "  codex-auth -History [filter]   Browse/resume local sessions"
+    Write-Host "  codex-auth -GlobalRules       Edit rules for every account and pool"
     Write-Host "  codex-auth old -RenameTo new  Rename an inactive account"
     Write-Host "  codex-auth -Failover Ordered -FailoverAccounts account1,account2"
     Write-Host "  codex-auth -Failover Best -FailoverAccounts account1,account2"
@@ -763,6 +771,13 @@ Ensure-AccountInstructions -AccountDir $accountDir
 Ensure-FreeAccountDefaults -AccountDir $accountDir
 Use-CodexNodePath
 $sharedArgs = @(Get-DeckSharedArguments $runtimeRoot $accountName)
+$globalRuleArgs=@()
+if(Test-Path -LiteralPath (Join-Path $runtimeRoot 'Deck.GlobalRules.ps1')){
+    . (Join-Path $runtimeRoot 'Deck.GlobalRules.ps1')
+    if(-not $CodexArgs -or $CodexArgs[0] -notin @('login','logout','mcp','mcp-server','completion','features','debug','app-server','--help','-h','--version','-V')){
+        $globalRuleArgs=@(Get-DeckGlobalRuleArguments $runtimeRoot $accountDir (@($sharedArgs)+@($CodexArgs)))
+    }
+}
 if ($poolEntry -and $CodexArgs -and $CodexArgs[0] -in @('login','logout')) { throw 'Pooled environments do not own logins. Sign in to a member account instead.' }
 $poolConversation = $poolEntry -and (-not $CodexArgs -or $CodexArgs[0] -notin @('mcp','mcp-server','completion','features','debug','app-server','--help','-h','--version','-V'))
 if ($poolEntry -and -not $poolConversation -and $Failover -ne 'Off') { throw 'Rotation applies to conversations, not administrative commands.' }
@@ -772,10 +787,6 @@ if ($poolConversation) {
     . (Join-Path $runtimeRoot 'Deck.Failover.ps1')
     $members = @(Resolve-DeckEntryPool $runtimeRoot $poolEntry)
     $initial = Normalize-AccountName $UseAccount
-    if (-not $initial -and -not $CodexArgs -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
-        $initial = Show-DeckPoolPicker $runtimeRoot $accountName $members
-        if (-not $initial) { exit 0 }
-    }
     if ($initial -and $initial -notin $members) { throw 'The selected account is not in this pool.' }
     $rotationDisabled = $PSBoundParameters.ContainsKey('Failover') -and $Failover -eq 'Off'
     $Failover = if ($rotationDisabled) { 'Ordered' } elseif ($PSBoundParameters.ContainsKey('Failover')) { $Failover } else { $poolEntry.Mode }
@@ -805,10 +816,10 @@ try {
         }
         Write-Host ('Failover '+$Failover+' | pool: '+($failoverChoice.Pool -join ', ')+' | active: '+$failoverChoice.Account)
         Write-Host ('Environment and session history stay in '+$accountName+'. Only explicit quota rejections can switch accounts.')
-        $launchArgs = @($sharedArgs) + @($CodexArgs) + @(Get-DeckFailoverArguments $failoverProxy.BaseUrl -NoAccountAuth:([bool]$poolEntry))
+        $launchArgs = @($sharedArgs) + @($CodexArgs) + @($globalRuleArgs) + @(Get-DeckFailoverArguments $failoverProxy.BaseUrl -NoAccountAuth:([bool]$poolEntry))
         $launchArgs=@(ConvertTo-DeckCodexArguments $launchArgs)
         & codex @launchArgs
-    } else { $launchArgs=@(ConvertTo-DeckCodexArguments (@($sharedArgs)+@($CodexArgs))); & codex @launchArgs }
+    } else { $launchArgs=@(ConvertTo-DeckCodexArguments (@($sharedArgs)+@($CodexArgs)+@($globalRuleArgs))); & codex @launchArgs }
     $codexExitCode = $LASTEXITCODE
 } finally {
     $env:CODEX_HOME = $originalCodexHome

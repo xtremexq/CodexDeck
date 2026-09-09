@@ -32,10 +32,12 @@ if ($Action) { $arguments.CodexArgs=@($Action) }
 exit $LASTEXITCODE
 '@
 $harnessPath=Join-Path $fixture 'launch.ps1'; [IO.File]::WriteAllText($harnessPath,$harness,[Text.UTF8Encoding]::new($true))
-foreach ($member in @('account1','account2')) {
-    $output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath pool $member hello
+foreach ($member in @('','account1','account2')) {
+    $launchParams=@('-Name','pool','-Action','hello');if($member){$launchParams+=@('-Member',$member)}
+    $output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath @launchParams
     if ($LASTEXITCODE -ne 0) { throw 'Pooled launch failed.' }
-    if (-not ($output -join ' ').Contains('active: '+$member)) { throw 'Requested quota member was not selected.' }
+    $expectedMember=if($member){$member}else{'account1'}
+    if (-not ($output -join ' ').Contains('active: '+$expectedMember)) { throw 'Requested/default quota member was not selected.' }
     $record=($output | Where-Object { $_ -like '{"Environment":*' }) | ConvertFrom-Json
     if ($record.Environment -ne (Join-Path $fixture 'accounts/pool') -or $record.HasAuth -or -not ($record.Arguments -join ' ').Contains('requires_openai_auth=false')) { throw 'Pool did not retain its independent environment/authentication.' }
 }

@@ -21,7 +21,9 @@ try {
 } finally { [Console]::OutputEncoding=$savedEncoding }
 try {
     $argsList=@(Get-DeckFailoverArguments $proxy.BaseUrl)
-    if ($argsList -notcontains 'model_providers.deck_failover.stream_max_retries=0' -or $argsList -notcontains 'model_providers.deck_failover.supports_websockets=false') { throw 'Transport safety overrides missing.' }
+    if ($argsList -notcontains 'model_provider="openai"' -or $argsList -notcontains ('openai_base_url="'+$proxy.BaseUrl+'"')) { throw 'Failover must retain the native history provider and route through the proxy.' }
+    $poolArgs=@(Get-DeckFailoverArguments $proxy.BaseUrl -NoAccountAuth)
+    if ($poolArgs -notcontains 'model_providers.deck_failover.requires_openai_auth=false' -or $poolArgs -notcontains 'model_providers.deck_failover.supports_websockets=false') { throw 'Pool authentication/transport overrides missing.' }
     if (Test-Path (Join-Path $fixture 'accounts/account1/config.toml')) { throw 'Proxy wrote account configuration.' }
 } finally {
     $proxy.Process.StandardInput.Close()
