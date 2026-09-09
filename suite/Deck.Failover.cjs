@@ -68,7 +68,7 @@ function reply(res, status, message) {
 }
 async function createProxy(config, dependencies = {}) {
   const pool = config.pool;
-  if (!Array.isArray(pool) || !pool.length || pool.length > 20 || new Set(pool.map(n => n.toLowerCase())).size !== pool.length || !['Ordered','Best'].includes(config.mode)) throw Error('Select 1-20 distinct accounts and Ordered or Best mode.');
+  if (!Array.isArray(pool) || !pool.length || pool.length > 200 || new Set(pool.map(n => n.toLowerCase())).size !== pool.length || !['Ordered','Best'].includes(config.mode)) throw Error('Select 1-200 distinct accounts and Ordered or Best mode.');
   const getCredentials = dependencies.credentials || (name => credentials(config.root, name));
   const getRows = dependencies.rows || (() => cachedRows(config.root));
   const report = dependencies.report || (name => process.stderr.write('[Deck failover] Active account: ' + name + '\n'));

@@ -15,6 +15,8 @@ A terminal dashboard and desktop companion for multiple Codex CLI accounts on Wi
 
 ## Your accounts, together
 
+New accounts remain isolated by default. The first-listed **pool** environment can use your selected accounts' quotas while keeping one Codex home. Open **Settings > Environments** to configure membership and explicitly share skills, memory files, instructions or individual MCP definitions between selected entries. See [environments and selective sharing](docs/ENVIRONMENTS.md) for commands and limits.
+
 Run **`codex-auth`** to see your local accounts and their cached usage immediately. Check fresh limits in the background, find the profile you need, and launch Codex from the same terminal. Keep the floating desktop widget nearby when you want usage visible while you work.
 
 | Terminal dashboard | Desktop companion |

@@ -6,11 +6,11 @@
 }
 function Resolve-DeckFailoverPool([string]$SuiteRoot, [string]$Pool, [string]$Mode, [string]$StartAccount = '') {
     $names = @($Pool -split ',' | ForEach-Object { $_.Trim() } | ForEach-Object { if ($_ -match '^\d+$') { 'account'+$_ } else { $_ } })
-    if (-not $Pool -or $names.Count -gt 20 -or @($names | Sort-Object -Unique).Count -ne $names.Count) { throw 'Failover needs 1-20 distinct accounts, separated by commas.' }
+    if (-not $Pool -or $names.Count -gt 200 -or @($names | Sort-Object -Unique).Count -ne $names.Count) { throw 'Failover needs 1-200 distinct accounts, separated by commas.' }
     if ($StartAccount) {
         if ($StartAccount -match '^\d+$') { $StartAccount='account'+$StartAccount }
         $names=@($StartAccount)+@($names | Where-Object { $_ -ne $StartAccount })
-        if ($names.Count -gt 20) { throw 'Starting account plus fallback pool cannot exceed 20 accounts.' }
+        if ($names.Count -gt 200) { throw 'Starting account plus fallback pool cannot exceed 200 accounts.' }
     }
     foreach ($name in $names) {
         if ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -match '^(con|prn|aux|nul|com[0-9]|lpt[0-9])$' -or
@@ -51,13 +51,13 @@ function Start-DeckFailover([string]$SuiteRoot, [string[]]$Pool, [string]$Mode, 
         $process.Dispose(); throw
     }
 }
-function Get-DeckFailoverArguments([string]$BaseUrl) {
+function Get-DeckFailoverArguments([string]$BaseUrl, [switch]$NoAccountAuth) {
     # CLI overrides are temporary; the account's config.toml is never rewritten for routing.
     @('-c','model_provider="deck_failover"',
       '-c','model_providers.deck_failover.name="Deck Failover"',
       '-c',('model_providers.deck_failover.base_url="'+$BaseUrl+'"'),
       '-c','model_providers.deck_failover.wire_api="responses"',
-      '-c','model_providers.deck_failover.requires_openai_auth=true',
+      '-c',('model_providers.deck_failover.requires_openai_auth='+$(if ($NoAccountAuth) { 'false' } else { 'true' })),
       '-c','model_providers.deck_failover.supports_websockets=false',
       '-c','model_providers.deck_failover.request_max_retries=0',
       '-c','model_providers.deck_failover.stream_max_retries=0')

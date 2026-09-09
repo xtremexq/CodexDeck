@@ -338,7 +338,7 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
 function Get-DeckAccounts {
     if($SmokeTest -or $Demo){if($script:testPickerNames){return $script:testPickerNames}; return 'account1'}
     @(Get-ChildItem -LiteralPath (Join-Path $suite 'accounts') -Directory -ErrorAction SilentlyContinue |
-        Where-Object Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' | Sort-Object @{Expression={if($_.Name -in $pins){0}else{1}}},@{Expression={if($_.Name -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},Name | ForEach-Object Name)
+        Where-Object Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' | Sort-Object @{Expression={if(Test-Path -LiteralPath (Join-Path $_.FullName 'deck-entry.json')){-1}elseif($_.Name -in $pins){0}else{1}}},@{Expression={if($_.Name -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},Name | ForEach-Object Name)
 }
 function Update-DeckPicker {
     if(([DateTimeOffset]::UtcNow-$lastPicker).TotalSeconds -lt 15){return}
@@ -604,7 +604,7 @@ function Show-DeckSettings {
     })
     try{
         $modelAccount=[string]$AccountPicker.SelectedValue
-        if(-not $modelAccount){$modelAccount=@(Get-DeckAccounts)[0]}
+        if(-not $modelAccount -or (Get-DeckPoolEntry $suite $modelAccount)){$modelAccount=@(Get-DeckAccounts | Where-Object { -not (Get-DeckPoolEntry $suite $_) -and (Test-Path -LiteralPath (Join-Path $suite "accounts/$_/auth.json")) })[0]}
         if($modelAccount){$modelState.Task=Start-DeckTask (Get-DeckModelsCode $suite $modelAccount) 'Models' $modelAccount; $modelTimer.Start()}
         [void]$dialog.ShowDialog()
     }finally{$modelTimer.Stop(); if($modelState.Task){Stop-DeckTask $modelState.Task; $modelState.Task.Process.Dispose()}}
@@ -816,6 +816,7 @@ function Invoke-DeckTick {
             }
             $due=@(Get-DeckDueAccounts $automatic $manualChecks $nextCheck $now)
             foreach($account in $due){
+                if (Get-DeckPoolEntry $suite $account) { $manualChecks.Remove($account); continue }
                 if($tasks.Count -ge 8){break}; if($tasks.ContainsKey($account)){continue}
                 if($window -and $tickWatch.ElapsedMilliseconds -ge 35){$yieldTick=$true; break}
                 $tasks[$account]=Start-DeckTask (Get-DeckCheckCode $suite $account) 'Check' $account; $manualChecks.Remove($account)
@@ -964,6 +965,7 @@ try{
         $settingsTest=Show-DeckSettings -TestUI
         if (-not $settingsTest.Controls.ContainsKey('FailoverEnabled') -or $settingsTest.Controls.FailoverMode.Items.Count -ne 2 -or $settingsTest.Controls.FailoverEnabled.IsChecked) { throw 'Failover Settings controls/default failed.' }
         $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
+        if ($headers -notcontains 'Environments') { throw 'Environment sharing Settings tab missing.' }
         if($headers -notcontains 'Checks & Warmup' -or $headers -contains 'Checks' -or $headers -contains 'Usage Warmup'){throw 'Checks and warmup must share one tab.'}
         $checkPanel=$settingsTest.Controls.AutoCheck.Parent
         if($checkPanel -ne $settingsTest.Controls.WarmupEnabled.Parent -or $checkPanel.Children.IndexOf($settingsTest.Controls.AutoCheck) -ge $checkPanel.Children.IndexOf($settingsTest.Controls.WarmupEnabled)){throw 'Checks must appear above warmup.'}

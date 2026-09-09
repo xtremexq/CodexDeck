@@ -53,6 +53,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
         if (-not $five) { $five = $row.Windows | Where-Object DurationSeconds -ne 604800 | Select-Object -First 1 }
         $week = $row.Windows | Where-Object DurationSeconds -eq 604800 | Select-Object -First 1
         $state = Get-DeckTerminalHealth $row
+        if ($profile.PlanType -eq 'pool') { $state = 'Choose quota account' }
         if ($Tasks.ContainsKey($name)) { $state = 'Checking...' }
         $marker = if ($i -eq $Selected) { '>' } else { ' ' }
         $color = if ($state -eq 'Ready') { 'Green' } elseif ($state -in @('Check failed','Exhausted')) { 'Yellow' } else { 'Gray' }
@@ -123,7 +124,7 @@ function Show-DeckTerminal {
             $warmHistory=@{}; foreach($entry in @(Read-DeckJson (Join-Path $root 'warmup.json'))){if($entry.Account){$warmHistory[$entry.Account]=$entry}}
             # Merge fresh scheduler results without starting a second warm-up executor.
             foreach($entry in (Get-DeckTerminalCache $root).Values){if(-not $cache[$entry.Account] -or [string]$entry.CheckedAt -gt [string]$cache[$entry.Account].CheckedAt){$cache[$entry.Account]=$entry}}
-            $names = @(Get-ChildItem -LiteralPath $accountRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' } | Sort-Object @{Expression={ if ($_.Name -match '^account(\d+)$') { [int]$Matches[1] } else { [int]::MaxValue } }},Name | ForEach-Object Name)
+            $names = if (Get-Command Get-DeckEntryNames -ErrorAction SilentlyContinue) { @(Get-DeckEntryNames $SuiteRoot) } else { @(Get-ChildItem -LiteralPath $accountRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object Name) }
             foreach ($name in $names) {
                 if (-not $profiles.ContainsKey($name)) { $profiles[$name] = Get-DeckProfile $SuiteRoot $name }
                 if ($interactive -and -not $attempted.ContainsKey($name)) {
@@ -157,7 +158,7 @@ function Show-DeckTerminal {
             }
             while ($interactive -and $pending.Count -and $tasks.Count -lt 3) {
                 $name = $pending.Dequeue()
-                if ($tasks.ContainsKey($name) -or $name -notin $names) { continue }
+                if ($tasks.ContainsKey($name) -or $name -notin $names -or $profiles[$name].PlanType -eq 'pool') { continue }
                 try { $tasks[$name] = Start-DeckTask (Get-DeckCheckCode $SuiteRoot $name) 'check' $name }
                 catch { $notice = "Could not start check for $name." }
             }
@@ -281,6 +282,59 @@ function Show-DeckTerminal {
     } finally {
         foreach ($task in $tasks.Values) { Stop-DeckTask $task; $task.Process.Dispose() }
         if ($interactive) { [Console]::ForegroundColor = $oldColor; [Console]::BackgroundColor = $oldBackground; [Console]::CursorVisible = $oldCursor; Clear-Host }
+    }
+}
+
+function Show-DeckPoolPicker([string]$SuiteRoot, [string]$Environment, [string[]]$Members) {
+    $selected=0; $notice='Enter selects the starting account. R refreshes it; B selects best fresh quota; Q cancels.'
+    $profiles=@{}; foreach ($name in $Members) { $profiles[$name]=Get-DeckProfile $SuiteRoot $name }
+    while ($true) {
+        $cache=Get-DeckTerminalCache (Join-Path $SuiteRoot 'deck')
+        Clear-Host
+        Write-Host ("POOL: $Environment | one environment, selectable account usage") -ForegroundColor Cyan
+        $frame=Get-DeckTerminalFrame $Members $cache $profiles @() @{} $selected ([Console]::WindowWidth) ([Math]::Max(24,[Console]::WindowHeight-3)) '' $notice
+        $frame | Select-Object -SkipLast 3 | ForEach-Object { Write-Host $_.Text -ForegroundColor $_.Color }
+        Write-Host 'Up/Down select | Enter use account | R refresh | B best available | Q back'
+        $key=[Console]::ReadKey($true)
+        switch ($key.Key.ToString()) {
+            'Escape' { return $null }
+            'Q' { return $null }
+            'UpArrow' { $selected=[Math]::Max(0,$selected-1) }
+            'DownArrow' { $selected=[Math]::Min($Members.Count-1,$selected+1) }
+            'Home' { $selected=0 }
+            'End' { $selected=$Members.Count-1 }
+            'Enter' {
+                if ((Get-DeckTerminalHealth $cache[$Members[$selected]]) -eq 'Exhausted') { $notice='That account is exhausted. Refresh it or select another.' }
+                else { return $Members[$selected] }
+            }
+            'B' {
+                $best=@(Get-DeckRecommendations $Members $cache) | Select-Object -First 1
+                if ($best) { $selected=[array]::IndexOf($Members,$best.Account); $notice=$best.Reason }
+                else { $notice='No fresh available quota. Refresh an account with R.' }
+            }
+            'R' {
+                $task=$null
+                try {
+                    $name=$Members[$selected]
+                    $task=Start-DeckTask (Get-DeckCheckCode $SuiteRoot $name) 'check' $name
+                    Write-Host 'Checking usage (Esc cancels)...'
+                    $deadline=[DateTimeOffset]::UtcNow.AddSeconds(90)
+                    while (-not $task.Process.HasExited) {
+                        if ([DateTimeOffset]::UtcNow -gt $deadline) { throw 'Usage check timed out.' }
+                        if ([Console]::KeyAvailable -and [Console]::ReadKey($true).Key -eq 'Escape') { throw 'Check cancelled.' }
+                        Start-Sleep -Milliseconds 100
+                    }
+                    if ($task.Process.ExitCode -ne 0) { throw 'Usage check failed.' }
+                    $row=@(Expand-DeckTerminalRecords ($task.Out.Result | ConvertFrom-Json) | Where-Object Account -eq $name)
+                    if ($row.Count -ne 1) { throw 'No matching usage result.' }
+                    $row[0] | Add-Member NoteProperty CheckedAt ([DateTimeOffset]::UtcNow.ToString('o')) -Force
+                    $cache[$name]=$row[0]
+                    Write-DeckJson (Join-Path $SuiteRoot 'deck/terminal-cache.json') @($cache.Values)
+                    $notice="$name refreshed."
+                } catch { $notice=$_.Exception.Message }
+                finally { if ($task) { Stop-DeckTask $task; $task.Process.Dispose() } }
+            }
+        }
     }
 }
 

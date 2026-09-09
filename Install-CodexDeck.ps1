@@ -3,8 +3,8 @@ $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Codex Deck requires Windows and Windows PowerShell 5.1 with WPF.' }
 $suiteRoot = Join-Path $InstallHome '.codex-loop'
 $binRoot = Join-Path $InstallHome '.local/bin'
-$files = @('Codex-Deck.ps1','Deck.Core.ps1','Deck.AccountTools.ps1','Deck.Failover.ps1','Deck.Failover.cjs','Deck.Terminal.ps1','Deck.Backup.ps1','Deck.Crypto.cs','Deck.SettingsExtras.ps1','Deck.Theme.xaml','Run-CodexLoopUsage.cmd',
-    'Test-Deck.ps1','Test-DeckAccountTools.ps1','Test-DeckFailover.ps1','Test-DeckScheduler.ps1','Test-DeckBackup.ps1','Test-CodexAuth.ps1','Test-CodexLoopUsage.ps1',
+$files = @('Codex-Deck.ps1','Deck.Core.ps1','Deck.Environments.ps1','Deck.EnvironmentSettings.ps1','Deck.AccountTools.ps1','Deck.Failover.ps1','Deck.Failover.cjs','Deck.Terminal.ps1','Deck.Backup.ps1','Deck.Crypto.cs','Deck.SettingsExtras.ps1','Deck.Theme.xaml','Run-CodexLoopUsage.cmd',
+    'Test-Deck.ps1','Test-DeckEnvironments.ps1','Test-DeckEnvironmentLaunch.ps1','Test-DeckAccountTools.ps1','Test-DeckFailover.ps1','Test-DeckScheduler.ps1','Test-DeckBackup.ps1','Test-CodexAuth.ps1','Test-CodexLoopUsage.ps1',
     'deck/assets/codex-deck.png','deck/assets/codex-deck.ico')
 $wrappers = @('codex-auth.ps1','codex-auth.cmd','codex-check.cmd','codex-deck.cmd')
 # Validate the complete payload before changing an existing installation.
@@ -22,6 +22,8 @@ foreach ($group in @(@('suite',$suiteRoot,$files), @('bin',$binRoot,$wrappers)))
     }
 }
 [void][IO.Directory]::CreateDirectory((Join-Path $suiteRoot 'accounts'))
+. (Join-Path $suiteRoot 'Deck.Environments.ps1')
+if (-not (Test-Path -LiteralPath (Join-Path $suiteRoot 'accounts/pool'))) { Set-DeckPoolEntry $suiteRoot 'pool' @('*') Ordered | Write-Host }
 if (!$SkipPath) {
     $userPath = [Environment]::GetEnvironmentVariable('Path','User')
     if ($binRoot -notin @($userPath -split ';')) { [Environment]::SetEnvironmentVariable('Path',(@($binRoot,$userPath) -join ';'),'User') }

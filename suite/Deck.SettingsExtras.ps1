@@ -1,4 +1,5 @@
 ﻿# Dot-sourced inside Show-DeckSettings so modal handlers share its lifetime.
+. (Join-Path $suite 'Deck.EnvironmentSettings.ps1')
 $backupTab=[Windows.Controls.TabItem]::new(); $backupTab.Header='Backup'
 $backupPanel=[Windows.Controls.StackPanel]::new(); $backupPanel.Margin='2,0,12,0'
 $backupScroll=[Windows.Controls.ScrollViewer]::new(); $backupScroll.VerticalScrollBarVisibility='Auto'; $backupScroll.HorizontalScrollBarVisibility='Disabled'; $backupScroll.Content=$backupPanel; $backupTab.Content=$backupScroll; [void]$tabs.Items.Add($backupTab)
@@ -76,7 +77,7 @@ foreach($link in @(
 [void]$about.Children.Add((New-DeckText 'An independent companion for OpenAI Codex. Not affiliated with or endorsed by OpenAI.' '#737E89'))
 
 $tabs.Add_SelectionChanged({
-    $save.Visibility=if($tabs.SelectedItem.Header -in @('Backup','About')){'Collapsed'}else{'Visible'}
+    $save.Visibility=if($tabs.SelectedItem.Header -in @('Environments','Backup','About')){'Collapsed'}else{'Visible'}
 }.GetNewClosure())
 $supportVisitPath=if($SmokeTest){$script:supportTestPath}else{Join-Path $root 'support-prompt.json'}
 $supportState=Read-DeckJson $supportVisitPath

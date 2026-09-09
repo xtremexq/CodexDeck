@@ -4,6 +4,14 @@ param(
     [string]$Account,
 
     [switch]$NewAccount,
+    [string]$InheritFrom,
+    [switch]$Pool,
+    [string[]]$PoolAccounts,
+    [ValidateSet('Ordered','Best')][string]$PoolMode = 'Ordered',
+    [string]$UseAccount,
+    [string]$Source,
+    [string[]]$Targets,
+    [string[]]$Resources,
     [switch]$Best,
     [switch]$History,
     [string]$RenameTo,
@@ -48,6 +56,7 @@ function Remove-CodexAccount {
             throw 'This account has a connected terminal. Close its Codex sessions before deleting it.'
         }
     }
+    if (Get-Command Assert-DeckEntryUnreferenced -ErrorAction SilentlyContinue) { Assert-DeckEntryUnreferenced (Split-Path -Parent $accountsRoot) $Name }
     $archiveRoot = Join-Path (Split-Path $root -Parent) 'deleted-accounts'
     if (-not (Test-Path -LiteralPath $archiveRoot)) {
         New-Item -ItemType Directory -Path $archiveRoot | Out-Null
@@ -69,7 +78,7 @@ function Get-AccountDirectories {
         return @()
     }
 
-    return @(Get-ChildItem -LiteralPath $accountsRoot -Directory | Sort-Object Name)
+    return @(Get-DeckEntryNames (Split-Path -Parent $accountsRoot) | ForEach-Object { Get-Item -LiteralPath (Join-Path $accountsRoot $_) })
 }
 
 function Normalize-AccountName {
@@ -428,53 +437,16 @@ function Ensure-FreeAccountDefaults {
     if ($prefix) { Write-TextFile -Path $path -Content ($prefix + $config) }
 }
 
-function Ensure-SharedAgentsLink {
+function Ensure-AccountInstructions {
     param([string]$AccountDir)
-
-    $sharedAgentsPath = Join-Path $accountsRoot "AGENTS.shared.md"
-
-    if (-not (Test-Path -LiteralPath $sharedAgentsPath -PathType Leaf)) {
-        Write-TextFile -Path $sharedAgentsPath -Content ""
+    $path = Join-Path $AccountDir 'AGENTS.md'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
+    $links = @(& fsutil hardlink list $path 2>$null)
+    if ($LASTEXITCODE -eq 0 -and @($links | Where-Object { $_ -match '[\\/]AGENTS\.shared\.md$' }).Count) {
+        $temporary = $path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+        Copy-Item -LiteralPath $path -Destination $temporary
+        [IO.File]::Replace($temporary, $path, [NullString]::Value)
     }
-
-    $accountAgentsPath = Join-Path $AccountDir "AGENTS.md"
-
-    if (Test-Path -LiteralPath $accountAgentsPath -PathType Container) {
-        throw "Expected file path at '$accountAgentsPath' but found a directory."
-    }
-
-    $needsLink = $true
-
-    if (Test-Path -LiteralPath $accountAgentsPath -PathType Leaf) {
-        try {
-            $sharedResolved = (Resolve-Path -LiteralPath $sharedAgentsPath).Path
-            $accountResolved = (Resolve-Path -LiteralPath $accountAgentsPath).Path
-            $links = & fsutil hardlink list $sharedResolved 2>$null
-
-            if ($LASTEXITCODE -eq 0) {
-                foreach ($link in $links) {
-                    $resolvedLink = (Resolve-Path -LiteralPath $link -ErrorAction SilentlyContinue).Path
-
-                    if ($resolvedLink -eq $accountResolved) {
-                        $needsLink = $false
-                        break
-                    }
-                }
-            }
-        } catch {
-            $needsLink = $true
-        }
-
-        if ($needsLink) {
-            Remove-Item -LiteralPath $accountAgentsPath -Force
-        }
-    }
-
-    if (-not $needsLink) {
-        return
-    }
-
-    New-Item -ItemType HardLink -Path $accountAgentsPath -Target $sharedAgentsPath | Out-Null
 }
 
 function Get-AccountBootstrapSource {
@@ -566,6 +538,7 @@ function Initialize-AccountDirectory {
 
     if (Test-Path -LiteralPath $AccountDir -PathType Container) {
         if($NewAccount){throw 'That account already exists. Choose another name in Deck.'}
+        if($InheritFrom){throw '-InheritFrom only applies when creating a new account.'}
         return [pscustomobject]@{
             Created = $false
             Source = $null
@@ -586,46 +559,14 @@ function Initialize-AccountDirectory {
         New-Item -ItemType Directory -Path (Join-Path $AccountDir $relativeDirectory) -Force | Out-Null
     }
 
-    $bootstrapSource = Get-AccountBootstrapSource -ExcludePath $AccountDir
-    $seededFromDefaultConfig = $false
-
-    if ($bootstrapSource) {
-        $bootstrapConfigPath = Join-Path $bootstrapSource.Path "config.toml"
-        $bootstrapConfig = Read-TextFile $bootstrapConfigPath
-
-        if (-not [string]::IsNullOrWhiteSpace($bootstrapConfig)) {
-            Write-TextFile `
-                -Path (Join-Path $AccountDir "config.toml") `
-                -Content ("$(Trim-TrailingNewlines $bootstrapConfig)`n")
-
-            $resolvedBootstrapConfigPath = (Resolve-Path -LiteralPath $bootstrapConfigPath -ErrorAction SilentlyContinue).Path
-            $resolvedDefaultConfigPath = (Resolve-Path -LiteralPath $defaultConfigPath -ErrorAction SilentlyContinue).Path
-            $seededFromDefaultConfig = $resolvedBootstrapConfigPath -and $resolvedBootstrapConfigPath -eq $resolvedDefaultConfigPath
-        }
-
-        foreach ($relativePath in @(
-            ".personality_migration",
-            "rules",
-            "skills"
-        )) {
-            Copy-BootstrapItem `
-                -SourceRoot $bootstrapSource.Path `
-                -DestinationRoot $AccountDir `
-                -RelativePath $relativePath
-        }
+    $bootstrapSource = $null
+    if ($InheritFrom) {
+        $sourceDir = if ($InheritFrom -eq 'default') { Split-Path -Parent $defaultConfigPath } else { Get-DeckEntryDirectory (Split-Path -Parent $accountsRoot) (Normalize-AccountName $InheritFrom) }
+        $bootstrapSource = [pscustomobject]@{Path=$sourceDir; Label=$InheritFrom}
+        foreach ($relativePath in @('config.toml','AGENTS.md','rules','skills','.personality_migration')) { Copy-BootstrapItem $sourceDir $AccountDir $relativePath }
     }
+    return [pscustomobject]@{Created=$true; Source=$bootstrapSource; SkipConfigSync=$true}
 
-    if (-not $seededFromDefaultConfig) {
-        Ensure-AccountConfig -AccountDir $AccountDir
-    }
-
-    Ensure-SharedAgentsLink -AccountDir $AccountDir
-
-    return [pscustomobject]@{
-        Created = $true
-        Source = $bootstrapSource
-        SkipConfigSync = $seededFromDefaultConfig
-    }
 }
 
 function Show-Usage {
@@ -633,6 +574,12 @@ function Show-Usage {
     Write-Host "  codex-auth          Interactive account dashboard"
     Write-Host "  codex-auth status   Cached dashboard snapshot (no network)"
     Write-Host "  codex-auth -Best    Launch the recommended fresh account"
+    Write-Host "  codex-auth pool -Pool -PoolAccounts '*'  Configure the pooled environment"
+    Write-Host "  codex-auth pool -UseAccount account2   Choose a starting member"
+    Write-Host "  codex-auth share -Source pool -Targets account1,account2 -Resources skills,memories,mcp:github"
+    Write-Host "  codex-auth unshare -Targets account1 -Resources skills   Restore private resources"
+    Write-Host "  codex-auth sharing   Show explicit sharing"
+    Write-Host "  codex-auth new-name -InheritFrom account1   Explicit one-time copy"
     Write-Host "  codex-auth -History [filter]   Browse/resume local sessions"
     Write-Host "  codex-auth old -RenameTo new  Rename an inactive account"
     Write-Host "  codex-auth -Failover Ordered -FailoverAccounts account1,account2"
@@ -655,11 +602,8 @@ function Show-Accounts {
     }
 
     foreach ($directory in $directories) {
-        Ensure-AccountConfig -AccountDir $directory.FullName
-        Ensure-FreeAccountDefaults -AccountDir $directory.FullName
-        Ensure-SharedAgentsLink -AccountDir $directory.FullName
         $hasAuth = Test-Path -LiteralPath (Join-Path $directory.FullName "auth.json") -PathType Leaf
-        $marker = if ($hasAuth) { "*" } else { "-" }
+        $marker = if (Get-DeckPoolEntry (Split-Path -Parent $accountsRoot) $directory.Name) { "POOL" } elseif ($hasAuth) { "*" } else { "-" }
         Write-Host ("{0} {1}" -f $marker, $directory.Name)
     }
 
@@ -693,13 +637,40 @@ function Use-CodexNodePath {
     }
 }
 
-if ($Failover -ne 'Off') {
+$runtimeRoot = Split-Path -Parent $accountsRoot
+$environmentModule = Join-Path $runtimeRoot 'Deck.Environments.ps1'
+if (-not (Test-Path -LiteralPath $environmentModule)) { $environmentModule = Join-Path $PSScriptRoot '../suite/Deck.Environments.ps1' }
+. $environmentModule
+if ($Pool -or $Account -in @('share','unshare','sharing')) {
+    if ($Best -or $History -or $RenameTo -or $Del -or $NewAccount -or $CodexArgs -or $InheritFrom -or $UseAccount -or $PSBoundParameters.ContainsKey('Failover')) { throw 'Do not combine environment management with launch actions.' }
+    . (Join-Path $runtimeRoot 'Deck.Core.ps1')
+    if ($Pool) {
+        if (-not $Account) { $Account='pool' }
+        $members = @($(if ($PoolAccounts) { $PoolAccounts -join ',' } else { '*' }) -split ',' | ForEach-Object { Normalize-AccountName $_.Trim() })
+        Set-DeckPoolEntry $runtimeRoot $Account $members $PoolMode
+    } elseif ($Account -eq 'sharing') {
+        foreach ($name in Get-DeckEntryNames $runtimeRoot) {
+            foreach ($binding in (Get-DeckSharing $runtimeRoot $name).Bindings) { Write-Output ("{0} <- {1}: {2}" -f $name,$binding.Source,$binding.Resource) }
+        }
+    } else {
+        $targetNames=@(($Targets -join ',') -split ',' | ForEach-Object { Normalize-AccountName $_.Trim() })
+        $resourceNames=@(($Resources -join ',') -split ',' | ForEach-Object { $_.Trim() })
+        Set-DeckResourceSharing $runtimeRoot (Normalize-AccountName $Source) $targetNames $resourceNames -Detach:($Account -eq 'unshare')
+    }
+    exit 0
+}
+if ($PoolAccounts -or $Source -or $Targets -or $Resources) { throw 'Use -Pool to configure membership, or share/unshare to configure resources.' }
+$poolEntry = $null
+if (-not $History -and $Account -and $Account -notin @('help','--help','-h','list','--list','-l','status','dashboard')) { $poolEntry = Get-DeckPoolEntry $runtimeRoot (Normalize-AccountName $Account) }
+if ($UseAccount -and -not $poolEntry) { throw '-UseAccount requires a pooled entry.' }
+if ($poolEntry -and ($Best -or $NewAccount -or $InheritFrom -or $FailoverAccounts)) { throw 'Use -UseAccount to select a member of this pooled entry.' }
+if ($Failover -ne 'Off' -and -not $poolEntry) {
     if ($Best -or $History -or $RenameTo -or $Del -or $NewAccount) { throw 'Do not combine failover with other account actions.' }
     $runtimeRoot = Split-Path -Parent $accountsRoot
     . (Join-Path $runtimeRoot 'Deck.Failover.ps1')
     $failoverChoice = Resolve-DeckFailoverPool $runtimeRoot ($FailoverAccounts -join ',') $Failover $Account
     $Account = $failoverChoice.Account
-} elseif ($FailoverAccounts) { throw '-FailoverAccounts requires -Failover Ordered or Best.' }
+} elseif ($FailoverAccounts -and -not $poolEntry) { throw '-FailoverAccounts requires -Failover Ordered or Best.' }
 if ($Best -or $History -or $RenameTo) {
     if (@($Best.IsPresent,$History.IsPresent,[bool]$RenameTo | Where-Object { $_ }).Count -ne 1 -or $Del -or $NewAccount) { throw 'Choose only one maintenance action.' }
     $runtimeRoot = Split-Path -Parent $accountsRoot
@@ -761,7 +732,7 @@ if ($accountName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $accountName -mat
     throw 'Account names must start with a letter and contain at most 40 letters, numbers, underscores or hyphens.'
 }
 $accountDir = Join-Path $accountsRoot $accountName
-if ($Failover -eq 'Off' -and -not $PSBoundParameters.ContainsKey('Failover')) {
+if (-not $poolEntry -and (Test-Path -LiteralPath (Join-Path $accountDir 'auth.json')) -and $Failover -eq 'Off' -and -not $PSBoundParameters.ContainsKey('Failover')) {
     $runtimeRoot = Split-Path -Parent $accountsRoot
     $failoverModule = Join-Path $runtimeRoot 'Deck.Failover.ps1'
     if (Test-Path -LiteralPath $failoverModule) {
@@ -778,6 +749,7 @@ if ($Failover -eq 'Off' -and -not $PSBoundParameters.ContainsKey('Failover')) {
 
 [void][IO.Directory]::CreateDirectory($accountsRoot)
 $bootstrapResult = Initialize-AccountDirectory -AccountName $accountName -AccountDir $accountDir
+$accountDir = Get-DeckEntryDirectory $runtimeRoot $accountName
 
 if ($bootstrapResult.Created) {
     if ($bootstrapResult.Source) {
@@ -787,13 +759,30 @@ if ($bootstrapResult.Created) {
     }
 }
 
-if (-not $bootstrapResult.SkipConfigSync) {
-    Ensure-AccountConfig -AccountDir $accountDir
-}
-
-Ensure-SharedAgentsLink -AccountDir $accountDir
+Ensure-AccountInstructions -AccountDir $accountDir
 Ensure-FreeAccountDefaults -AccountDir $accountDir
 Use-CodexNodePath
+$sharedArgs = @(Get-DeckSharedArguments $runtimeRoot $accountName)
+if ($poolEntry -and $CodexArgs -and $CodexArgs[0] -in @('login','logout')) { throw 'Pooled environments do not own logins. Sign in to a member account instead.' }
+$poolConversation = $poolEntry -and (-not $CodexArgs -or $CodexArgs[0] -notin @('mcp','mcp-server','completion','features','debug','app-server','--help','-h','--version','-V'))
+if ($poolEntry -and -not $poolConversation -and $Failover -ne 'Off') { throw 'Rotation applies to conversations, not administrative commands.' }
+if ($poolConversation) {
+    . (Join-Path $runtimeRoot 'Deck.Core.ps1')
+    . (Join-Path $runtimeRoot 'Deck.Terminal.ps1')
+    . (Join-Path $runtimeRoot 'Deck.Failover.ps1')
+    $members = @(Resolve-DeckEntryPool $runtimeRoot $poolEntry)
+    $initial = Normalize-AccountName $UseAccount
+    if (-not $initial -and -not $CodexArgs -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+        $initial = Show-DeckPoolPicker $runtimeRoot $accountName $members
+        if (-not $initial) { exit 0 }
+    }
+    if ($initial -and $initial -notin $members) { throw 'The selected account is not in this pool.' }
+    $rotationDisabled = $PSBoundParameters.ContainsKey('Failover') -and $Failover -eq 'Off'
+    $Failover = if ($rotationDisabled) { 'Ordered' } elseif ($PSBoundParameters.ContainsKey('Failover')) { $Failover } else { $poolEntry.Mode }
+    $failoverChoice = Resolve-DeckFailoverPool $runtimeRoot ($members -join ',') $Failover $initial
+    if ($rotationDisabled) { $failoverChoice.Pool=@($failoverChoice.Account) }
+}
+$originalCodexHome = $env:CODEX_HOME
 $env:CODEX_HOME = $accountDir
 $deckSession = $null
 try {
@@ -810,17 +799,19 @@ $failoverProxy = $null
 $failoverSessions = @()
 try {
     if ($Failover -ne 'Off') {
-        $failoverProxy = Start-DeckFailover $suiteRoot $failoverChoice.Pool $Failover $accountName
+        $failoverProxy = Start-DeckFailover $suiteRoot $failoverChoice.Pool $Failover $failoverChoice.Account
         foreach ($poolAccount in $failoverChoice.Pool) {
             $failoverSessions += Register-DeckSession (Join-Path $suiteRoot 'deck') $poolAccount (Get-Location).Path
         }
-        Write-Host ('Failover '+$Failover+' | pool: '+($failoverChoice.Pool -join ', ')+' | active: '+$accountName)
-        Write-Host 'Session history stays in the starting account. Only explicit quota rejections can switch accounts.'
-        $launchArgs = @($CodexArgs) + @(Get-DeckFailoverArguments $failoverProxy.BaseUrl)
+        Write-Host ('Failover '+$Failover+' | pool: '+($failoverChoice.Pool -join ', ')+' | active: '+$failoverChoice.Account)
+        Write-Host ('Environment and session history stay in '+$accountName+'. Only explicit quota rejections can switch accounts.')
+        $launchArgs = @($sharedArgs) + @($CodexArgs) + @(Get-DeckFailoverArguments $failoverProxy.BaseUrl -NoAccountAuth:([bool]$poolEntry))
+        $launchArgs=@(ConvertTo-DeckCodexArguments $launchArgs)
         & codex @launchArgs
-    } else { & codex @CodexArgs }
+    } else { $launchArgs=@(ConvertTo-DeckCodexArguments (@($sharedArgs)+@($CodexArgs))); & codex @launchArgs }
     $codexExitCode = $LASTEXITCODE
 } finally {
+    $env:CODEX_HOME = $originalCodexHome
     if ($failoverProxy) {
         $failoverProxy.Process.StandardInput.Close()
         if (-not $failoverProxy.Process.WaitForExit(2000)) { $failoverProxy.Process.Kill() }

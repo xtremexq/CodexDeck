@@ -6,6 +6,7 @@
     $names | Select-Object -Unique
 }
 . (Join-Path $PSScriptRoot 'Deck.AccountTools.ps1')
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Environments.ps1')) { . (Join-Path $PSScriptRoot 'Deck.Environments.ps1') }
 # Codex Deck - local state and scheduling. No credentials are written to Deck state.
 function Get-DeckDueAccounts($Automatic, $Manual, $NextCheck, [DateTimeOffset]$Now) {
     $manualDue=@($Manual.Keys | Where-Object { $Manual[$_] -le $Now } | Sort-Object { $Manual[$_] })
@@ -55,6 +56,7 @@ function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
         if($top -match '(?m)^model\s*=\s*"([^"]+)"'){$profile.Model=$Matches[1]}
         if($top -match '(?m)^model_reasoning_effort\s*=\s*"([^"]+)"'){$profile.Effort=$Matches[1]}
     }
+    if ((Get-Command Get-DeckPoolEntry -ErrorAction SilentlyContinue) -and (Get-DeckPoolEntry $SuiteRoot $Account)) { $profile.PlanType='pool'; $profile.Email='Shared environment / selectable quota accounts' }
     return $profile
 }
 function Get-DeckNextCheck($Settings, $Record, [DateTimeOffset]$CheckedAt) {

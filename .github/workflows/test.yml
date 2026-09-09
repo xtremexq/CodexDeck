@@ -21,6 +21,8 @@ jobs:
           ./suite/Test-DeckBackup.ps1
           ./suite/Test-DeckAccountTools.ps1
           ./suite/Test-DeckFailover.ps1
+          ./suite/Test-DeckEnvironments.ps1
+          ./suite/Test-DeckEnvironmentLaunch.ps1
           ./suite/Test-CodexAuth.ps1
           ./suite/Test-DeckTerminal.ps1
           ./suite/Test-CodexLoopUsage.ps1

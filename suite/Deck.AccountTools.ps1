@@ -105,6 +105,7 @@ function Get-DeckMaintenanceMutexName {
 }
 
 function Rename-DeckAccount([string]$SuiteRoot, [string]$OldName, [string]$NewName) {
+    if (Get-Command Assert-DeckEntryUnreferenced -ErrorAction SilentlyContinue) { Assert-DeckEntryUnreferenced $SuiteRoot $OldName }
     foreach ($name in @($OldName,$NewName)) {
         if ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -match '^(con|prn|aux|nul|com[0-9]|lpt[0-9])$') { throw 'Use 1-40 letters, numbers, underscores or hyphens, starting with a letter; reserved device names are not allowed.' }
     }

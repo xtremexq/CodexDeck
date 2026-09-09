@@ -16,12 +16,16 @@ try{
     [IO.File]::WriteAllText((Join-Path $source 'accounts/example/auth.json'),'{"synthetic":"not-a-real-token"}')
     [IO.File]::WriteAllText((Join-Path $source 'accounts/example/config.toml'),'model = "example"')
     [IO.File]::WriteAllText((Join-Path $source 'accounts/example/history.jsonl'),'excluded chat')
+    [void][IO.Directory]::CreateDirectory((Join-Path $source 'accounts/pool'))
+    $poolMetadata='{"Version":1,"Kind":"pool","Accounts":["*"],"Mode":"Ordered"}'
+    [IO.File]::WriteAllText((Join-Path $source 'accounts/pool/deck-entry.json'),$poolMetadata)
     [IO.File]::WriteAllText((Join-Path $testRoot 'defaults.toml'),'synthetic defaults')
-    Assert ((Export-DeckBackup $source (Join-Path $testRoot 'defaults.toml') $path $password) -eq 1) 'Wrong export account count'
+    Assert ((Export-DeckBackup $source (Join-Path $testRoot 'defaults.toml') $path $password) -eq 2) 'Wrong export account count'
     Assert (-not ([IO.File]::ReadAllText($path).Contains('not-a-real-token'))) 'Plaintext credential leaked'
     $manifest=Read-DeckBackup $path $password
-    Assert (@($manifest.Files).Count -eq 3) 'Backup included runtime history or missed config'
-    Assert ((Import-DeckBackup $dest (Join-Path $testRoot 'restored-defaults.toml') $manifest -RestorePreferences) -eq 1) 'Import failed'
+    Assert (@($manifest.Files).Count -eq 4) 'Backup included runtime history or missed config'
+    Assert ((Import-DeckBackup $dest (Join-Path $testRoot 'restored-defaults.toml') $manifest -RestorePreferences) -eq 2) 'Import failed'
+    Assert ([IO.File]::ReadAllText((Join-Path $dest 'accounts/pool/deck-entry.json')) -eq $poolMetadata) 'Pool identity did not round-trip'
     Assert ([IO.File]::ReadAllText((Join-Path $dest 'accounts/example/auth.json')) -eq '{"synthetic":"not-a-real-token"}') 'Credentials did not round-trip'
     Refuses {Import-DeckBackup $dest (Join-Path $testRoot 'restored-defaults.toml') $manifest} 'Import overwrote an existing account'
     Refuses {Read-DeckBackup $path (ConvertTo-SecureString 'Different password' -AsPlainText -Force)} 'Wrong password accepted'

@@ -16,7 +16,7 @@ function Get-DeckPasswordKey([Security.SecureString]$Password,[byte[]]$Salt) {
     }
 }
 function Test-DeckBackupPath([string]$Path) {
-    return $Path -cmatch '^(accounts/[a-zA-Z][a-zA-Z0-9_-]{0,39}/(auth\.json|config\.toml|AGENTS\.md)|deck/(settings|views|pins|warmup)\.json|accounts/AGENTS\.shared\.md|defaults/config\.toml)$'
+    return $Path -cmatch '^(accounts/[a-zA-Z][a-zA-Z0-9_-]{0,39}/(auth\.json|config\.toml|AGENTS\.md|deck-entry\.json)|deck/(settings|views|pins|warmup)\.json|accounts/AGENTS\.shared\.md|defaults/config\.toml)$'
 }
 function Export-DeckBackup([string]$SuiteRoot,[string]$DefaultsPath,[string]$Path,[Security.SecureString]$Password) {
     if($Password.Length -lt 12){throw 'Use a password with at least 12 characters.'}
@@ -27,7 +27,7 @@ function Export-DeckBackup([string]$SuiteRoot,[string]$DefaultsPath,[string]$Pat
         if($dir.Name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){continue}
         if($dir.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked account folders cannot be exported.'}
         $accounts+= $dir.Name
-        foreach($name in @('auth.json','config.toml','AGENTS.md')){if(Test-Path -LiteralPath (Join-Path $dir.FullName $name)){$files+= "accounts/$($dir.Name)/$name"}}
+        foreach($name in @('auth.json','config.toml','AGENTS.md','deck-entry.json')){if(Test-Path -LiteralPath (Join-Path $dir.FullName $name)){$files+= "accounts/$($dir.Name)/$name"}}
     }
     if(Test-Path -LiteralPath (Join-Path $SuiteRoot 'accounts/AGENTS.shared.md')){$files+='accounts/AGENTS.shared.md'}
     foreach($name in @('settings','views','pins','warmup')){if(Test-Path -LiteralPath (Join-Path $SuiteRoot "deck/$name.json")){$files+="deck/$name.json"}}
