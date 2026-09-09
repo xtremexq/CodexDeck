@@ -4,7 +4,7 @@ New accounts start with independent Codex homes. No configuration, skills, instr
 
 ## One environment, several quota accounts
 
-The installer creates a first-listed `pool` entry unless that name already exists. It has its own configuration, skills, memory and conversation history, but no login of its own. Its default membership is every signed-in ordinary account, including accounts added later. Membership does not copy or share those accounts' environments.
+The installer creates a first-listed `pool` entry unless that name already exists. It has its own configuration, skills, memory and conversation history, but no login of its own. Its defaults are every signed-in ordinary account (including accounts added later), Ordered rotation, and no resource sharing. Membership does not copy or share those accounts' environments.
 
 Run `codex-auth pool` to open a Codex session immediately using the pool's configured membership and rotation. Ordered starts with the first member; Best requires fresh usage checks in the regular dashboard. To start with a specific member:
 
@@ -19,7 +19,7 @@ codex-auth pool -Pool -PoolAccounts '*'
 codex-auth work -Pool -PoolAccounts account1,account2 -PoolMode Ordered
 ```
 
-Rotation uses the existing local failover proxy and only retries explicit quota rejections. It does not replay accepted streams or move account-bound response history to another account. Some conversations therefore require starting a new conversation after exhaustion. `-Failover Off` limits a pooled launch to its chosen member. See [failover details](ACCOUNT-TOOLS.md).
+Rotation uses the existing local failover proxy and only retries rejected 429 requests. It does not replay accepted streams. Full local history and encrypted stateless reasoning/compaction can move to a fallback account; server-stored response IDs, uploaded file IDs and item references remain account-bound. Those conversations may require a new conversation after exhaustion. `-Failover Off` limits a pooled launch to its chosen member. See [failover details](ACCOUNT-TOOLS.md).
 
 ## Selectively share resources
 

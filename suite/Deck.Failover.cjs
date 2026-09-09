@@ -44,12 +44,16 @@ function quotaRejected(status, body) {
   if (status !== 429) return false;
   try {
     const e = JSON.parse(body).error;
-    return ['usage_limit_reached','insufficient_quota'].includes(e?.type) || ['usage_limit_reached','insufficient_quota'].includes(e?.code);
+    const kinds = ['usage_limit_reached','insufficient_quota','rate_limit_exceeded'];
+    return kinds.includes(e?.type) || kinds.includes(e?.code);
   } catch { return false; }
 }
 function accountBound(value) {
   if (!value || typeof value !== 'object') return false;
-  if (value.previous_response_id || value.file_id || value.encrypted_content || value.type === 'item_reference') return true;
+  // Encrypted reasoning and compaction items are the stateless, portable form
+  // of history. Server-stored response/file/item references still require the
+  // account that owns those objects.
+  if (value.previous_response_id || value.file_id || value.type === 'item_reference') return true;
   return Object.values(value).some(v => typeof v === 'object' && accountBound(v));
 }
 async function collect(stream, max) {
@@ -107,8 +111,9 @@ async function createProxy(config, dependencies = {}) {
         let parsed; try { parsed = JSON.parse(body); } catch { return reply(res, 400, 'Expected JSON request.'); }
         bound = accountBound(parsed);
       }
-      // Let the active account validate opaque history, including history it produced
-      // after a switch. Never replay an account-bound request on another account.
+      // Let the active account validate server-stored references it owns. A 429
+      // proves the request was rejected, so portable full/encrypted history can
+      // be retried without duplicating an accepted response.
       let attempts = 0;
       while (!res.destroyed && attempts++ < pool.length) {
         if (excluded.has(current)) return reply(res, 429, 'Selected account quota is exhausted. Start a new session after refreshing usage.');

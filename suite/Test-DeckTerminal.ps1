@@ -4,6 +4,8 @@
 function Assert($Condition, $Message) { if (-not $Condition) { throw $Message } }
 Assert ((Format-DeckTerminalQuota $null) -match '\?') 'Unknown quota shown as zero'
 Assert ((Format-DeckTerminalQuota @{RemainingPct=72}) -eq '[#######---]  72%') 'Quota bar incorrect'
+$resetAt=[DateTimeOffset]::Now.AddHours(3).ToUnixTimeSeconds()
+Assert ((Format-DeckTerminalReset @{ResetsAtUnix=$resetAt}) -match ([DateTimeOffset]::FromUnixTimeSeconds($resetAt).ToLocalTime().ToString('MMM dd HH:mm'))) 'Primary reset formatter incorrect'
 Assert ((ConvertTo-DeckTerminalText "abc$([char]27)[2J`nfoo" 8).Length -le 8) 'Text not bounded'
 Assert ((ConvertTo-DeckTerminalText "a$([char]27)b") -eq 'a b') 'Terminal control character not stripped'
 Assert ((Get-DeckTerminalHealth @{Status='available';Error='failed'}) -eq 'Check failed') 'Error hidden by cached ready status'
@@ -26,9 +28,11 @@ $snapshot = @(Show-DeckTerminal -SuiteRoot $fixture -AuthScript 'unused' -Snapsh
 Assert (($snapshot -join "`n") -match 'CODEX / DECK') 'Snapshot did not render'
 'PASS: terminal quota, sanitization, cache merge, paging, masking, empty state and snapshot.'
 
-$freeCache = @{account1=@{Status='available';Windows=@(@{Label='30-day';DurationSeconds=2592000;RemainingPct=42})}}
-$freeFrame = @(Get-DeckTerminalFrame @('account1') $freeCache $profiles @() @{} 0 110 25 '' 'Ready')
-Assert (($freeFrame.Text -join "`n") -match '42%') 'Free plan quota missing'
+$freeCache = @{account1=@{Status='available';Windows=@(@{Label='30-day';DurationSeconds=2592000;RemainingPct=42;ResetsAtUnix=$resetAt})}}
+$freeFrame = @(Get-DeckTerminalFrame @('account1') $freeCache $profiles @() @{} 0 140 25 '' 'Ready')
+$freeText=$freeFrame.Text -join "`n"
+Assert ($freeText -match '42%') 'Free plan quota missing'
+Assert ($freeText -match 'STATE\s+NEXT RESET' -and $freeText -match [regex]::Escape([DateTimeOffset]::FromUnixTimeSeconds($resetAt).ToLocalTime().ToString('MMM dd HH:mm'))) 'Primary reset column missing after state'
 'PASS: free plan primary quota.'
 
 $settings=Set-DeckWarmupControl (Join-Path $fixture 'deck') 'account1'

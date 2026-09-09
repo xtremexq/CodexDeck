@@ -71,11 +71,25 @@ function New-DeckText([string]$Text, [string]$Color='#EAF0FA', [double]$Size=12)
     $textBlock.TextWrapping='Wrap'; $textBlock.Margin='0,2,0,0'
     return $textBlock
 }
-function New-DeckQuotaTrack($Quota,[string]$Color) {
+function Get-DeckQuotaLabel($Quota) {
+    $seconds=[long]$Quota.DurationSeconds
+    if($seconds -eq 18000){return '5H'}
+    if($seconds -eq 604800){return 'Weekly'}
+    if($seconds -ge 2419200 -and $seconds -le 2764800){return 'Monthly'}
+    return [string]$Quota.Label
+}
+function Format-DeckQuotaReset($Quota) {
+    if(-not $Quota.ResetsAtUnix){return ''}
+    $at=[DateTimeOffset]::FromUnixTimeSeconds([long]$Quota.ResetsAtUnix).ToLocalTime()
+    if($at -le [DateTimeOffset]::Now){return ([string][char]0x21BB)+' due'}
+    $format=if($at.Date -eq [DateTimeOffset]::Now.Date){'HH:mm'}elseif($at.Year -eq [DateTimeOffset]::Now.Year){'MMM dd HH:mm'}else{'yyyy-MM-dd HH:mm'}
+    return ([string][char]0x21BB)+' '+$at.ToString($format)
+}
+function New-DeckQuotaTrack($Quota,[string]$Color,[bool]$ShowReset=$true) {
     $Color=Get-DeckQuotaColor $Quota
     $grid=[Windows.Controls.Grid]::new(); $grid.Margin='0,6,0,0'
-    foreach($width in @('48','*','42')){$col=[Windows.Controls.ColumnDefinition]::new(); $col.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$grid.ColumnDefinitions.Add($col)}
-    $label=New-DeckText $Quota.Label '#8898AD' 10; $label.VerticalAlignment='Center'; [void]$grid.Children.Add($label)
+    foreach($width in @('52','*','42','Auto')){$col=[Windows.Controls.ColumnDefinition]::new(); $col.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$grid.ColumnDefinitions.Add($col)}
+    $label=New-DeckText (Get-DeckQuotaLabel $Quota) '#8898AD' 10; $label.VerticalAlignment='Center'; [void]$grid.Children.Add($label)
     $track=[Windows.Controls.Grid]::new(); $track.Height=3; $track.Background='#2A3443'; $track.VerticalAlignment='Center'; $track.Margin='4,0,8,0'
     $value=if($null -eq $Quota.RemainingPct){0}else{[Math]::Max(0,[Math]::Min(100,[double]$Quota.RemainingPct))}
     foreach($width in @($value,(100-$value))){$col=[Windows.Controls.ColumnDefinition]::new(); $col.Width=[Windows.GridLength]::new($width,[Windows.GridUnitType]::Star); [void]$track.ColumnDefinitions.Add($col)}
@@ -83,6 +97,8 @@ function New-DeckQuotaTrack($Quota,[string]$Color) {
     [Windows.Controls.Grid]::SetColumn($track,1); [void]$grid.Children.Add($track)
     $percent=if($null -eq $Quota.RemainingPct){'?'}else{[string]$Quota.RemainingPct+'%'}
     $text=New-DeckText $percent $Color 11; $text.TextAlignment='Right'; [Windows.Controls.Grid]::SetColumn($text,2); [void]$grid.Children.Add($text)
+    $reset=New-DeckText $(if($ShowReset){Format-DeckQuotaReset $Quota}else{''}) '#8293AA' 10; $reset.Margin='8,0,0,0'; $reset.VerticalAlignment='Center'; $reset.TextWrapping='NoWrap'; [Windows.Controls.Grid]::SetColumn($reset,3); [void]$grid.Children.Add($reset)
+    $grid.Resources['ResetText']=$reset
     return $grid
 }
 function Save-DeckView {
@@ -232,7 +248,8 @@ function New-DeckHealthSummary([string]$Name,$Record,[int]$Size=10,$Existing=$nu
     if($settings.ShowQuota){foreach($quota in $Record.Windows){
         $expired=$quota.ResetsAtUnix -and [long]$quota.ResetsAtUnix -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         $pct=if($null -eq $quota.RemainingPct){'?'}else{[string]$quota.RemainingPct+'%'}
-        $run=[Windows.Documents.Run]::new('  '+$quota.Label+' '+$pct+$(if($expired){'*'}else{''}))
+        $reset=if($settings.ShowResets -and (-not $widget -or $settings.WidgetShowResets)){' '+(Format-DeckQuotaReset $quota)}else{''}
+        $run=[Windows.Documents.Run]::new('  '+(Get-DeckQuotaLabel $quota)+' '+$pct+$(if($expired){'*'}else{''})+$reset)
         $run.Foreground=Get-DeckQuotaColor $quota; [void]$text.Inlines.Add($run)
     }}
     $suffix=if($tasks.ContainsKey($Name) -or $manualChecks.ContainsKey($Name)){' · checking'}elseif($Record.Error){' · check failed'}else{''}
@@ -251,18 +268,7 @@ function New-DeckWidgetDetails([string]$Name) {
     [void]$stack.Children.Add((New-DeckText ((Get-DeckHealth $Row)+' · percentages remaining; * reset passed, check again') '#929CA4' 10))
     if($Row.Error){[void]$stack.Children.Add((New-DeckText ('Last check failed: '+$Row.Error) '#DCB675' 10))}
     if($settings.ShowQuota){
-        foreach($quota in $Row.Windows){[void]$stack.Children.Add((New-DeckQuotaTrack $quota $color))}
-    }
-    if($settings.ShowResets -and $settings.WidgetShowResets){
-        $parts=@(); $tips=@()
-        foreach($quota in $Row.Windows){
-            if($quota.ResetsAtUnix){
-                $at=[DateTimeOffset]::FromUnixTimeSeconds([long]$quota.ResetsAtUnix).ToLocalTime(); $delta=$at-[DateTimeOffset]::Now
-                $short=if($delta.TotalSeconds -le 0){'pending'}elseif($delta.TotalDays -ge 1){'{0}d {1}h' -f [int][Math]::Floor($delta.TotalDays),$delta.Hours}elseif($delta.TotalHours -ge 1){'{0}h {1}m' -f [int][Math]::Floor($delta.TotalHours),$delta.Minutes}else{[Math]::Max(1,[int]$delta.TotalMinutes).ToString()+'m'}
-                $parts+=$quota.Label+' '+$short; $tips+=$quota.Label+': '+$at.ToString('ddd dd MMM HH:mm zzz')
-            }
-        }
-        if($parts.Count){$reset=New-DeckText ('Reset  '+($parts -join '  /  ')) '#8293AA' 10; $reset.Margin='0,7,0,0'; [void]$stack.Children.Add($reset)}
+        foreach($quota in $Row.Windows){[void]$stack.Children.Add((New-DeckQuotaTrack $quota $color ([bool]($settings.ShowResets -and $settings.WidgetShowResets))))}
     }
     if($settings.ShowResetCredits){[void]$stack.Children.Add((New-DeckText ('Reset credits  '+(Format-DeckResetCredits $Row)) '#8293AA' 10))}
     if($settings.ShowPlan -and $plan){$stack.Children.Insert(0,(New-DeckText $plan.ToUpperInvariant() '#8394AD' 10))}
@@ -599,7 +605,7 @@ function Show-DeckSettings {
         } catch { $settingsError.Text='Settings were not saved: '+$_.Exception.Message; $settingsError.BringIntoView(); $save.Content='Save settings' }
         finally {$save.IsEnabled=$true}
     }.GetNewClosure())
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Environment=@{Membership=$poolMembership;Members=$poolMemberList;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState}}}
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState}}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -635,7 +641,7 @@ function New-DeckPanelDetails([string]$Name) {
     $status=Get-DeckHealth $row; $quotaColor='#69DEC0'
         $detailPanel=[Windows.Controls.StackPanel]::new(); $detailPanel.Margin='12,2,12,6'
         $divider=[Windows.Controls.Border]::new(); $divider.Height=1; $divider.Background='#30343A'; $divider.Margin='0,0,0,10'; [void]$detailPanel.Children.Add($divider)
-        if($settings.ShowQuota){foreach($w in $row.Windows){[void]$detailPanel.Children.Add((New-DeckQuotaTrack $w $quotaColor))}}
+        if($settings.ShowQuota){foreach($w in $row.Windows){[void]$detailPanel.Children.Add((New-DeckQuotaTrack $w $quotaColor ([bool]$settings.ShowResets)))}}
         $fields=[ordered]@{}
         $fields['Status']=$status+' · percentages remaining; * reset passed, check again'
         if($settings.ShowEmail){$fields['Email']=if($displayEmail){if($settings.MaskEmail){$displayEmail -replace '^(.).*(@.*)$','$1***$2'}else{$displayEmail}}else{'Unavailable'}}
@@ -644,7 +650,6 @@ function New-DeckPanelDetails([string]$Name) {
         if($settings.ShowSessionCount){$fields['Terminals']=[string]$connected.Count}
         if($settings.ShowModel){$fields['Model']=$profile.Model+' / '+$profile.Effort}
         if($settings.ShowUptime -and $connected.Count){$fields['Uptime']=[string][int]([DateTimeOffset]::Now-[DateTimeOffset]($connected | Sort-Object StartedAt | Select-Object -First 1).StartedAt).TotalMinutes+' min'}
-        if($settings.ShowResets){foreach($w in $row.Windows){if($w.ResetsAtUnix){$fields[$w.Label+' reset']=[DateTimeOffset]::FromUnixTimeSeconds([long]$w.ResetsAtUnix).ToLocalTime().ToString('ddd dd MMM · HH:mm')}}}
         if($settings.ShowCheckedAt){$fields['Last check']=if($row.CheckedAt){([DateTimeOffset]$row.CheckedAt).ToLocalTime().ToString('dd MMM · HH:mm')}else{'Not checked'}}
         if($settings.ShowSource){$fields['Source']=if($row.Source){$row.Source}else{'Not checked'}}
         if($settings.ShowProcessIds){$fields['Process IDs']=($connected | ForEach-Object ProcessId)-join ', '}
@@ -986,7 +991,8 @@ try{
         $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
         if ($headers -notcontains 'Environments') { throw 'Environment sharing Settings tab missing.' }
         $environmentUI=$settingsTest.Environment
-        if($environmentUI.Membership.Items.Count -ne 4 -or $environmentUI.Members.Visibility -ne 'Collapsed'){throw 'Membership dropdown/default visibility failed.'}
+        if($environmentUI.Name.Text -ne 'pool' -or $environmentUI.Name.SelectedItem -ne 'pool'){throw 'Environment picker did not select its default pool.'}
+        if($environmentUI.Membership.Items.Count -ne 4 -or $environmentUI.Membership.SelectedIndex -ne 0 -or $environmentUI.Mode.SelectedItem -ne 'Ordered' -or $environmentUI.Members.Visibility -ne 'Collapsed'){throw 'Membership/rotation defaults failed.'}
         $environmentUI.Membership.SelectedIndex=3
         if($environmentUI.Members.Visibility -ne 'Visible'){throw 'Selected membership did not reveal account list.'}
         $environmentUI.Membership.SelectedIndex=1
@@ -1055,6 +1061,11 @@ try{
         if($folderUI.PathBox.Text -ne $HOME -or $folderUI.Folders.Items.Count -eq 0){throw 'Folder picker initialization failed.'}
         $folderUI.Dialog.Close()
         if(-not $settings.WidgetOneLine){throw 'One-line widget entries must default on'}
+        $quotaReset=[DateTimeOffset]::Now.AddHours(3).ToString('HH:mm')
+        $healthText=((New-DeckHealthSummary 'account1' $cache.account1 9).Inlines | ForEach-Object Text) -join ''
+        if($healthText -notmatch [regex]::Escape($quotaReset)){throw 'Collapsed usage omitted its adjacent reset time.'}
+        $quotaTrack=New-DeckQuotaTrack $cache.account1.Windows[0] '#69DEC0' $true
+        if($quotaTrack.Resources['ResetText'].Text -notmatch [regex]::Escape($quotaReset)){throw 'Expanded usage meter omitted its adjacent reset time.'}
         $single=New-DeckWidgetCard 'account1' $cache.account1 $profiles.account1 1
         $single.Measure([Windows.Size]::new(220,[double]::PositiveInfinity))
         if([Windows.Controls.Grid]::GetRow($single.Resources['HealthSummary']) -ne 0){throw 'Widget summary is not inline'}

@@ -27,6 +27,12 @@ function Format-DeckTerminalQuota($Window) {
     $bars = [int][Math]::Floor($pct / 10)
     return '[{0}{1}] {2,3}%' -f ('#' * $bars), ('-' * (10 - $bars)), [int]$pct
 }
+function Format-DeckTerminalReset($Window) {
+    if(-not $Window -or -not $Window.ResetsAtUnix){return '-'}
+    $at=[DateTimeOffset]::FromUnixTimeSeconds([long]$Window.ResetsAtUnix).ToLocalTime()
+    if($at -le [DateTimeOffset]::Now){return 'due'}
+    return $at.ToString('MMM dd HH:mm')
+}
 function Get-DeckTerminalHealth($Record) {
     if (-not $Record) { return 'Not checked' }
     if ($Record.Error -or $Record.Status -eq 'error') { return 'Check failed' }
@@ -44,7 +50,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     Add-Line ('  {0} accounts   /   {1} connected sessions   /   {2} checking' -f $Names.Count, @($Sessions).Count, $Tasks.Count) 'DarkGray'
     Add-Line '  Usage remaining  |  cached instantly, fresh checks in background' 'DarkGray'
     Add-Line ('  Filter: {0}' -f $(if ($Filter) { $Filter } else { 'all accounts  (/ to search)' })) 'Cyan'
-    Add-Line ('  {0,-18} {1,-9} {2,-18} {3,-18} {4}' -f 'ACCOUNT','PLAN','PRIMARY','WEEKLY','STATE') 'DarkGray'
+    Add-Line ('  {0,-18} {1,-9} {2,-18} {3,-18} {4,-14} {5}' -f 'ACCOUNT','PLAN','PRIMARY','WEEKLY','STATE','NEXT RESET') 'DarkGray'
     $pageSize = [Math]::Max(1, $Height - 18)
     $start = [int]([Math]::Floor($Selected / $pageSize) * $pageSize)
     for ($i = $start; $i -lt [Math]::Min($Names.Count, $start + $pageSize); $i++) {
@@ -58,7 +64,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
         $marker = if ($i -eq $Selected) { '>' } else { ' ' }
         $color = if ($state -eq 'Ready') { 'Green' } elseif ($state -in @('Check failed','Exhausted')) { 'Yellow' } else { 'Gray' }
         $bg = if ($i -eq $Selected) { 'DarkBlue' } else { 'Black' }
-        Add-Line ('{0} {1,-18} {2,-9} {3,-18} {4,-18} {5}' -f $marker,(ConvertTo-DeckTerminalText $name 18),(ConvertTo-DeckTerminalText $profile.PlanType 9),(Format-DeckTerminalQuota $five),(Format-DeckTerminalQuota $week),$state) $color $bg
+        Add-Line ('{0} {1,-18} {2,-9} {3,-18} {4,-18} {5,-14} {6}' -f $marker,(ConvertTo-DeckTerminalText $name 18),(ConvertTo-DeckTerminalText $profile.PlanType 9),(Format-DeckTerminalQuota $five),(Format-DeckTerminalQuota $week),(ConvertTo-DeckTerminalText $state 14),(Format-DeckTerminalReset $five)) $color $bg
     }
     if (-not $Names.Count) { Add-Line '  No matching accounts. Press N to create one, or / to change the filter.' 'Yellow' }
     Add-Line ('  -- {0}-{1} of {2} --' -f ([Math]::Min($start + 1,$Names.Count)),([Math]::Min($start + $pageSize,$Names.Count)),$Names.Count) 'DarkGray'

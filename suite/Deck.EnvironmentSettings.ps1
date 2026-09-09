@@ -16,7 +16,7 @@ $environmentNames=if($SmokeTest){@('pool','account1','account2')}else{@(Get-Deck
 foreach($entryName in $environmentNames) {
     if (($SmokeTest -and $entryName -eq 'pool') -or (-not $SmokeTest -and (Get-DeckPoolEntry $suite $entryName))) { [void]$poolNameBox.Items.Add($entryName) }
 }
-$poolNameBox.Text=if($poolNameBox.Items.Count){[string]$poolNameBox.Items[0]}else{'pool'}
+if($poolNameBox.Items.Count){$poolNameBox.SelectedIndex=0; $poolNameBox.Text=[string]$poolNameBox.SelectedItem}else{$poolNameBox.Text='pool'}
 [void]$environmentPanel.Children.Add($poolNameBox)
 Add-DeckEnvironmentLabel 'Quota accounts'
 $poolMembership=[Windows.Controls.ComboBox]::new()
@@ -41,7 +41,9 @@ $rememberPool={
 $loadPool={
     $environmentState.Loading=$true
     try {
-        $name=$poolNameBox.Text.Trim(); $draft=$environmentState.Pools[$name]
+        $name=$poolNameBox.Text.Trim()
+        if(-not $name -and $poolNameBox.SelectedItem){$name=[string]$poolNameBox.SelectedItem; $poolNameBox.Text=$name}
+        $draft=$environmentState.Pools[$name]
         $entry=if(-not $SmokeTest -and $name){Get-DeckPoolEntry $suite $name}
         $members=if($draft){@($draft.Members)}elseif($entry){@($entry.Accounts)}else{@('*')}
         $poolMembership.SelectedIndex=if(($members -join ',') -eq '*'){0}elseif(($members -join ',') -eq '*free'){1}elseif(($members -join ',') -eq '*paid'){2}else{3}

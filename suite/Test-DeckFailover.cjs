@@ -9,7 +9,7 @@ const row = (pct, age = 0) => ({Status:'available', CheckedAt:new Date(Date.now(
 async function main() {
   assert.deepEqual(rank(['a','b','c'], {a:row(30),b:row(80),c:row(90,310000)}), ['b','a']);
   assert.equal(quotaRejected(429,quota),true);
-  for (const [status,body] of [[401,quota],[500,quota],[429,'{"error":{"type":"rate_limit_exceeded"}}'],[429,'invalid']]) assert.equal(quotaRejected(status,body),false);
+  for (const [status,body,expected] of [[401,quota,false],[500,quota,false],[429,'{"error":{"type":"rate_limit_exceeded"}}',true],[429,'invalid',false]]) assert.equal(quotaRejected(status,body),expected);
   let behavior, seen = [], reports = [];
   const upstream = http.createServer(async (req,res) => {
     const parts=[]; for await (const part of req) parts.push(part);
@@ -35,17 +35,20 @@ async function main() {
     await (await send(url)).text(); assert.equal(seen.at(-1).account,'b');
     assert.equal((await send(url,{previous_response_id:'created-on-b'})).status,200);
     assert.equal(seen.at(-1).account,'b','The active account must be able to use its own response history after switching');
+    url=await start(); result=await send(url,{input:[{encrypted_content:'portable-history'}]});
+    assert.equal(result.status,200); assert.deepEqual(seen.map(r=>r.account),['a','b'],'Encrypted stateless history must rotate after quota rejection');
     behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
     url=await start(); assert.equal((await send(url)).status,429); assert.deepEqual(seen.map(r=>r.account),['a','b','c']);
     await send(url); assert.equal(seen.length,3,'Exhausted pool must not loop');
-    for (const [status,body] of [[401,quota],[500,quota],[429,'{"error":{"type":"rate_limit_exceeded"}}']]) {
+    for (const [status,body] of [[401,quota],[500,quota]]) {
       behavior=(_req,res)=>{res.writeHead(status);res.end(body);}; url=await start();
       assert.equal((await send(url)).status,status); assert.equal(seen.length,1);
     }
     behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
-    for (const body of [{previous_response_id:'r1'},{input:[{type:'item_reference',id:'r1'}]},{input:[{encrypted_content:'opaque'}]},{input:[{file_id:'file1'}]}]) {
+    for (const body of [{previous_response_id:'r1'},{input:[{type:'item_reference',id:'r1'}]},{input:[{file_id:'file1'}]}]) {
       url=await start(); assert.equal((await send(url,body)).status,409); assert.equal(seen.length,1);
     }
+    url=await start(); assert.equal((await send(url,{input:[{encrypted_content:'portable'}]})).status,429); assert.equal(seen.length,3);
     behavior=(_req,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write('data: partial\n\n');setTimeout(()=>res.destroy(),25);};
     url=await start(); result=await send(url); await assert.rejects(result.text()); assert.equal(seen.length,1,'Interrupted stream must not replay');
     behavior=(_req,res)=>res.destroy(); url=await start(); assert.equal((await send(url)).status,502); assert.equal(seen.length,1);
@@ -77,8 +80,8 @@ async function main() {
     assert.equal((await compact(url,{input:[{encrypted_content:'created-on-b'}]})).status,200);
     assert.equal(seen.at(-1).account,'b','Compaction after switching must reach the active account');
     behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
-    url=await start(); assert.equal((await compact(url,{input:[{encrypted_content:'opaque'}]})).status,409);
-    assert.equal(seen.length,1,'Opaque compact history must not be retried on another account');
+    url=await start(); assert.equal((await compact(url,{input:[{encrypted_content:'portable'}]})).status,429);
+    assert.equal(seen.length,3,'Encrypted compact history must try the configured pool');
     behavior=(_req,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write('data: waiting\n\n');};
     url=await start(); const controller=new AbortController();
     result=await fetch(url+'/responses',{method:'POST',body:'{}',signal:controller.signal});
