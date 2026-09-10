@@ -165,7 +165,7 @@ Paths below are relative to your Windows user profile:
 | --- | --- |
 | `.codex-loop/accounts/` | Per-account sign-ins, configuration and Codex data |
 | `.codex-loop/deleted-accounts/` | Recoverable removed profiles |
-| `.codex-loop/deck/` | Preferences, usage caches, session records and warm-up history |
+| `.codex-loop/deck/` | Preferences, usage caches, session and exit records, and warm-up history |
 | `.local/bin/` | Installed command wrappers |
 
 Email masking affects the display, not the saved cache. Recovery copies can contain sign-ins. Keep live installation data and account exports out of GitHub; see [SECURITY.md](SECURITY.md).

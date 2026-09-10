@@ -645,6 +645,156 @@ function Use-CodexNodePath {
     }
 }
 
+function ConvertTo-DeckWindowsArgument([AllowEmptyString()][string]$Value) {
+    if ($null -eq $Value) { $Value = '' }
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
+    $quoted = [Text.StringBuilder]::new()
+    [void]$quoted.Append('"')
+    $slashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') { $slashes++; continue }
+        if ($character -eq '"') {
+            [void]$quoted.Append(('\' * ($slashes * 2 + 1)))
+            [void]$quoted.Append('"')
+            $slashes = 0
+            continue
+        }
+        if ($slashes) { [void]$quoted.Append(('\' * $slashes)); $slashes = 0 }
+        [void]$quoted.Append($character)
+    }
+    if ($slashes) { [void]$quoted.Append(('\' * ($slashes * 2))) }
+    [void]$quoted.Append('"')
+    return $quoted.ToString()
+}
+
+function Invoke-DeckCodex([string[]]$Arguments) {
+    $resolved = Get-Command codex -ErrorAction Stop | Select-Object -First 1
+    if ($resolved.CommandType -ne 'ExternalScript' -or -not (Test-Path -LiteralPath $resolved.Source -PathType Leaf)) {
+        # Nonstandard installations retain the ordinary PowerShell resolution
+        # path. This also keeps function-based test harnesses supported. The
+        # Windows npm launcher normally takes the isolated path below.
+        & $resolved @Arguments
+        return
+    }
+    $launcher = $resolved
+    if (-not ('CodexDeckNativeProcess' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class CodexDeckNativeProcess {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct STARTUPINFO {
+        public int cb;
+        public string lpReserved;
+        public string lpDesktop;
+        public string lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_INFORMATION {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcess(
+        string applicationName,
+        StringBuilder commandLine,
+        IntPtr processAttributes,
+        IntPtr threadAttributes,
+        bool inheritHandles,
+        uint creationFlags,
+        IntPtr environment,
+        string currentDirectory,
+        ref STARTUPINFO startupInfo,
+        out PROCESS_INFORMATION processInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    public static int Run(string applicationName, string commandLine) {
+        STARTUPINFO startup = new STARTUPINFO();
+        startup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+        PROCESS_INFORMATION process;
+        const uint CREATE_NEW_PROCESS_GROUP = 0x00000200;
+        if (!CreateProcess(applicationName, new StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero,
+                true, CREATE_NEW_PROCESS_GROUP, IntPtr.Zero, null, ref startup, out process)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not start Codex.");
+        }
+        try {
+            if (WaitForSingleObject(process.hProcess, 0xFFFFFFFF) == 0xFFFFFFFF) {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not wait for Codex.");
+            }
+            uint exitCode;
+            if (!GetExitCodeProcess(process.hProcess, out exitCode)) {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not read the Codex exit code.");
+            }
+            return unchecked((int)exitCode);
+        } finally {
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        }
+    }
+}
+'@
+    }
+    # Codex and its local-command descendants get their own console process
+    # group. This prevents a control event in that tree from cancelling the
+    # outer dashboard PowerShell that is synchronously waiting for the session.
+    $powerShell = (Get-Command powershell.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $commandParts = @($powerShell,'-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$launcher.Source) + @($Arguments)
+    $commandLine = ($commandParts | ForEach-Object { ConvertTo-DeckWindowsArgument ([string]$_) }) -join ' '
+    $global:LASTEXITCODE = [CodexDeckNativeProcess]::Run($powerShell, $commandLine)
+}
+
+function Write-DeckSessionExit([string]$DeckRoot, [string]$Environment, [int]$ExitCode, $StartedAt, [bool]$ProxyExitedEarly, $ProxyExitCode, [string]$ActiveAccount) {
+    try {
+        [void][IO.Directory]::CreateDirectory($DeckRoot)
+        $path = Join-Path $DeckRoot 'session-exits.jsonl'
+        $entry = [ordered]@{
+            At = [DateTimeOffset]::Now.ToString('o')
+            StartedAt = $StartedAt.ToString('o')
+            Environment = $Environment
+            ActiveAccount = $ActiveAccount
+            ExitCode = $ExitCode
+            ProxyExitedEarly = $ProxyExitedEarly
+            ProxyExitCode = $ProxyExitCode
+        }
+        [IO.File]::AppendAllText($path, (($entry | ConvertTo-Json -Compress) + "`r`n"), [Text.UTF8Encoding]::new($false))
+        if ((Get-Item -LiteralPath $path).Length -gt 262144) {
+            $tail = @(Get-Content -LiteralPath $path -Tail 200)
+            [IO.File]::WriteAllLines($path, $tail, [Text.UTF8Encoding]::new($false))
+        }
+    } catch {
+        # Diagnostics must never prevent the account session from closing.
+    }
+}
+
 $runtimeRoot = Split-Path -Parent $accountsRoot
 $environmentModule = Join-Path $runtimeRoot 'Deck.Environments.ps1'
 if (-not (Test-Path -LiteralPath $environmentModule)) { $environmentModule = Join-Path $PSScriptRoot '../suite/Deck.Environments.ps1' }
@@ -825,6 +975,8 @@ try {
 } catch { Write-Warning "Codex Deck could not attach: $($_.Exception.Message)" }
 $failoverProxy = $null
 $failoverSessions = @()
+$codexExitCode = -1
+$codexStartedAt = [DateTimeOffset]::Now
 try {
     if ($useRoutingProxy) {
         $environmentMembers = if ($poolConversation) { @($members) } else { @() }
@@ -837,18 +989,31 @@ try {
         $env:CODEX_DECK_SESSION_URL = $failoverProxy.BaseUrl
         $launchArgs = @($sharedArgs) + @($CodexArgs) + @($globalRuleArgs) + @(Get-DeckFailoverArguments $failoverProxy.BaseUrl -NoAccountAuth:([bool]$poolEntry))
         $launchArgs=@(ConvertTo-DeckCodexArguments $launchArgs)
-        & codex @launchArgs
-    } else { $launchArgs=@(ConvertTo-DeckCodexArguments (@($sharedArgs)+@($CodexArgs)+@($globalRuleArgs))); & codex @launchArgs }
-    $codexExitCode = $LASTEXITCODE
+        Invoke-DeckCodex $launchArgs
+        $codexExitCode = $LASTEXITCODE
+    } else {
+        $launchArgs=@(ConvertTo-DeckCodexArguments (@($sharedArgs)+@($CodexArgs)+@($globalRuleArgs)))
+        Invoke-DeckCodex $launchArgs
+        $codexExitCode = $LASTEXITCODE
+    }
 } finally {
     $env:CODEX_HOME = $originalCodexHome
     $env:CODEX_DECK_SESSION_URL = $originalDeckSessionUrl
+    $proxyExitedEarly = $false
+    $proxyExitCode = $null
+    $activeAccount = $accountName
     if ($failoverProxy) {
+        $proxyExitedEarly = $failoverProxy.Process.HasExited
+        if ($proxyExitedEarly) { $proxyExitCode = $failoverProxy.Process.ExitCode }
+        else {
+            try { $activeAccount = [string](Invoke-RestMethod -Uri ($failoverProxy.BaseUrl + '/_deck/account') -Method Get -TimeoutSec 2).failover.active } catch {}
+        }
         if ($failoverProxy.InputWriter) { $failoverProxy.InputWriter.Dispose() }
         else { $failoverProxy.Process.StandardInput.Close() }
         if (-not $failoverProxy.Process.WaitForExit(2000)) { $failoverProxy.Process.Kill() }
         $failoverProxy.Process.Dispose()
     }
+    Write-DeckSessionExit (Join-Path $suiteRoot 'deck') $accountName $codexExitCode $codexStartedAt $proxyExitedEarly $proxyExitCode $activeAccount
     foreach ($marker in $failoverSessions) { Remove-Item -LiteralPath $marker -ErrorAction SilentlyContinue }
     if ($deckSession -and (Test-Path -LiteralPath $deckSession)) {
         Remove-Item -LiteralPath $deckSession -ErrorAction SilentlyContinue

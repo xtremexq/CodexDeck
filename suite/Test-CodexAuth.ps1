@@ -4,13 +4,32 @@ if (-not (Test-Path -LiteralPath $sourcePath)) { $sourcePath=Join-Path $PSScript
 $tokens=$null; $errors=$null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($sourcePath, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors -join '; ') }
-foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Normalize-AccountName','Ensure-FreeAccountDefaults','Read-TextFile','Write-TextFile','Normalize-Newlines') {
+foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Normalize-AccountName','Ensure-FreeAccountDefaults','Read-TextFile','Write-TextFile','Normalize-Newlines','ConvertTo-DeckWindowsArgument','Invoke-DeckCodex','Write-DeckSessionExit') {
     $definition=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $true)
     . ([scriptblock]::Create($definition.Extent.Text))
+}
+if ((ConvertTo-DeckWindowsArgument '') -ne '""' -or
+    (ConvertTo-DeckWindowsArgument 'plain') -ne 'plain' -or
+    (ConvertTo-DeckWindowsArgument 'two words') -ne '"two words"' -or
+    (ConvertTo-DeckWindowsArgument 'model_provider="openai"') -ne '"model_provider=\"openai\""' -or
+    (ConvertTo-DeckWindowsArgument 'C:\path with space\') -ne '"C:\path with space\\"') {
+    throw 'Windows Codex argument quoting failed.'
 }
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('codex-auth-test-' + [guid]::NewGuid().ToString('N'))
 $accountsRoot = Join-Path $fixture 'accounts'
 New-Item -ItemType Directory -Path (Join-Path $accountsRoot 'account1') -Force | Out-Null
+$mockLauncher=Join-Path $fixture 'codex.ps1'
+$mockResult=Join-Path $fixture 'codex-arguments.json'
+[IO.File]::WriteAllText($mockLauncher, '[IO.File]::WriteAllText($env:CODEX_DECK_TEST_ARGUMENTS,($args | ConvertTo-Json -Compress)); exit 23', [Text.UTF8Encoding]::new($false))
+$oldPath=$env:PATH; $oldResult=$env:CODEX_DECK_TEST_ARGUMENTS
+try {
+    $env:PATH=$fixture+';'+$oldPath
+    $env:CODEX_DECK_TEST_ARGUMENTS=$mockResult
+    Invoke-DeckCodex @('two words','model_provider="openai"','C:\path with space\')
+    $isolatedExit=$LASTEXITCODE
+} finally { $env:PATH=$oldPath; $env:CODEX_DECK_TEST_ARGUMENTS=$oldResult }
+$isolatedArguments=Get-Content -LiteralPath $mockResult -Raw | ConvertFrom-Json
+if($isolatedExit -ne 23 -or ($isolatedArguments -join '|') -ne 'two words|model_provider="openai"|C:\path with space\'){throw ('Isolated Codex launch lost arguments or exit status: exit={0}; args={1}' -f $isolatedExit,($isolatedArguments -join '|'))}
 Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $accountsRoot 'account1/marker.ps1')
 foreach ($name in @('..', '../outside', 'C:\Windows', 'missing')) {
     $failed=$false
@@ -44,4 +63,8 @@ foreach ($plan in 'plus','free') {
 $before=Read-TextFile (Join-Path $newAccount 'config.toml')
 Ensure-FreeAccountDefaults $newAccount
 if ((Read-TextFile (Join-Path $newAccount 'config.toml')) -ne $before) { throw 'Defaults not idempotent' }
-Write-Output "PASS: removal, recovery, traversal, missing targets, and plan-aware new-account defaults. Fixture: $fixture"
+$started=[DateTimeOffset]::Now.AddMinutes(-1)
+Write-DeckSessionExit (Join-Path $fixture 'deck') 'account2' 17 $started $true 9 'account7'
+$exitRecord=(Get-Content -LiteralPath (Join-Path $fixture 'deck/session-exits.jsonl') -Raw | ConvertFrom-Json)
+if($exitRecord.Environment -ne 'account2' -or $exitRecord.ActiveAccount -ne 'account7' -or $exitRecord.ExitCode -ne 17 -or -not $exitRecord.ProxyExitedEarly -or $exitRecord.ProxyExitCode -ne 9){throw 'Session exit diagnostics incomplete'}
+Write-Output "PASS: removal, recovery, traversal, quoting, exit diagnostics, missing targets, and plan-aware new-account defaults. Fixture: $fixture"

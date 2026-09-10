@@ -33,11 +33,28 @@ function Format-DeckTerminalReset($Window) {
     if($at -le [DateTimeOffset]::Now){return 'due'}
     return $at.ToString('MMM dd HH:mm')
 }
+function Get-DeckTerminalResetWindow($Record, $PrimaryWindow) {
+    if (-not $Record) { return $PrimaryWindow }
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $blocking = @($Record.Windows | Where-Object {
+        (-not $_.ResetsAtUnix -or [long]$_.ResetsAtUnix -gt $now) -and
+        ($_.Dead -or ($null -ne $_.RemainingPct -and [double]$_.RemainingPct -le 0))
+    })
+    if ($blocking.Count) {
+        # When one or more current windows block requests, only their reset can
+        # make the account usable. Do not show an earlier, healthy 5-hour reset.
+        return @($blocking | Where-Object ResetsAtUnix | Sort-Object { [long]$_.ResetsAtUnix } | Select-Object -First 1)
+    }
+    if ($PrimaryWindow) { return $PrimaryWindow }
+    return @($Record.Windows | Where-Object ResetsAtUnix | Sort-Object { [long]$_.ResetsAtUnix } | Select-Object -First 1)
+}
 function Get-DeckTerminalHealth($Record) {
     if (-not $Record) { return 'Not checked' }
     if ($Record.Error -or $Record.Status -eq 'error') { return 'Check failed' }
-    if (@($Record.Windows | Where-Object { $_.ResetsAtUnix -and [long]$_.ResetsAtUnix -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }).Count) { return 'Reset passed' }
-    if (@($Record.Windows | Where-Object { $_.Dead -or ($null -ne $_.RemainingPct -and $_.RemainingPct -le 0) }).Count) { return 'Exhausted' }
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $current = @($Record.Windows | Where-Object { -not $_.ResetsAtUnix -or [long]$_.ResetsAtUnix -gt $now })
+    if (@($current | Where-Object { $_.Dead -or ($null -ne $_.RemainingPct -and [double]$_.RemainingPct -le 0) }).Count) { return 'Exhausted' }
+    if (@($Record.Windows).Count -gt $current.Count) { return 'Reset passed' }
     if ($Record.Status -ne 'available') { return 'Unavailable' }
     return 'Ready'
 }
@@ -64,7 +81,8 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
         $marker = if ($i -eq $Selected) { '>' } else { ' ' }
         $color = if ($state -eq 'Ready') { 'Green' } elseif ($state -in @('Check failed','Exhausted')) { 'Yellow' } else { 'Gray' }
         $bg = if ($i -eq $Selected) { 'DarkBlue' } else { 'Black' }
-        Add-Line ('{0} {1,-18} {2,-9} {3,-18} {4,-18} {5,-14} {6}' -f $marker,(ConvertTo-DeckTerminalText $name 18),(ConvertTo-DeckTerminalText $profile.PlanType 9),(Format-DeckTerminalQuota $five),(Format-DeckTerminalQuota $week),(ConvertTo-DeckTerminalText $state 14),(Format-DeckTerminalReset $five)) $color $bg
+        $resetWindow = Get-DeckTerminalResetWindow $row $five
+        Add-Line ('{0} {1,-18} {2,-9} {3,-18} {4,-18} {5,-14} {6}' -f $marker,(ConvertTo-DeckTerminalText $name 18),(ConvertTo-DeckTerminalText $profile.PlanType 9),(Format-DeckTerminalQuota $five),(Format-DeckTerminalQuota $week),(ConvertTo-DeckTerminalText $state 14),(Format-DeckTerminalReset $resetWindow)) $color $bg
     }
     if (-not $Names.Count) { Add-Line '  No matching accounts. Press N to create one, or / to change the filter.' 'Yellow' }
     Add-Line ('  -- {0}-{1} of {2} --' -f ([Math]::Min($start + 1,$Names.Count)),([Math]::Min($start + $pageSize,$Names.Count)),$Names.Count) 'DarkGray'

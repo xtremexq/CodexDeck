@@ -39,6 +39,8 @@
 
 ## Unreleased (local only)
 
+- Show the reset for the quota window that currently blocks an account, including weekly exhaustion when primary quota remains.
+- Isolate dashboard-launched Codex sessions from console control events and keep bounded exit diagnostics for unexpected returns to the dashboard.
 - Added local-only `!account`, `!pool`, `!check`, and `!usage` commands for session routing and active-route usage; removed the short-lived AI-backed skill versions.
 - Enabled manual `!account` switching in ordinary signed-in sessions even with automatic failover Off, and transparently forwarded safe Codex extension endpoints through the active account.
 - Removed unsolicited failover banner/switch output from the full-screen Codex terminal.
