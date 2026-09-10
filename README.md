@@ -108,15 +108,15 @@ Run **`codex-deck`**, or press **D** in the terminal dashboard.
 - Switch between the **panel** and **widget**, then expand account rows for more detail.
 - **Settings** controls appearance, visible fields, email masking, automatic checks and warm-up.
 - The panel appears in the taskbar; the widget and Settings stay out of it. Use **Minimize** to minimize the panel.
-- Closing the window normally hides it to the tray. **Quit** stops Deck's monitoring without closing your Codex terminals.
+- Closing the window normally hides it to the tray. **Quit** stops the Deck UI and ordinary live checks without closing your Codex terminals; enabled automatic warm-up continues through its clearly named Windows Scheduled Task.
 
 Desktop automatic checks are off by default. Enable them in Settings if you want continued polling. Terminal startup checks and desktop polling are separate controls.
 
 ### Optional warm-up
 
-Warm-up is off by default and requires eligible account selection. It runs independently of ordinary automatic checks and connected terminals, while Deck remains open or in the tray. After observing an eligible paid account's five-hour reset and verifying fresh zero usage, Deck can send a small prompt after a grace period. It skips unsupported plans, unavailable quotas and missed reset windows, and records attempts to avoid repeats.
+Warm-up is off by default and requires eligible account selection. It runs independently of ordinary automatic checks, connected terminals, and the Deck UI. A visible per-user Windows task named **CodexDeck Automatic Warm-up** wakes a short-lived headless worker at sign-in, configured daily times, and the next known reset. The worker checks all selected paid accounts, warms only eligible ones, refreshes warmed accounts to capture their real next reset times, records a concise local log, reschedules itself, and exits.
 
-In the terminal dashboard, **W** toggles the selected account and **P** pauses or resumes all warm-ups. The shared tray scheduler continues after the dashboard closes. In the GUI, right-click an account for the same controls or use Settings for all paid accounts, model and reset timing. Expanded account details and the terminal show the next check or why warm-up is waiting. Quit Deck from the tray to stop scheduling.
+In the terminal dashboard, **W** toggles the selected account and **P** pauses or resumes all warm-ups. In the GUI, right-click an account for the same controls or use Settings for all paid accounts, model and reset timing. Deck can be completely closed. Disable the warm-up master switch to remove its scheduled task. Worker status and the bounded text log live in `.codex-loop/deck/warmup-worker.json` and `warmup-worker.log`.
 
 **Warm-up consumes real quota.** A successful prompt does not guarantee that a new usage timer starts. Leave it disabled if you only want monitoring.
 
@@ -138,6 +138,20 @@ codex-check -Account account1    # Check one account
 codex-check -Json                # Machine-readable usage report
 codex-check -NoColor             # Plain-text usage report
 ```
+
+Inside any signed-in `codex-auth` conversation, use Codex's local shell
+prefix: `!account`, `!pool`, `!usage`, or `!check`. These commands run locally
+and do not submit a prompt or consume a model turn. Account first lets you choose
+the session's selectable accounts or, in a named environment, its current pool
+by printing numbered lists. Pool prints the current-pool list directly. Switch with a second local
+command such as `!pool 2` or `!pool account7`. Usage checks
+only the account currently routing the session; Check runs the complete local
+`codex-check` report.
+Codex does not expose a third-party bare-slash extension point, so these commands
+use `!` and cannot appear as `/account` entries in the built-in command menu.
+Ordinary launches use a manual-only loopback route so `!account` works even when
+automatic failover is Off. Their `CODEX_HOME`, saved conversation, and files stay
+with the account used to launch the session; only subsequent API requests switch.
 
 Each profile has a separate `CODEX_HOME`. New profiles can inherit local configuration, rules and skills; authentication remains separate. Deletion keeps a recovery copy and refuses an account with a tracked connected terminal.
 
@@ -167,7 +181,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
 
 Close the terminal dashboard and quit desktop Deck before updating, then reopen them afterward. The installer preserves account/state directories, backs up replaced files and skips unchanged payloads.
 
-To remove Deck, quit it and remove its installed scripts and command wrappers. Keep `.codex-loop/accounts` if you want to retain your profiles and history. Only remove `.local/bin` from PATH if no other tools use it. There is no automatic account-data deletion during uninstall.
+To remove Deck, first turn off the automatic warm-up master switch (or run `Unregister-ScheduledTask -TaskName 'CodexDeck Automatic Warm-up' -Confirm:$false`), then quit it and remove its installed scripts and command wrappers. Keep `.codex-loop/accounts` if you want to retain your profiles and history. Only remove `.local/bin` from PATH if no other tools use it. There is no automatic account-data deletion during uninstall.
 
 ## Help
 

@@ -120,14 +120,13 @@ function Show-DeckTerminal {
     $selected = 0; $filter = ''; $notice = 'Ready. Fresh checks start automatically for missing or stale usage.'; $mask = $true
     $interactive = -not $Snapshot -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
     if (-not $interactive) { $notice = 'Cached snapshot. Run codex-auth in a terminal for live checks and actions.' }
-    if($interactive -and $warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}
     $oldColor = [Console]::ForegroundColor; $oldBackground = [Console]::BackgroundColor
     $oldCursor = $true
     if ($interactive) { $oldCursor = [Console]::CursorVisible; [Console]::CursorVisible = $false; Clear-Host; $lastFrame = '' }
     try {
         do {
             $warmSettings=Get-DeckSettings $root
-            $warmHistory=@{}; foreach($entry in @(Read-DeckJson (Join-Path $root 'warmup.json'))){if($entry.Account){$warmHistory[$entry.Account]=$entry}}
+            $warmHistory=@{}; foreach($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $root 'warmup.json')))){if($entry.Account){$warmHistory[$entry.Account]=$entry}}
             # Merge fresh scheduler results without starting a second warm-up executor.
             foreach($entry in (Get-DeckTerminalCache $root).Values){if(-not $cache[$entry.Account] -or [string]$entry.CheckedAt -gt [string]$cache[$entry.Account].CheckedAt){$cache[$entry.Account]=$entry}}
             $names = if (Get-Command Get-DeckEntryNames -ErrorAction SilentlyContinue) { @(Get-DeckEntryNames $SuiteRoot) } else { @(Get-ChildItem -LiteralPath $accountRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object Name) }
@@ -153,7 +152,7 @@ function Show-DeckTerminal {
                     # Separate from Deck's writer; merge both caches when reading.
                     $saved = Get-DeckTerminalCache $root
                     $saved[$name] = $result[0]
-                    Write-DeckJson (Join-Path $root 'terminal-cache.json') @($saved.Values)
+                    Write-DeckJson (Join-Path $root 'terminal-cache.json') @(Get-DeckMapValues $saved)
                     $notice = "$name refreshed."
                 } catch {
                     $notice = "$name : $($_.Exception.Message)"
@@ -249,10 +248,10 @@ function Show-DeckTerminal {
                     finally { [Console]::CursorVisible=$false; Clear-Host; $lastFrame='' }
                 }
                 'W' {
-                    try{$warmSettings=Set-DeckWarmupControl $root $name; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice='Warm-up selection saved. The tray scheduler continues after this dashboard closes.'}catch{$notice=$_.Exception.Message}
+                    try{$warmSettings=Set-DeckWarmupControl $root $name; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice='Warm-up selection saved. Windows Task Scheduler works with Deck and this dashboard closed.'}catch{$notice=$_.Exception.Message}
                 }
                 'P' {
-                    try{$warmSettings=Set-DeckWarmupControl $root -Pause; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice='Warm-up '+$(if($warmSettings.WarmupEnabled){'resumed in tray.'}else{'paused; in-flight requests may finish.'})}catch{$notice=$_.Exception.Message}
+                    try{$warmSettings=Set-DeckWarmupControl $root -Pause; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice='Warm-up '+$(if($warmSettings.WarmupEnabled){'resumed in Windows Task Scheduler.'}else{'paused; in-flight requests may finish.'})}catch{$notice=$_.Exception.Message}
                 }
                 'G' { Open-DeckGlobalRules $SuiteRoot; $notice='Global Rules editor opened.' }
                 'S' { Start-DeckCompanion $SuiteRoot -OpenSettings; $notice='Desktop Settings opened.' }
@@ -336,7 +335,7 @@ function Show-DeckPoolPicker([string]$SuiteRoot, [string]$Environment, [string[]
                     if ($row.Count -ne 1) { throw 'No matching usage result.' }
                     $row[0] | Add-Member NoteProperty CheckedAt ([DateTimeOffset]::UtcNow.ToString('o')) -Force
                     $cache[$name]=$row[0]
-                    Write-DeckJson (Join-Path $SuiteRoot 'deck/terminal-cache.json') @($cache.Values)
+                    Write-DeckJson (Join-Path $SuiteRoot 'deck/terminal-cache.json') @(Get-DeckMapValues $cache)
                     $notice="$name refreshed."
                 } catch { $notice=$_.Exception.Message }
                 finally { if ($task) { Stop-DeckTask $task; $task.Process.Dispose() } }

@@ -21,7 +21,12 @@ $launcher=[regex]::Replace($launcher,'(?m)^\$defaultConfigPath =.*$', [Text.Regu
 $harness=@'
 param([string]$Name,[string]$Member,[string]$Action,[string]$Inherit)
 function global:codex {
-    [pscustomobject]@{Environment=$env:CODEX_HOME; Arguments=@($args); HasAuth=(Test-Path -LiteralPath (Join-Path $env:CODEX_HOME 'auth.json'))} | ConvertTo-Json -Compress -Depth 5
+    $active=$null
+    if ($env:CODEX_DECK_SESSION_URL) {
+        $state=Invoke-RestMethod -Uri ($env:CODEX_DECK_SESSION_URL.TrimEnd('/')+'/_deck/account')
+        $active=$state.failover.active
+    }
+    [pscustomobject]@{Environment=$env:CODEX_HOME; Arguments=@($args); HasAuth=(Test-Path -LiteralPath (Join-Path $env:CODEX_HOME 'auth.json')); Active=$active} | ConvertTo-Json -Compress -Depth 5
     $global:LASTEXITCODE=0
 }
 $arguments=@{Account=$Name}
@@ -37,8 +42,8 @@ foreach ($member in @('','account1','account2')) {
     $output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath @launchParams
     if ($LASTEXITCODE -ne 0) { throw 'Pooled launch failed.' }
     $expectedMember=if($member){$member}else{'account1'}
-    if (-not ($output -join ' ').Contains('active: '+$expectedMember)) { throw 'Requested/default quota member was not selected.' }
     $record=($output | Where-Object { $_ -like '{"Environment":*' }) | ConvertFrom-Json
+    if ($record.Active -ne $expectedMember) { throw 'Requested/default quota member was not selected.' }
     if ($record.Environment -ne (Join-Path $fixture 'accounts/pool') -or $record.HasAuth -or -not ($record.Arguments -join ' ').Contains('requires_openai_auth=false')) { throw 'Pool did not retain its independent environment/authentication.' }
 }
 $output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -Name newaccount -Action login

@@ -39,6 +39,9 @@
 
 ## Unreleased (local only)
 
+- Added local-only `!account`, `!pool`, `!check`, and `!usage` commands for session routing and active-route usage; removed the short-lived AI-backed skill versions.
+- Enabled manual `!account` switching in ordinary signed-in sessions even with automatic failover Off, and transparently forwarded safe Codex extension endpoints through the active account.
+- Removed unsolicited failover banner/switch output from the full-screen Codex terminal.
 - Keep large account lists responsive with single-pass list rendering, retained rows per view, shared account menus, lazy expanded details, batched cache writes, and nonblocking worker output handling.
 - Independent quota health and reset freshness; successful usage remains visible after failed checks.
 - Concurrent checks with an eight-worker cap, post-list cooldown and immediate per-account checks.

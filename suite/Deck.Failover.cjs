@@ -71,28 +71,68 @@ function reply(res, status, message) {
   res.writeHead(status, { 'content-type':'application/json', 'cache-control':'no-store' });
   res.end(JSON.stringify({ error: { type:'deck_failover_error', message } }));
 }
+function replyJson(res, value) {
+  if (res.destroyed) return;
+  res.writeHead(200, { 'content-type':'application/json', 'cache-control':'no-store' });
+  res.end(JSON.stringify(value));
+}
 async function createProxy(config, dependencies = {}) {
   const pool = config.pool;
   if (!Array.isArray(pool) || !pool.length || pool.length > 200 || new Set(pool.map(n => n.toLowerCase())).size !== pool.length || !['Ordered','Best'].includes(config.mode)) throw Error('Select 1-200 distinct accounts and Ordered or Best mode.');
+  const automatic = config.automatic !== false;
+  const environmentPool = Array.isArray(config.environmentPool) ? config.environmentPool : [];
+  if (environmentPool.some(name => !pool.includes(name))) throw Error('Environment accounts must belong to the failover pool.');
   const getCredentials = dependencies.credentials || (name => credentials(config.root, name));
   const getRows = dependencies.rows || (() => cachedRows(config.root));
-  const report = dependencies.report || (name => process.stderr.write('[Deck failover] Active account: ' + name + '\n'));
+  // The full-screen Codex UI owns the terminal after launch. Account changes
+  // are queried through the control route instead of writing over the TUI.
+  const report = dependencies.report || (() => {});
   // Production never accepts an upstream address from configuration or a request.
   const upstream = dependencies.upstream || 'https://chatgpt.com/backend-api/codex';
-  for (const name of pool) getCredentials(name);
   const excluded = new Set();
   const choices = () => (config.mode === 'Best' ? rank(pool, getRows()) : pool).filter(n => !excluded.has(n));
   let current = config.owner || choices()[0];
   if (config.owner && !pool.includes(config.owner)) throw Error('Starting account is not in the pool.');
   if (!current) throw Error('No fresh usable pool account. Refresh usage first.');
+  // Automatic pools are validated up front. Manual-only sessions validate the
+  // owner now and other accounts lazily, so one damaged unused login cannot
+  // prevent an ordinary account from opening.
+  if (automatic) for (const name of pool) getCredentials(name); else getCredentials(current);
   const secret = crypto.randomBytes(32).toString('hex');
   let busy = false;
+  let lastRequestAccount = null;
+  let lastRequestRoute = null;
+  const status = () => ({
+    version: 1,
+    environment: { name:config.environment || null, pooled:environmentPool.length > 0, accounts:environmentPool },
+    failover: { automatic, mode:config.mode, accounts:pool, active:current, unavailable:[...excluded], lastRequestAccount, lastRequestRoute },
+    busy
+  });
   const server = http.createServer(async (req, res) => {
     // A capability URL, exact Host and no browser Origin prevent unauthenticated LAN/browser access.
     if (req.headers.host !== `127.0.0.1:${server.address().port}` || req.headers.origin || !req.url.startsWith('/' + secret + '/')) return reply(res, 403, 'Forbidden.');
     const route = req.url.slice(secret.length + 1);
-    if (!((req.method === 'POST' && ['/responses','/responses/compact'].includes(route)) || (req.method === 'GET' && /^\/models(?:\?[^#]*)?$/.test(route)))) return reply(res, 404, 'Unsupported failover route.');
-    const conversation = req.method === 'POST';
+    if (route === '/_deck/account') {
+      if (req.method === 'GET') return replyJson(res, status());
+      if (req.method !== 'POST') return reply(res, 404, 'Unsupported failover route.');
+      if ((req.headers['content-encoding'] || 'identity') !== 'identity') return reply(res, 415, 'The account control request must not be compressed.');
+      try {
+        const body = JSON.parse((await collect(req, 4096)).toString('utf8'));
+        const selected = pool.find(name => name.toLowerCase() === String(body.account || '').toLowerCase());
+        if (!selected) return reply(res, 400, 'Choose an account from this session.');
+        if (excluded.has(selected)) return reply(res, 409, 'That account was already rejected for quota in this session.');
+        try { getCredentials(selected); } catch { return reply(res, 409, 'That account no longer has usable file-based login credentials.'); }
+        if (selected !== current) { current = selected; report(current); }
+        return replyJson(res, status());
+      } catch { return reply(res, 400, 'Expected a small JSON account request.'); }
+    }
+    const queryAt = route.indexOf('?'), routePath = queryAt < 0 ? route : route.slice(0, queryAt);
+    // Codex extensions can use provider-relative auxiliary endpoints in
+    // addition to Responses and Models. Forward GET/POST routes to the fixed
+    // Codex upstream, but reserve Deck's namespace and never accept a caller-
+    // supplied destination. Only Responses requests are eligible for replay.
+    if (!['GET','POST'].includes(req.method) || routePath.startsWith('/_deck/') || !routePath.startsWith('/')) return reply(res, 404, 'Unsupported Deck routing request.');
+    const conversation = req.method === 'POST' && ['/responses','/responses/compact'].includes(routePath);
     if (conversation && busy) return reply(res, 409, 'Another request is active; concurrent failover requests are not supported.');
     if (conversation) busy = true;
     let outbound;
@@ -107,21 +147,36 @@ async function createProxy(config, dependencies = {}) {
         try { body = decode(body, {maxOutputLength:MAX_BODY}); } catch { return reply(res, 400, 'Invalid or oversized compressed request.'); }
       }
       let bound = false;
-      if (req.method === 'POST') {
+      if (conversation) {
         let parsed; try { parsed = JSON.parse(body); } catch { return reply(res, 400, 'Expected JSON request.'); }
         bound = accountBound(parsed);
       }
       // Let the active account validate server-stored references it owns. A 429
       // proves the request was rejected, so portable full/encrypted history can
       // be retried without duplicating an accepted response.
-      let attempts = 0;
-      while (!res.destroyed && attempts++ < pool.length) {
+      let attempts = 0, maxAttempts = conversation && automatic ? pool.length : 1;
+      while (!res.destroyed && attempts++ < maxAttempts) {
         if (excluded.has(current)) return reply(res, 429, 'Selected account quota is exhausted. Start a new session after refreshing usage.');
         const used = current, auth = getCredentials(used);
-        const headers = { 'content-type':req.headers['content-type'] || 'application/json', accept:req.headers.accept || 'text/event-stream',
-          authorization:'Bearer ' + auth.token, 'chatgpt-account-id':auth.id, 'accept-encoding':'identity', 'content-length':body.length };
-        // Do not forward cookies, client credentials, account-affinity or arbitrary destination headers.
-        for (const h of ['user-agent','originator','version','openai-beta']) if (req.headers[h]) headers[h] = req.headers[h];
+        lastRequestAccount = used;
+        lastRequestRoute = routePath;
+        const headers = {};
+        if (conversation) {
+          headers['content-type']=req.headers['content-type'] || 'application/json';
+          headers.accept=req.headers.accept || 'text/event-stream';
+          // Keep model traffic on the small header surface already accepted by
+          // the Codex backend. Client tracing/experimental headers can change
+          // independently and have caused otherwise-valid requests to be rejected.
+          for (const name of ['user-agent','originator','version','openai-beta']) if (req.headers[name]) headers[name]=req.headers[name];
+        } else {
+          const blockedHeaders = new Set(['host','authorization','chatgpt-account-id','x-account-id','x-chatgpt-account-id','openai-account-id','cookie','origin','content-length','accept-encoding','connection','proxy-connection','transfer-encoding','upgrade']);
+          for (const [name,value] of Object.entries(req.headers)) if (!blockedHeaders.has(name) && !name.startsWith('sec-') && value != null) headers[name] = value;
+        }
+        headers.authorization='Bearer ' + auth.token;
+        headers['chatgpt-account-id']=auth.id;
+        headers['accept-encoding']='identity';
+        headers['content-length']=body.length;
+        if (body.length && !headers['content-type']) headers['content-type']='application/octet-stream';
         const url = new URL(upstream + route);
         const incoming = await new Promise((resolve, reject) => {
           outbound = (url.protocol === 'https:' ? https : http).request(url, { method:req.method, headers }, resolve);
@@ -132,21 +187,25 @@ async function createProxy(config, dependencies = {}) {
           const rejected = await collect(incoming, 1024 * 1024);
           if (quotaRejected(429, rejected)) {
             excluded.add(used);
-            const next = choices()[0];
+            // A manual selection may arrive while this accepted response is
+            // streaming (for example from the Pool skill's local tool call).
+            // Preserve it for the next request unless that same account failed.
+            const next = automatic ? (current !== used && !excluded.has(current) ? current : choices()[0]) : null;
             if (next && !bound && !res.destroyed) { current = next; report(current); continue; }
-            if (bound && next) return reply(res, 409, 'Quota reached, but this request contains account-scoped history. Start a new session to change accounts.');
+            if (automatic && bound && next) return reply(res, 409, 'Quota reached, but this request contains account-scoped history. Start a new session to change accounts.');
           }
           res.writeHead(429, { 'content-type':'application/json', 'cache-control':'no-store' }); res.end(rejected); return;
         }
         const responseHeaders = { 'cache-control':'no-store' };
-        for (const h of ['content-type','content-encoding','retry-after']) if (incoming.headers[h]) responseHeaders[h] = incoming.headers[h];
+        const blockedResponseHeaders = new Set(['connection','proxy-connection','transfer-encoding','upgrade','set-cookie']);
+        for (const [name,value] of Object.entries(incoming.headers)) if (!blockedResponseHeaders.has(name) && name !== 'cache-control' && value != null) responseHeaders[name] = value;
         res.writeHead(incoming.statusCode, responseHeaders);
         res.flushHeaders();
         // Once accepted, stream directly with backpressure. Never replay even if the stream fails.
         await new Promise(resolve => pipeline(incoming, res, () => resolve()));
         return;
       }
-    } catch { reply(res, 502, 'Failover request failed. No retry was made for an ambiguous transport or credential error.'); }
+    } catch { reply(res, 502, 'Deck routing request failed. No retry was made for an ambiguous transport or credential error.'); }
     finally { if (conversation) busy = false; res.removeListener('close', cancel); }
   });
   // Codex immediately falls back to HTTP when the endpoint declines WebSockets.
@@ -170,7 +229,10 @@ if (require.main === module) {
     try {
       const proxy = await createProxy(JSON.parse(input.slice(0,newline).replace(/^\uFEFF/, '')));
       process.stdout.write(JSON.stringify({ baseUrl:proxy.baseUrl, account:proxy.account }) + '\n');
-    } catch { process.stderr.write('Deck failover could not start. Check pool logins and fresh usage.\n'); process.exit(1); }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message.replace(/[\r\n]+/g, ' ') : 'Unknown startup error.';
+      process.stderr.write('Deck failover could not start: ' + detail + '\n'); process.exit(1);
+    }
     input = '';
   });
   process.stdin.on('end', () => process.exit(0));

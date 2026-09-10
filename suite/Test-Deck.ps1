@@ -91,7 +91,7 @@ $task=Start-DeckTask "'synthetic worker output'" 'Test' 'account1'
 Assert ($task.Process.WaitForExit(10000)) 'Worker did not finish'
 Assert ($task.Out.Result.Trim() -eq 'synthetic worker output') 'Worker output lost'
 $task.Process.Dispose()
-foreach($file in @('Deck.Core.ps1','Codex-Deck.ps1','../.local/bin/codex-auth.ps1')){
+foreach($file in @('Deck.Core.ps1','Deck.WarmupWorker.ps1','Codex-Deck.ps1','../.local/bin/codex-auth.ps1')){
     $tokens=$null; $errors=$null
     $path=Join-Path $PSScriptRoot $file
     if(-not (Test-Path -LiteralPath $path)){$path=Join-Path $PSScriptRoot '../bin/codex-auth.ps1'}
@@ -122,6 +122,11 @@ Assert ($restored.Count -eq 1 -and $restored[0].CheckedAt -eq $persisted.Checked
 Write-DeckJson $cachePath @(@{value=@($persisted);Count=1})
 $restored=@(Expand-DeckCheckRecords (Read-DeckJson $cachePath))
 Assert ($restored.Count -eq 1 -and $restored[0].Account -eq 'account9') 'Legacy array cache not recovered'
+$legacyHistory=@(@{Account='account1';Outcome='Replied: hi'},@{value=@(@{Account='account2';Outcome='Request failed'});Count=1})
+$historyMap=ConvertTo-DeckMap $legacyHistory
+Assert ($historyMap.Count -eq 2 -and $historyMap.account2.Outcome -eq 'Request failed') 'Nested legacy warm-up history not recovered'
+$flat=@{account1=$historyMap.account1;account2=$historyMap.account2}; Write-DeckJson $cachePath @(Get-DeckMapValues $flat)
+Assert (-not ([IO.File]::ReadAllText($cachePath) -match '"value"\s*:')) 'Hashtable values serialized as a nested wrapper'
 'PASS: persisted check details and legacy array-wrapper recovery.'
 
 $now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -136,6 +141,13 @@ Assert (-not (Test-DeckWarmup $settings $fresh ($now-90) $null $now)) 'Exhausted
 'PASS: fresh-window discovery, observed reset preservation and exhausted weekly guard.'
 
 Assert (-not (Get-DeckDefaults).AutoStart) 'Desktop auto-opening must be opt-in'
+$scheduleSettings=Get-DeckDefaults; $scheduleSettings.WarmupEnabled=$true; $scheduleSettings.WarmupResetEnabled=$true; $scheduleSettings.WarmupGraceSeconds=60
+$scheduleNow=[DateTimeOffset]'2026-09-09T20:00:00-03:00'; $scheduleReset=$scheduleNow.ToUnixTimeSeconds()+600
+$scheduleCache=@{account1=[pscustomobject]@{Windows=@([pscustomobject]@{DurationSeconds=18000;ResetsAtUnix=$scheduleReset})}}
+$nextWarm=Get-DeckNextWarmupRun $scheduleSettings @('account1') $scheduleCache @{} @{} $scheduleNow
+Assert ($nextWarm.ToUnixTimeSeconds() -eq $scheduleReset+60) 'Next reset wake was not scheduled precisely after grace'
+$scheduleSettings.WarmupResetEnabled=$false
+Assert ($null -eq (Get-DeckNextWarmupRun $scheduleSettings @('account1') $scheduleCache @{} @{} $scheduleNow)) 'Reset-disabled settings created a reset wake'
 Assert ((ConvertTo-DeckWarmupTimes '19:00,08:00 08:00') -eq '08:00, 19:00') 'Daily times normalization failed'
 $invalid=$false; try{ConvertTo-DeckWarmupTimes '24:00'}catch{$invalid=$true}; Assert $invalid 'Invalid time accepted'
 Assert (@(Get-DeckDueWarmupTimes '23:59' ([DateTimeOffset]'2026-09-08T00:01:00-03:00'))[0] -eq '20260907-2359') 'Midnight catch-up failed'

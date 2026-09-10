@@ -75,7 +75,16 @@ function Get-DeckNextCheck($Settings, $Record, [DateTimeOffset]$CheckedAt) {
 }
 function Read-DeckJson([string]$Path) {
     if (Test-Path -LiteralPath $Path -PathType Leaf) {
-        try { return [IO.File]::ReadAllText($Path) | ConvertFrom-Json } catch { }
+        try {
+            $json=[IO.File]::ReadAllText($Path)
+            # PowerShell 7.5 started materializing ISO strings as DateTime by
+            # default. Deck's state schema stores timestamps as strings and
+            # casts them explicitly at use sites, matching Windows PowerShell.
+            if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')) {
+                return $json | ConvertFrom-Json -DateKind String
+            }
+            return $json | ConvertFrom-Json
+        } catch { }
     }
 }
 function Expand-DeckCheckRecords($Value) {
@@ -83,9 +92,23 @@ function Expand-DeckCheckRecords($Value) {
         if ($null -eq $entry) { continue }
         # Windows PowerShell can serialize an extended array as { value, Count }.
         if ($entry -is [array]) { Expand-DeckCheckRecords $entry }
-        elseif ($entry.PSObject.Properties['value'] -and $entry.value -is [array]) { Expand-DeckCheckRecords $entry.value }
+        elseif ((($entry -is [Collections.IDictionary] -and $entry.Contains('value')) -or $entry.PSObject.Properties['value']) -and $null -ne $entry.value) { Expand-DeckCheckRecords @($entry.value) }
         elseif ($entry.Account -is [string] -and $entry.Account -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') { $entry }
     }
+}
+function Get-DeckMapValues($Map) {
+    if (-not $Map) { return }
+    # Windows PowerShell serializes Hashtable.Values itself as { value, Count }.
+    # Enumerating entries first produces an ordinary JSON array instead.
+    @($Map.GetEnumerator() | ForEach-Object { $_.Value })
+}
+function ConvertTo-DeckMap($Value, [string]$KeyProperty = 'Account') {
+    $map=@{}
+    foreach($entry in @(Expand-DeckCheckRecords $Value)){
+        $key=[string]$entry.$KeyProperty
+        if($key){$map[$key]=$entry}
+    }
+    return $map
 }
 function Write-DeckJson([string]$Path, $Value) {
     $dir = Split-Path -Parent $Path
@@ -102,7 +125,17 @@ function Get-DeckSettings([string]$Root) {
     $saved = Read-DeckJson (Join-Path $Root 'settings.json')
     if ($saved) {
         foreach ($key in @($settings.Keys)) {
-            if ($null -ne $saved.$key -and $saved.$key.GetType() -eq $settings[$key].GetType()) { $settings[$key] = $saved.$key }
+            $candidate=$saved.$key
+            if ($null -eq $candidate) { continue }
+            if ($candidate.GetType() -eq $settings[$key].GetType()) { $settings[$key] = $candidate; continue }
+            # ConvertFrom-Json returns small integers as Int32 in Windows
+            # PowerShell and Int64 in newer PowerShell. Accept either without
+            # weakening the strict string/boolean type checks.
+            if ($settings[$key] -is [int] -and $candidate.GetTypeCode() -in @(
+                [TypeCode]::SByte,[TypeCode]::Byte,[TypeCode]::Int16,[TypeCode]::UInt16,
+                [TypeCode]::Int32,[TypeCode]::UInt32,[TypeCode]::Int64,[TypeCode]::UInt64)) {
+                try { $settings[$key]=[Convert]::ToInt32($candidate) } catch { }
+            }
         }
     }
     $settings.PollMinutes = [Math]::Min(120, [Math]::Max(5, $settings.PollMinutes))
@@ -160,8 +193,10 @@ function Test-DeckWarmup($Settings, $Record, $PreviousReset, $History, [long]$No
     $window = @($Record.Windows | Where-Object DurationSeconds -eq 18000)
     if ($window.Count -ne 1 -or $null -eq $window[0].UsedPct -or $window[0].UsedPct -ne 0) { return $false }
     if (@($Record.Windows | Where-Object { $_.Dead -or ($null -ne $_.UsedPct -and $_.UsedPct -ge 99.5) }).Count) { return $false }
-    # A successful real request already started a new window; don't add another.
-    if ($History -and ($History.Reset -eq $PreviousReset -or $Now - [long]$History.AttemptAt -lt 14400)) { return $false }
+    # A confirmed request already started this window. Failed/unconfirmed requests
+    # may retry after 90 seconds while the configured reset window remains open.
+    if ($History -and [long]$History.Reset -eq [long]$PreviousReset -and [string]$History.Outcome -like 'Replied:*') { return $false }
+    if ($History -and $Now - [long]$History.AttemptAt -lt 90) { return $false }
     return $true
 }
 function Start-DeckTask([string]$Code, [string]$Kind, [string]$Account) {
@@ -311,9 +346,9 @@ function Set-DeckWarmupControl([string]$Root, [string]$Account, [switch]$Pause) 
     return $current
 }
 function Start-DeckWarmupScheduler([string]$SuiteRoot) {
-    $path=Join-Path $SuiteRoot 'Codex-Deck.ps1'
+    $path=Join-Path $SuiteRoot 'Deck.WarmupWorker.ps1'
     if (Test-Path -LiteralPath $path) {
-        Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList ('-NoProfile -STA -ExecutionPolicy Bypass -File "'+$path+'" -Attach -Background') | Out-Null
+        Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$path+'"') | Out-Null
     }
 }
 
@@ -360,14 +395,76 @@ function Set-DeckWarmupTimes([string]$SuiteRoot, [string]$Times) {
     if($settings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}
     return $settings
 }
-function Sync-DeckWarmupStartup([string]$SuiteRoot, $Settings) {
-    # Per-user startup requires no elevation and never starts a visible console.
-    $path='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-    if($Settings.WarmupEnabled -and $Settings.WarmupStartAtLogin){
-        if(-not (Test-Path $path)){[void](New-Item -Path $path)}
-        $command='powershell.exe -NoProfile -WindowStyle Hidden -STA -ExecutionPolicy Bypass -File "'+(Join-Path $SuiteRoot 'Codex-Deck.ps1')+'" -Attach -Background'
-        [void](New-ItemProperty -Path $path -Name 'CodexDeckWarmup' -Value $command -PropertyType String -Force)
-    }elseif(Test-Path $path){Remove-ItemProperty -Path $path -Name 'CodexDeckWarmup' -ErrorAction SilentlyContinue}
+function Get-DeckSignedInAccounts([string]$SuiteRoot) {
+    @(Get-ChildItem -LiteralPath (Join-Path $SuiteRoot 'accounts') -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'auth.json') -PathType Leaf) } |
+        Sort-Object Name | ForEach-Object Name)
+}
+function Get-DeckWarmupAccounts([string]$SuiteRoot, $Settings, $Cache = @{}) {
+    foreach($account in @(Get-DeckSignedInAccounts $SuiteRoot)){
+        if(-not (Test-DeckWarmupSelected $Settings $account)){continue}
+        $plan=[string]$Cache[$account].PlanType
+        if(-not $plan){$plan=[string](Get-DeckProfile $SuiteRoot $account).PlanType}
+        if($plan -in @('plus','pro','team','business','enterprise','edu')){$account}
+    }
+}
+function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, [DateTimeOffset]$Now = [DateTimeOffset]::Now, [int]$UnknownDelayMinutes = 1) {
+    if(-not $Settings.WarmupEnabled -or -not $Settings.WarmupResetEnabled){return}
+    if(-not @($Accounts).Count){return $Now.AddHours(6)}
+    $unix=$Now.ToUnixTimeSeconds(); $candidates=@()
+    foreach($account in @($Accounts)){
+        $reset=if($Resets[$account]){[long]$Resets[$account]}else{
+            $five=$Cache[$account].Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
+            if($five.ResetsAtUnix){[long]$five.ResetsAtUnix}else{0}
+        }
+        if(-not $reset){$candidates+=$Now.AddMinutes($UnknownDelayMinutes); continue}
+        $due=[DateTimeOffset]::FromUnixTimeSeconds($reset).AddSeconds($Settings.WarmupGraceSeconds).ToLocalTime()
+        if($due -gt $Now){$candidates+=$due; continue}
+        if($unix -le $reset + 60*$Settings.WarmupMaxDelayMinutes){
+            $entry=$History[$account]
+            if($entry -and [long]$entry.Reset -eq $reset -and [string]$entry.Outcome -like 'Replied:*'){$candidates+=$Now.AddMinutes([Math]::Max(5,$UnknownDelayMinutes))}
+            else{
+                $retry=$Now.AddSeconds(60)
+                if($entry.AttemptAt){$retryAt=[DateTimeOffset]::FromUnixTimeSeconds([long]$entry.AttemptAt+90).ToLocalTime(); if($retryAt -gt $retry){$retry=$retryAt}}
+                $candidates+=$retry
+            }
+        }else{$candidates+=$Now.AddMinutes([Math]::Max(20,$UnknownDelayMinutes))}
+    }
+    $candidates | Sort-Object | Select-Object -First 1
+}
+function Sync-DeckWarmupStartup([string]$SuiteRoot, $Settings, $NextRun = $null) {
+    # Remove the legacy Run entry. Automatic warm-up is an ordinary, visible
+    # per-user Scheduled Task whose short-lived worker never constructs the GUI.
+    $runPath='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    if(Test-Path $runPath){Remove-ItemProperty -Path $runPath -Name 'CodexDeckWarmup' -ErrorAction SilentlyContinue}
+    if($env:OS -ne 'Windows_NT'){return}
+    $taskName='CodexDeck Automatic Warm-up'
+    if(-not $Settings.WarmupEnabled){Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue; return}
+    $worker=Join-Path $SuiteRoot 'Deck.WarmupWorker.ps1'
+    if(-not (Test-Path -LiteralPath $worker -PathType Leaf)){throw 'Warm-up worker is not installed.'}
+    if($null -eq $NextRun){
+        $cache=ConvertTo-DeckMap (Read-DeckJson (Join-Path $SuiteRoot 'deck/cache.json'))
+        $history=ConvertTo-DeckMap (Read-DeckJson (Join-Path $SuiteRoot 'deck/warmup.json'))
+        $resets=@{}; $saved=Read-DeckJson (Join-Path $SuiteRoot 'deck/warmup-resets.json'); if($saved){foreach($property in $saved.PSObject.Properties){$resets[$property.Name]=[long]$property.Value}}
+        $accounts=@(Get-DeckWarmupAccounts $SuiteRoot $Settings $cache)
+        $computed=Get-DeckNextWarmupRun $Settings $accounts $cache $resets $history ([DateTimeOffset]::Now) 1
+        if($computed){$NextRun=[DateTimeOffset]$computed}
+    }
+    $identity=[Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $triggers=@()
+    if($Settings.WarmupStartAtLogin){$triggers+=New-ScheduledTaskTrigger -AtLogOn -User $identity}
+    foreach($time in @((ConvertTo-DeckWarmupTimes $Settings.WarmupTimes) -split ', ' | Where-Object {$_})){
+        if($Settings.WarmupTimedEnabled){$triggers+=New-ScheduledTaskTrigger -Daily -At ([datetime]::Today.Add([TimeSpan]::Parse($time)))}
+    }
+    if($null -ne $NextRun){
+        $at=([DateTimeOffset]$NextRun).ToLocalTime(); if($at -lt [DateTimeOffset]::Now.AddSeconds(15)){$at=[DateTimeOffset]::Now.AddSeconds(15)}
+        $triggers+=New-ScheduledTaskTrigger -Once -At $at.LocalDateTime
+    }
+    if(-not $triggers.Count){$triggers+=New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes(1))}
+    $action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$worker+'"') -WorkingDirectory $SuiteRoot
+    $principal=New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
+    $taskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $taskSettings -Principal $principal -Description 'Checks selected Codex accounts at warm-up times, warms eligible accounts, refreshes quota state, and exits. Managed by Codex Deck.' -Force | Out-Null
 }
 
 function Add-DeckTimedWarmups([string]$SuiteRoot, $Settings, $Accounts, $Cache, [DateTimeOffset]$Now) {
@@ -390,7 +487,7 @@ function Add-DeckTimedWarmups([string]$SuiteRoot, $Settings, $Accounts, $Cache, 
             $ledger[$key]=@{Key=$key;At=$Now.ToUnixTimeSeconds()}; $dirty=$true
         }
     }
-    if($dirty){Write-DeckJson (Join-Path $root 'warmup-schedule.json') @($ledger.Values)}
+    if($dirty){Write-DeckJson (Join-Path $root 'warmup-schedule.json') @(Get-DeckMapValues $ledger)}
 }
 function Invoke-DeckQueuedWarmups([string]$SuiteRoot, $Settings, $Tasks, $History, [long]$Now) {
     $root=Join-Path $SuiteRoot 'deck'
@@ -404,10 +501,10 @@ function Invoke-DeckQueuedWarmups([string]$SuiteRoot, $Settings, $Tasks, $Histor
         $recent=$History[$account] -and $Now-[long]$History[$account].AttemptAt -lt 30
         if($expired -or $paused -or $recent -or -not (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$account/auth.json"))){Remove-Item -LiteralPath $file.FullName; continue}
         $History[$account]=[pscustomobject]@{Account=$account;Reset=0;AttemptAt=$Now;Mode=$request.Mode;Outcome='Sending / waiting for reply';Reply=''}
-        Write-DeckJson (Join-Path $root 'warmup.json') @($History.Values)
+        Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $History)
         Remove-Item -LiteralPath $file.FullName
         try{$Tasks[$account]=Start-DeckTask (Get-DeckWarmupCode $SuiteRoot $account $Settings.WarmupModel) 'Warm-up' $account}
-        catch{$History[$account].Outcome='Failed to start'; Write-DeckJson (Join-Path $root 'warmup.json') @($History.Values)}
+        catch{$History[$account].Outcome='Failed to start'; Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $History)}
     }
 }
 

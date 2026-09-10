@@ -16,7 +16,7 @@ function Start-DeckTask($code,$kind,$account){
     return @{Kind=$kind;Account=$account;Started=[DateTimeOffset]::UtcNow;Process=$process;Out=@{Result=$output}}
 }
 $root=Join-Path $env:TEMP ('deck-scheduler-'+[guid]::NewGuid().ToString('N'))
-$suite=$PSScriptRoot; $settings=Get-DeckDefaults; $tasks=@{}; $manualChecks=@{}; $nextCheck=@{}; $pendingWarm=@{}
+$suite=$PSScriptRoot; $settings=Get-DeckDefaults; $tasks=@{}; $manualChecks=@{}; $nextCheck=@{}
 $cache=@{}; $history=@{}; $resets=@{}; $batchAccounts=@(); $batchUntil=[DateTimeOffset]::MinValue
 $StatusButton=[pscustomobject]@{IsEnabled=$true}
 $allProfiles=$false; $widget=$false; $started=@()
@@ -45,28 +45,10 @@ Invoke-DeckTick
 Assert ([object]::ReferenceEquals($old,$cache.account1) -and $cache.account1.Error -and $nextCheck.account1 -gt [DateTimeOffset]::UtcNow.AddMinutes(19)) 'Failure lost previous quota or ignored backoff'
 'PASS: concurrent scheduler, eight-worker cap, no duplicates, polling, list cooldown, single-account bypass and failure retention. No network or terminals.'
 
-# A finished warm-up must refresh even if auto-check was disabled or the account left the visible scope.
-$history.account2=[pscustomobject]@{Account='account2';Outcome='attempted / result pending'}
-$tasks.account2=Start-DeckTask '' 'Warm-up' 'account2'; $tasks.account2.Process.HasExited=$true
-Invoke-DeckTick
-Assert ($tasks.account2.Kind -eq 'Check' -and $history.account2.Outcome -eq 'Replied: hi') 'Warm-up did not immediately launch a background usage refresh'
-$tasks.account2.Process.HasExited=$true
-Invoke-DeckTick
-Assert ($cache.account2.CheckedAt -and -not $tasks.ContainsKey('account2')) 'Post-warm-up check did not update saved check data'
-'PASS: warm-up completion immediately refreshes account usage without a terminal or auto-check dependency.'
-
-# Warm-up owns its monitoring scope, even with auto-check off and no terminal.
+# Automatic warm-up belongs exclusively to the short-lived headless worker. The
+# GUI must not become a second executor merely because the setting is enabled.
 $tasks=@{}; $started=@(); $manualChecks=@{}; $nextCheck=@{}; $allProfiles=$false
 $settings.AutoCheck=$false; $settings.WarmupEnabled=$true; $settings.WarmupAccounts='account3'
 Invoke-DeckTick
-Assert ($started.Count -eq 1 -and $started[0] -eq 'account3') 'Disconnected warm-up selection was not monitored independently'
-$nowUnix=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-$resets.account3=$nowUnix-90
-$tasks.account3.Process.HasExited=$true
-$tasks.account3.Out.Result=ConvertTo-Json -Depth 5 @{Account='account3';PlanType='plus';Status='available';Windows=@(@{DurationSeconds=18000;UsedPct=0;ResetsAtUnix=$nowUnix+17910})}
-Invoke-DeckTick
-Assert ($tasks.account3.Kind -eq 'Warm-up' -and $history.account3.AttemptAt) 'Eligible disconnected account did not warm or persist its attempt'
-$tasks.account3.Process.HasExited=$true
-Invoke-DeckTick
-Assert ($history.account3.Outcome -eq 'Replied: hi' -and $tasks.account3.Kind -eq 'Check') 'Warm-up did not complete and refresh'
-'PASS: disconnected accounts warm with ordinary auto-check disabled, persist before sending, and refresh afterward.'
+Assert ($started.Count -eq 0 -and $tasks.Count -eq 0) 'GUI duplicated the headless automatic warm-up worker'
+'PASS: GUI checks remain separate from the headless warm-up worker.'

@@ -669,6 +669,7 @@ if ($Pool -or $Account -in @('share','unshare','sharing')) {
 }
 if ($PoolAccounts -or $Source -or $Targets -or $Resources) { throw 'Use -Pool to configure membership, or share/unshare to configure resources.' }
 $poolEntry = $null
+$failoverChoice = $null
 if (-not $History -and $Account -and $Account -notin @('help','--help','-h','list','--list','-l','status','dashboard')) { $poolEntry = Get-DeckPoolEntry $runtimeRoot (Normalize-AccountName $Account) }
 if ($UseAccount -and -not $poolEntry) { throw '-UseAccount requires a pooled entry.' }
 if ($poolEntry -and ($Best -or $NewAccount -or $InheritFrom -or $FailoverAccounts)) { throw 'Use -UseAccount to select a member of this pooled entry.' }
@@ -769,6 +770,11 @@ if ($bootstrapResult.Created) {
 
 Ensure-AccountInstructions -AccountDir $accountDir
 Ensure-FreeAccountDefaults -AccountDir $accountDir
+$commandsModule = Join-Path $runtimeRoot 'Deck.Commands.ps1'
+if (Test-Path -LiteralPath $commandsModule) {
+    . $commandsModule
+    Remove-DeckLegacyCommandSkills $accountDir | Out-Null
+}
 Use-CodexNodePath
 $sharedArgs = @(Get-DeckSharedArguments $runtimeRoot $accountName)
 $globalRuleArgs=@()
@@ -779,7 +785,8 @@ if(Test-Path -LiteralPath (Join-Path $runtimeRoot 'Deck.GlobalRules.ps1')){
     }
 }
 if ($poolEntry -and $CodexArgs -and $CodexArgs[0] -in @('login','logout')) { throw 'Pooled environments do not own logins. Sign in to a member account instead.' }
-$poolConversation = $poolEntry -and (-not $CodexArgs -or $CodexArgs[0] -notin @('mcp','mcp-server','completion','features','debug','app-server','--help','-h','--version','-V'))
+$codexConversation = -not $CodexArgs -or $CodexArgs[0] -notin @('login','logout','mcp','mcp-server','completion','features','debug','app-server','cloud','apply','sandbox','doctor','update','--help','-h','--version','-V')
+$poolConversation = $poolEntry -and $codexConversation
 if ($poolEntry -and -not $poolConversation -and $Failover -ne 'Off') { throw 'Rotation applies to conversations, not administrative commands.' }
 if ($poolConversation) {
     . (Join-Path $runtimeRoot 'Deck.Core.ps1')
@@ -789,11 +796,21 @@ if ($poolConversation) {
     $initial = Normalize-AccountName $UseAccount
     if ($initial -and $initial -notin $members) { throw 'The selected account is not in this pool.' }
     $rotationDisabled = $PSBoundParameters.ContainsKey('Failover') -and $Failover -eq 'Off'
-    $Failover = if ($rotationDisabled) { 'Ordered' } elseif ($PSBoundParameters.ContainsKey('Failover')) { $Failover } else { $poolEntry.Mode }
-    $failoverChoice = Resolve-DeckFailoverPool $runtimeRoot ($members -join ',') $Failover $initial
-    if ($rotationDisabled) { $failoverChoice.Pool=@($failoverChoice.Account) }
+    $poolMode = if ($rotationDisabled) { 'Ordered' } elseif ($PSBoundParameters.ContainsKey('Failover')) { $Failover } else { $poolEntry.Mode }
+    $failoverChoice = Resolve-DeckFailoverPool $runtimeRoot ($members -join ',') $poolMode $initial
+    $Failover = if ($rotationDisabled) { 'Off' } else { $poolMode }
 }
+$routeMode = if ($Failover -eq 'Off') { 'Ordered' } else { $Failover }
+$automaticFailover = $Failover -ne 'Off'
+if ($codexConversation -and -not $poolEntry -and -not $failoverChoice -and (Test-Path -LiteralPath (Join-Path $accountDir 'auth.json') -PathType Leaf)) {
+    . (Join-Path $runtimeRoot 'Deck.Failover.ps1')
+    # Ordinary sessions keep their own CODEX_HOME/history, but route through a
+    # manual-only set so !account can switch to any other signed-in profile.
+    $failoverChoice = Resolve-DeckFailoverPool $runtimeRoot '*' Ordered $accountName
+}
+$useRoutingProxy = $codexConversation -and $failoverChoice -and @($failoverChoice.Pool).Count
 $originalCodexHome = $env:CODEX_HOME
+$originalDeckSessionUrl = $env:CODEX_DECK_SESSION_URL
 $env:CODEX_HOME = $accountDir
 $deckSession = $null
 try {
@@ -809,13 +826,15 @@ try {
 $failoverProxy = $null
 $failoverSessions = @()
 try {
-    if ($Failover -ne 'Off') {
-        $failoverProxy = Start-DeckFailover $suiteRoot $failoverChoice.Pool $Failover $failoverChoice.Account
-        foreach ($poolAccount in $failoverChoice.Pool) {
-            $failoverSessions += Register-DeckSession (Join-Path $suiteRoot 'deck') $poolAccount (Get-Location).Path
+    if ($useRoutingProxy) {
+        $environmentMembers = if ($poolConversation) { @($members) } else { @() }
+        $failoverProxy = Start-DeckFailover -SuiteRoot $suiteRoot -Pool $failoverChoice.Pool -Mode $routeMode -Account $failoverChoice.Account -Environment $accountName -EnvironmentPool $environmentMembers -Automatic:$automaticFailover
+        if ($automaticFailover -or $poolConversation) {
+            foreach ($poolAccount in $failoverChoice.Pool) {
+                $failoverSessions += Register-DeckSession (Join-Path $suiteRoot 'deck') $poolAccount (Get-Location).Path
+            }
         }
-        Write-Host ('Failover '+$Failover+' | pool: '+($failoverChoice.Pool -join ', ')+' | active: '+$failoverChoice.Account)
-        Write-Host ('Environment and session history stay in '+$accountName+'. Only explicit quota rejections can switch accounts.')
+        $env:CODEX_DECK_SESSION_URL = $failoverProxy.BaseUrl
         $launchArgs = @($sharedArgs) + @($CodexArgs) + @($globalRuleArgs) + @(Get-DeckFailoverArguments $failoverProxy.BaseUrl -NoAccountAuth:([bool]$poolEntry))
         $launchArgs=@(ConvertTo-DeckCodexArguments $launchArgs)
         & codex @launchArgs
@@ -823,8 +842,10 @@ try {
     $codexExitCode = $LASTEXITCODE
 } finally {
     $env:CODEX_HOME = $originalCodexHome
+    $env:CODEX_DECK_SESSION_URL = $originalDeckSessionUrl
     if ($failoverProxy) {
-        $failoverProxy.Process.StandardInput.Close()
+        if ($failoverProxy.InputWriter) { $failoverProxy.InputWriter.Dispose() }
+        else { $failoverProxy.Process.StandardInput.Close() }
         if (-not $failoverProxy.Process.WaitForExit(2000)) { $failoverProxy.Process.Kill() }
         $failoverProxy.Process.Dispose()
     }

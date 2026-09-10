@@ -13,7 +13,7 @@ async function main() {
   let behavior, seen = [], reports = [];
   const upstream = http.createServer(async (req,res) => {
     const parts=[]; for await (const part of req) parts.push(part);
-    seen.push({account:req.headers['chatgpt-account-id'],auth:req.headers.authorization,body:Buffer.concat(parts).toString(),headers:req.headers});
+    seen.push({account:req.headers['chatgpt-account-id'],auth:req.headers.authorization,body:Buffer.concat(parts).toString(),headers:req.headers,url:req.url,method:req.method});
     behavior(req,res);
   });
   upstream.listen(0,'127.0.0.1'); await once(upstream,'listening');
@@ -27,14 +27,31 @@ async function main() {
     }); proxies.push(p.server); return p.baseUrl;
   }
   const send=(url,body={},headers={})=>fetch(url+'/responses',{method:'POST',body:JSON.stringify(body),headers:{'content-type':'application/json',...headers}});
+  const select=(url,account,headers={})=>fetch(url+'/_deck/account',{method:'POST',body:JSON.stringify({account}),headers:{'content-type':'application/json',...headers}});
   try {
     behavior=(req,res)=> { if(req.headers['chatgpt-account-id']==='a') {res.writeHead(429);res.end(quota);} else {res.writeHead(200,{'content-type':'text/event-stream'});res.end('data: success\n\n');} };
     let url=await start(); let result=await send(url,{input:'synthetic'},{authorization:'Bearer client-secret',cookie:'private', 'x-account-id':'wrong'});
     assert.equal(await result.text(),'data: success\n\n'); assert.deepEqual(seen.map(r=>r.account),['a','b']); assert.deepEqual(reports,['b']);
     assert.equal(seen[1].auth,'Bearer synthetic-b'); assert.equal(seen[1].headers.cookie,undefined); assert.equal(seen[1].headers['x-account-id'],undefined); assert.equal(seen[0].body,seen[1].body);
+    let state=await (await fetch(url+'/_deck/account')).json(); assert.equal(state.failover.active,'b'); assert.deepEqual(state.failover.unavailable,['a']);
+    assert.equal((await select(url,'a')).status,409,'Quota-rejected accounts must stay unavailable for the session');
     await (await send(url)).text(); assert.equal(seen.at(-1).account,'b');
     assert.equal((await send(url,{previous_response_id:'created-on-b'})).status,200);
     assert.equal(seen.at(-1).account,'b','The active account must be able to use its own response history after switching');
+    url=await start({environment:'pool',environmentPool:['a','b','c']});
+    state=await (await fetch(url+'/_deck/account')).json(); assert.deepEqual(state.environment,{name:'pool',pooled:true,accounts:['a','b','c']});
+    state=await (await select(url,'c')).json(); assert.equal(state.failover.active,'c');
+    await (await send(url)).text(); assert.equal(seen.at(-1).account,'c','Manual selection must change only the live proxy route');
+    state=await (await fetch(url+'/_deck/account')).json(); assert.equal(state.failover.lastRequestAccount,'c','Session status must confirm the account used for the latest upstream request');
+    assert.equal((await select(url,'outside')).status,400); assert.equal((await select(url,'a',{origin:'https://example.com'})).status,403);
+    behavior=(req,res)=>{assert.equal(req.url,'/extensions/web/run?format=json');assert.equal(req.method,'POST');assert.equal(req.headers['x-codex-feature'],'web');assert.equal(req.headers.cookie,undefined);res.writeHead(200,{'content-type':'application/json','x-request-id':'aux-test'});res.end('{"ok":true}');};
+    url=await start({owner:'b',automatic:false});
+    result=await fetch(url+'/extensions/web/run?format=json',{method:'POST',body:'opaque',headers:{'content-type':'application/octet-stream','x-codex-feature':'web',cookie:'private',authorization:'Bearer wrong'}});
+    assert.equal(result.status,200);assert.equal((await result.json()).ok,true);assert.equal(result.headers.get('x-request-id'),'aux-test');assert.equal(seen[0].account,'b');
+    state=await (await fetch(url+'/_deck/account')).json();assert.equal(state.failover.automatic,false);assert.equal(state.failover.lastRequestRoute,'/extensions/web/run');
+    behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
+    result=await send(url);assert.equal(result.status,429);assert.deepEqual(seen.map(r=>r.account),['b','b'],'Manual-only routing must not automatically replay a rejected request');
+    behavior=(req,res)=> { if(req.headers['chatgpt-account-id']==='a') {res.writeHead(429);res.end(quota);} else {res.writeHead(200,{'content-type':'text/event-stream'});res.end('data: success\n\n');} };
     url=await start(); result=await send(url,{input:[{encrypted_content:'portable-history'}]});
     assert.equal(result.status,200); assert.deepEqual(seen.map(r=>r.account),['a','b'],'Encrypted stateless history must rotate after quota rejection');
     behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
@@ -60,7 +77,7 @@ async function main() {
     await assert.rejects(start({mode:'Best'},{rows:()=>({})}));
     url=await start(); assert.equal((await send(url,{}, {origin:'https://example.com'})).status,403);
     assert.equal((await fetch(url.replace(/\/[a-f0-9]+$/,'/wrong')+'/responses',{method:'POST'})).status,403);
-    assert.equal((await fetch(url+'/arbitrary')).status,404); assert.equal(seen.length,0);
+    assert.equal((await fetch(url+'/_deck/arbitrary')).status,404); assert.equal(seen.length,0);
     assert.equal((await send(url,{}, {'content-encoding':'gzip'})).status,400);
     behavior=(_req,res)=>{res.writeHead(200);res.end('ok');};
     for (const [encoding,compress] of [['gzip',zlib.gzipSync],['zstd',zlib.zstdCompressSync]]) {
@@ -85,9 +102,13 @@ async function main() {
     behavior=(_req,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write('data: waiting\n\n');};
     url=await start(); const controller=new AbortController();
     result=await fetch(url+'/responses',{method:'POST',body:'{}',signal:controller.signal});
-    assert.equal((await send(url)).status,409); controller.abort();
+    assert.equal((await send(url)).status,409);
+    state=await (await select(url,'b')).json(); assert.equal(state.busy,true); assert.equal(state.failover.active,'b'); controller.abort();
     await new Promise(resolve=>setTimeout(resolve,30)); assert.equal(seen.length,1);
-    console.log('PASS: failover routing, fresh ranking, bounded quota retries, affinity protection, credential isolation, stream interruption, transport errors, access controls and cancellation.');
+    behavior=(_req,res)=>{res.writeHead(200);res.end('ok');}; await (await send(url)).text();
+    assert.equal(seen.at(-1).account,'b','A switch during an accepted stream must apply to the next request');
+    state=await (await fetch(url+'/_deck/account')).json(); assert.equal(state.failover.lastRequestAccount,'b');
+    console.log('PASS: failover routing, live account control, fresh ranking, bounded quota retries, affinity protection, credential isolation, stream interruption, transport errors, access controls and cancellation.');
   } finally {
     for(const server of [...proxies,upstream]) { server.closeAllConnections(); server.close(); }
   }

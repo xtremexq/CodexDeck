@@ -113,7 +113,7 @@ function Rename-DeckAccount([string]$SuiteRoot, [string]$OldName, [string]$NewNa
     $created = $false
     $guard = [Threading.Mutex]::new($true,(Get-DeckMaintenanceMutexName),[ref]$created)
     try {
-        if (-not $created) { throw 'Quit desktop Deck and its tray scheduler before renaming, so saved state cannot be overwritten.' }
+        if (-not $created) { throw 'Pause automatic warm-up and quit desktop Deck before renaming, so saved state cannot be overwritten.' }
         $accounts = Get-Item -LiteralPath (Join-Path $SuiteRoot 'accounts')
         $old = Get-Item -LiteralPath (Join-Path $accounts.FullName $OldName)
         $target = [IO.Path]::GetFullPath((Join-Path $accounts.FullName $NewName))
