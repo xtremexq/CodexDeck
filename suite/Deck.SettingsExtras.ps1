@@ -59,7 +59,7 @@ $dialog.Add_Closed({$backupState.Manifest=$null; $password.Clear(); $repeat.Clea
 $aboutTab=[Windows.Controls.TabItem]::new(); $aboutTab.Header='About'; $about=[Windows.Controls.StackPanel]::new(); $about.Margin='4'; $aboutTab.Content=$about; [void]$tabs.Items.Add($aboutTab)
 $logo=[Windows.Controls.Image]::new(); $logo.Source=$appIcon; $logo.Width=48; $logo.Height=48; $logo.HorizontalAlignment='Left'; $logo.Margin='0,0,0,14'; [void]$about.Children.Add($logo)
 [void]$about.Children.Add((New-DeckText 'Codex Deck' '#EDF1F7' 24))
-[void]$about.Children.Add((New-DeckText 'Version 1.3.0 · Windows' '#69DEC0'))
+[void]$about.Children.Add((New-DeckText 'Version 1.4.0 · Windows' '#69DEC0'))
 $aboutText=New-DeckText "Manage your Codex accounts in one place.`n`nCheck usage, switch accounts, and schedule warm-ups from the desktop or terminal." '#B5BEC7' 14; $aboutText.Margin='0,18,0,20'; [void]$about.Children.Add($aboutText)
 [void]$about.Children.Add((New-DeckText 'Created by xtremexq · Open source · MIT license' '#929CA4'))
 $links=[Windows.Controls.WrapPanel]::new(); $links.Margin='0,20,0,20'; [void]$about.Children.Add($links)

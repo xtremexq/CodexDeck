@@ -30,6 +30,7 @@ try {
 } finally { $env:PATH=$oldPath; $env:CODEX_DECK_TEST_ARGUMENTS=$oldResult }
 $isolatedArguments=Get-Content -LiteralPath $mockResult -Raw | ConvertFrom-Json
 if($isolatedExit -ne 23 -or ($isolatedArguments -join '|') -ne 'two words|model_provider="openai"|C:\path with space\'){throw ('Isolated Codex launch lost arguments or exit status: exit={0}; args={1}' -f $isolatedExit,($isolatedArguments -join '|'))}
+$global:LASTEXITCODE=0
 Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $accountsRoot 'account1/marker.ps1')
 foreach ($name in @('..', '../outside', 'C:\Windows', 'missing')) {
     $failed=$false

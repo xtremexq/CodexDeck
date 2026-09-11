@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.0 - 2026-09-11
+
+- Added isolated pooled environments that rotate across selected accounts while retaining one Codex home, plus explicit sharing controls for skills, memories, instructions and individual MCP definitions.
+- Added Global Rules and local `!account`, `!pool`, `!check` and `!usage` commands for session routing and active-route usage.
+- Hardened live failover with manual account switching, safe Codex endpoint forwarding, quieter terminal output, reliable cleanup and bounded session-exit diagnostics.
+- Made automatic warm-up scheduling an explicit opt-in, moved it to a clearly named windowless scheduled task and preserved working legacy schedules if migration fails.
+- Kept large account collections responsive with concurrent bounded checks, single-pass rendering, lazy details, nonblocking output handling and batched cache writes.
+- Improved quota health and reset freshness so exhausted weekly windows show their blocking reset without hiding otherwise successful usage data.
+- Added encrypted configuration/account backup and restore, searchable selectors, compact usage summaries, remembered geometry and broader panel/widget polish.
+- Fixed the Windows checks workflow falsely failing after a successful mock nonzero-exit assertion by clearing the expected native-process status in the test harness.
+- Expanded regression coverage for pooled environments, failover, session controls, background scheduling, shell commands and installation.
+
 ## 1.3.0 - 2026-09-08
 
 - Added a themed support invitation on the first Settings visit and every 35 days thereafter, opening About.
@@ -36,24 +48,6 @@
 - Skip unchanged installer payloads, including assets held open by the desktop companion.
 
 - Rebuilt the README with current terminal and desktop previews; refreshed contributor instructions and excluded encrypted account exports from Git.
-
-## Unreleased (local only)
-
-- Keep checks and warm-up workers off the interactive desktop, rename the scheduled worker to `CodexDeck Warmup Scheduling`, and make task creation an explicit Settings opt-in while preserving existing schedules on upgrade.
-- Show the reset for the quota window that currently blocks an account, including weekly exhaustion when primary quota remains.
-- Isolate dashboard-launched Codex sessions from console control events and keep bounded exit diagnostics for unexpected returns to the dashboard.
-- Added local-only `!account`, `!pool`, `!check`, and `!usage` commands for session routing and active-route usage; removed the short-lived AI-backed skill versions.
-- Enabled manual `!account` switching in ordinary signed-in sessions even with automatic failover Off, and transparently forwarded safe Codex extension endpoints through the active account.
-- Removed unsolicited failover banner/switch output from the full-screen Codex terminal.
-- Keep large account lists responsive with single-pass list rendering, retained rows per view, shared account menus, lazy expanded details, batched cache writes, and nonblocking worker output handling.
-- Independent quota health and reset freshness; successful usage remains visible after failed checks.
-- Concurrent checks with an eight-worker cap, post-list cooldown and immediate per-account checks.
-- Searchable warm-up account selection and compact single-line picker usage.
-- Smaller content-aware panel/widget bounds, remembered geometry and expansion, and corrected scrollbars.
-- Themed entry actions, recovery deletion, pinning and widget account filtering.
-- Centered status bars, cleaned-up hover behavior and settings styling.
-- AES-256-GCM password-encrypted configuration/account export and validated import; Backup and About tabs.
-- Fifty proposed features in docs/FEATURE-IDEAS.md.
 
 ## 1.0.0 â€” 2026-09-06
 
