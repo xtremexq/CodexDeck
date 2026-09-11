@@ -39,6 +39,7 @@
 
 ## Unreleased (local only)
 
+- Keep checks and warm-up workers off the interactive desktop, rename the scheduled worker to `CodexDeck Warmup Scheduling`, and make task creation an explicit Settings opt-in while preserving existing schedules on upgrade.
 - Show the reset for the quota window that currently blocks an account, including weekly exhaustion when primary quota remains.
 - Isolate dashboard-launched Codex sessions from console control events and keep bounded exit diagnostics for unexpected returns to the dashboard.
 - Added local-only `!account`, `!pool`, `!check`, and `!usage` commands for session routing and active-route usage; removed the short-lived AI-backed skill versions.

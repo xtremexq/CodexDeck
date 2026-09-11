@@ -28,7 +28,7 @@ function Get-DeckDefaults {
         ShowModel=$false; AccountPickerUsage=$false
         ViewMode='Widget'; WidgetOneLine=$true; WidgetShowEmail=$false; WidgetShowResets=$true; WidgetAutoHeight=$true
         WidgetWidth=238; WidgetHeight=0
-        WarmupEnabled=$false; WarmupAllPaid=$false; WarmupAccounts=''; WarmupModel='gpt-5.6-luna'
+        WarmupEnabled=$false; WarmupSchedulingEnabled=$false; WarmupAllPaid=$false; WarmupAccounts=''; WarmupModel='gpt-5.6-luna'
         WarmupGraceSeconds=60; WarmupMaxDelayMinutes=30
         WarmupResetEnabled=$true; WarmupTimedEnabled=$false; WarmupTimes=''
         WarmupStartAtLogin=$true
@@ -175,11 +175,44 @@ function Get-DeckSessions([string]$Root) {
         else { Remove-Item -LiteralPath $file.FullName -ErrorAction SilentlyContinue }
     }
 }
+function ConvertTo-DeckProcessArgument([AllowEmptyString()][string]$Value) {
+    if ($null -eq $Value) { $Value='' }
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
+    $quoted=[Text.StringBuilder]::new(); [void]$quoted.Append('"'); $slashes=0
+    foreach($character in $Value.ToCharArray()){
+        if($character -eq '\'){ $slashes++; continue }
+        if($character -eq '"'){
+            [void]$quoted.Append(('\' * ($slashes*2+1))); [void]$quoted.Append('"'); $slashes=0; continue
+        }
+        if($slashes){[void]$quoted.Append(('\' * $slashes)); $slashes=0}
+        [void]$quoted.Append($character)
+    }
+    if($slashes){[void]$quoted.Append(('\' * ($slashes*2)))}
+    [void]$quoted.Append('"')
+    return $quoted.ToString()
+}
+function Get-DeckBackgroundPowerShellArguments([string]$ScriptPath, [string[]]$Arguments, [switch]$Sta) {
+    $parts=@('-NoLogo','-NoProfile','-NonInteractive','-WindowStyle','Hidden')
+    if($Sta){$parts+='-STA'}
+    $parts+=@('-ExecutionPolicy','Bypass','-File',$ScriptPath)+@($Arguments)
+    return (($parts | ForEach-Object { ConvertTo-DeckProcessArgument ([string]$_) }) -join ' ')
+}
+function Start-DeckBackgroundPowerShell([string]$ScriptPath, [string[]]$Arguments, [switch]$Sta) {
+    if(-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)){throw "Background script not found: $ScriptPath"}
+    $info=[Diagnostics.ProcessStartInfo]::new()
+    $info.FileName=(Get-Command powershell.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $info.Arguments=Get-DeckBackgroundPowerShellArguments $ScriptPath $Arguments -Sta:$Sta
+    $info.UseShellExecute=$false
+    $info.CreateNoWindow=$true
+    $info.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
+    return [Diagnostics.Process]::Start($info)
+}
 function Start-DeckCompanion([string]$SuiteRoot, [switch]$OpenSettings) {
     $scriptPath = Join-Path $SuiteRoot 'Codex-Deck.ps1'
     if (Test-Path -LiteralPath $scriptPath) {
-        $launchMode=if($OpenSettings){' -OpenSettings'}else{' -Attach'}
-        Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList ('-NoProfile -STA -ExecutionPolicy Bypass -File "' + $scriptPath + '"'+$launchMode) | Out-Null
+        $launchMode=if($OpenSettings){'-OpenSettings'}else{'-Attach'}
+        $process=Start-DeckBackgroundPowerShell $scriptPath @($launchMode) -Sta
+        $process.Dispose()
     }
 }
 function Test-DeckWarmup($Settings, $Record, $PreviousReset, $History, [long]$Now) {
@@ -316,6 +349,7 @@ function Get-DeckWarmupStatus($Settings, $Record, $History, [long]$Now = ([DateT
     if ($History -and $Now - [long]$History.AttemptAt -lt 14400) { return $History.Outcome }
     if (-not (Test-DeckWarmupSelected $Settings $Record.Account)) { return 'Not selected' }
     if (-not $Settings.WarmupEnabled) { return 'Paused' }
+    if (-not $Settings.WarmupSchedulingEnabled) { return 'Background scheduling off' }
     if ($Settings.WarmupTimedEnabled -and -not $Settings.WarmupResetEnabled) { return 'Daily ' + $Settings.WarmupTimes + ' (local)' }
     if ($Record.PlanType -and $Record.PlanType -notin @('plus','pro','team','business','enterprise','edu')) { return 'Paid plans only' }
     if ($History -and $Now - [long]$History.AttemptAt -lt 14400) { return $History.Outcome }
@@ -348,7 +382,8 @@ function Set-DeckWarmupControl([string]$Root, [string]$Account, [switch]$Pause) 
 function Start-DeckWarmupScheduler([string]$SuiteRoot) {
     $path=Join-Path $SuiteRoot 'Deck.WarmupWorker.ps1'
     if (Test-Path -LiteralPath $path) {
-        Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$path+'"') | Out-Null
+        $process=Start-DeckBackgroundPowerShell $path @()
+        $process.Dispose()
     }
 }
 
@@ -433,15 +468,21 @@ function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, 
     $candidates | Sort-Object | Select-Object -First 1
 }
 function Sync-DeckWarmupStartup([string]$SuiteRoot, $Settings, $NextRun = $null) {
-    # Remove the legacy Run entry. Automatic warm-up is an ordinary, visible
-    # per-user Scheduled Task whose short-lived worker never constructs the GUI.
+    # Remove the legacy Run entry. Automatic warm-up is a clearly named per-user
+    # Scheduled Task whose short-lived worker never attaches to the desktop.
     $runPath='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     if(Test-Path $runPath){Remove-ItemProperty -Path $runPath -Name 'CodexDeckWarmup' -ErrorAction SilentlyContinue}
     if($env:OS -ne 'Windows_NT'){return}
-    $taskName='CodexDeck Automatic Warm-up'
-    if(-not $Settings.WarmupEnabled){Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue; return}
+    $taskName='CodexDeck Warmup Scheduling'
+    $legacyTaskNames=@('CodexDeck Automatic Warm-up')
+    if(-not $Settings.WarmupEnabled -or -not $Settings.WarmupSchedulingEnabled){
+        foreach($disabledTaskName in @($taskName)+$legacyTaskNames){Unregister-ScheduledTask -TaskName $disabledTaskName -Confirm:$false -ErrorAction SilentlyContinue}
+        return
+    }
     $worker=Join-Path $SuiteRoot 'Deck.WarmupWorker.ps1'
     if(-not (Test-Path -LiteralPath $worker -PathType Leaf)){throw 'Warm-up worker is not installed.'}
+    $backgroundLauncher=Join-Path $SuiteRoot 'Deck.Background.vbs'
+    if(-not (Test-Path -LiteralPath $backgroundLauncher -PathType Leaf)){throw 'Background launcher is not installed.'}
     if($null -eq $NextRun){
         $cache=ConvertTo-DeckMap (Read-DeckJson (Join-Path $SuiteRoot 'deck/cache.json'))
         $history=ConvertTo-DeckMap (Read-DeckJson (Join-Path $SuiteRoot 'deck/warmup.json'))
@@ -461,10 +502,17 @@ function Sync-DeckWarmupStartup([string]$SuiteRoot, $Settings, $NextRun = $null)
         $triggers+=New-ScheduledTaskTrigger -Once -At $at.LocalDateTime
     }
     if(-not $triggers.Count){$triggers+=New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes(1))}
-    $action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$worker+'"') -WorkingDirectory $SuiteRoot
+    $scriptHost=Join-Path $env:SystemRoot 'System32\wscript.exe'
+    $actionArguments=@('//B','//Nologo',$backgroundLauncher,$worker) | ForEach-Object { ConvertTo-DeckProcessArgument ([string]$_) }
+    $action=New-ScheduledTaskAction -Execute $scriptHost -Argument ($actionArguments -join ' ') -WorkingDirectory $SuiteRoot
+    # WScript is a GUI-subsystem host and the launcher uses window style 0, so
+    # neither it nor the child PowerShell process can flash on the desktop.
     $principal=New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
     $taskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $taskSettings -Principal $principal -Description 'Checks selected Codex accounts at warm-up times, warms eligible accounts, refreshes quota state, and exits. Managed by Codex Deck.' -Force | Out-Null
+    # Only retire the previous task after the replacement was registered. A
+    # registration failure must not silently disable an existing schedule.
+    foreach($legacyTaskName in $legacyTaskNames){Unregister-ScheduledTask -TaskName $legacyTaskName -Confirm:$false -ErrorAction SilentlyContinue}
 }
 
 function Add-DeckTimedWarmups([string]$SuiteRoot, $Settings, $Accounts, $Cache, [DateTimeOffset]$Now) {

@@ -17,6 +17,7 @@ $namedSession=Register-DeckSession $fixture 'work-main' 'C:\example'
 Assert (@(Get-DeckSessions $fixture | Where-Object Account -eq 'work-main').Count -eq 1) 'Custom account session missing'
 Remove-Item -LiteralPath $namedSession
 Assert (-not $settings.WarmupEnabled) 'Warm-up must default off'
+Assert (-not $settings.WarmupSchedulingEnabled) 'Background warm-up scheduling must default off'
 Assert (-not $settings.AlwaysOnTop) 'Always on top must default off'
 Assert ($settings.ViewMode -eq 'Widget') 'Widget must be default'
 Assert ($settings.Width -eq 476 -and $settings.WidgetWidth -eq 238 -and $settings.Height -eq 0 -and $settings.WidgetHeight -eq 0) 'Content-based geometry defaults failed'
@@ -91,6 +92,31 @@ $task=Start-DeckTask "'synthetic worker output'" 'Test' 'account1'
 Assert ($task.Process.WaitForExit(10000)) 'Worker did not finish'
 Assert ($task.Out.Result.Trim() -eq 'synthetic worker output') 'Worker output lost'
 $task.Process.Dispose()
+$backgroundScript=Join-Path $fixture 'background worker.ps1'; $backgroundResult=Join-Path $fixture 'background-result.json'
+[IO.File]::WriteAllText($backgroundScript,'[IO.File]::WriteAllText($env:CODEX_DECK_BACKGROUND_TEST,($args | ConvertTo-Json -Compress)); exit 0',[Text.UTF8Encoding]::new($false))
+$oldBackgroundResult=$env:CODEX_DECK_BACKGROUND_TEST
+try{
+    $env:CODEX_DECK_BACKGROUND_TEST=$backgroundResult
+    $background=Start-DeckBackgroundPowerShell $backgroundScript @('two words','model="quiet"','C:\path with space\')
+    Assert (-not $background.StartInfo.UseShellExecute -and $background.StartInfo.CreateNoWindow -and $background.StartInfo.WindowStyle -eq 'Hidden') 'Background PowerShell can create a console window'
+    Assert ($background.WaitForExit(10000) -and $background.ExitCode -eq 0) 'Background PowerShell did not finish'
+    $background.Dispose()
+}finally{$env:CODEX_DECK_BACKGROUND_TEST=$oldBackgroundResult}
+$backgroundArguments=Get-Content -LiteralPath $backgroundResult -Raw | ConvertFrom-Json
+Assert (($backgroundArguments -join '|') -eq 'two words|model="quiet"|C:\path with space\') 'Background PowerShell lost arguments'
+$scheduledResult=Join-Path $fixture 'scheduled-background-result.json'
+try{
+    $env:CODEX_DECK_BACKGROUND_TEST=$scheduledResult
+    $vbsInfo=[Diagnostics.ProcessStartInfo]::new()
+    $vbsInfo.FileName=Join-Path $env:SystemRoot 'System32\wscript.exe'
+    $vbsInfo.Arguments=(@('//B','//Nologo',(Join-Path $PSScriptRoot 'Deck.Background.vbs'),$backgroundScript,'scheduled worker') | ForEach-Object { ConvertTo-DeckProcessArgument ([string]$_) }) -join ' '
+    $vbsInfo.UseShellExecute=$false; $vbsInfo.CreateNoWindow=$true; $vbsInfo.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
+    $vbsProcess=[Diagnostics.Process]::Start($vbsInfo)
+    Assert ($vbsProcess.WaitForExit(10000) -and $vbsProcess.ExitCode -eq 0) 'Scheduled background launcher did not finish'
+    $vbsProcess.Dispose()
+}finally{$env:CODEX_DECK_BACKGROUND_TEST=$oldBackgroundResult}
+$scheduledArguments=Get-Content -LiteralPath $scheduledResult -Raw | ConvertFrom-Json
+Assert (($scheduledArguments -join '|') -eq 'scheduled worker') 'Scheduled background launcher lost arguments'
 foreach($file in @('Deck.Core.ps1','Deck.WarmupWorker.ps1','Codex-Deck.ps1','../.local/bin/codex-auth.ps1')){
     $tokens=$null; $errors=$null
     $path=Join-Path $PSScriptRoot $file
@@ -172,3 +198,28 @@ function Start-DeckTask($Code,$Kind,$Account){return @{Kind=$Kind;Account=$Accou
 Invoke-DeckQueuedWarmups $queueSuite $ws $workers $warmHistory ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
 Assert ($workers.account1.Kind -eq 'Warm-up' -and $warmHistory.account1.Mode -eq 'Manual') 'Manual warm-up blocked by automatic pause'
 'PASS: daily slots, midnight catch-up, persisted deduplication, manual background queue and confirmed replies.'
+
+$scheduledSuite=Join-Path $fixture 'scheduled-suite'; [void][IO.Directory]::CreateDirectory($scheduledSuite)
+[IO.File]::WriteAllText((Join-Path $scheduledSuite 'Deck.WarmupWorker.ps1'),'exit 0',[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $scheduledSuite 'Deck.Background.vbs'),"' synthetic launcher",[Text.UTF8Encoding]::new($false))
+$script:removedTaskNames=@(); $script:registeredTask=$null; $script:failTaskRegistration=$true
+function Remove-ItemProperty { [CmdletBinding()]param([string]$Path,[string]$Name); }
+function Unregister-ScheduledTask { [CmdletBinding(SupportsShouldProcess=$true)]param([string]$TaskName); $script:removedTaskNames+=$TaskName }
+function New-ScheduledTaskTrigger { param([switch]$AtLogOn,[string]$User,[switch]$Daily,[switch]$Once,[datetime]$At); [pscustomobject]@{AtLogOn=$AtLogOn;User=$User;Daily=$Daily;Once=$Once;At=$At} }
+function New-ScheduledTaskAction { param([string]$Execute,[string]$Argument,[string]$WorkingDirectory); [pscustomobject]@{Execute=$Execute;Argument=$Argument;WorkingDirectory=$WorkingDirectory} }
+function New-ScheduledTaskPrincipal { param([string]$UserId,[string]$LogonType,[string]$RunLevel); [pscustomobject]@{UserId=$UserId;LogonType=$LogonType;RunLevel=$RunLevel} }
+function New-ScheduledTaskSettingsSet { param([switch]$StartWhenAvailable,[string]$MultipleInstances,[timespan]$ExecutionTimeLimit,[switch]$AllowStartIfOnBatteries,[switch]$DontStopIfGoingOnBatteries); [pscustomobject]@{StartWhenAvailable=$StartWhenAvailable} }
+function Register-ScheduledTask { param([string]$TaskName,$Action,$Trigger,$Settings,$Principal,[string]$Description,[switch]$Force); if($script:failTaskRegistration){throw 'Synthetic registration failure'}; $script:registeredTask=[pscustomobject]@{TaskName=$TaskName;Action=$Action;Principal=$Principal;Description=$Description} }
+$scheduledSettings=Get-DeckDefaults; $scheduledSettings.WarmupEnabled=$true; $scheduledSettings.WarmupSchedulingEnabled=$true; $scheduledSettings.WarmupStartAtLogin=$true
+$registrationFailed=$false; try{Sync-DeckWarmupStartup $scheduledSuite $scheduledSettings ([DateTimeOffset]::Now.AddHours(1))}catch{$registrationFailed=$true}
+Assert ($registrationFailed -and $removedTaskNames.Count -eq 0) 'Failed task migration removed the working legacy schedule'
+$script:failTaskRegistration=$false
+Sync-DeckWarmupStartup $scheduledSuite $scheduledSettings ([DateTimeOffset]::Now.AddHours(1))
+Assert ($removedTaskNames -contains 'CodexDeck Automatic Warm-up') 'Legacy warm-up task was not removed'
+Assert ($registeredTask.TaskName -eq 'CodexDeck Warmup Scheduling') 'Warm-up task does not have a clear identity'
+Assert ($registeredTask.Principal.LogonType -eq 'Interactive') 'Warm-up task uses an unexpected principal'
+Assert ($registeredTask.Action.Execute -match 'wscript\.exe$' -and $registeredTask.Action.Argument -match '//B' -and $registeredTask.Action.Argument -match 'Deck\.Background\.vbs') 'Scheduled worker bypasses the windowless launcher'
+$script:registeredTask=$null; $script:removedTaskNames=@(); $scheduledSettings.WarmupSchedulingEnabled=$false
+Sync-DeckWarmupStartup $scheduledSuite $scheduledSettings ([DateTimeOffset]::Now.AddHours(1))
+Assert ($null -eq $registeredTask -and $removedTaskNames -contains 'CodexDeck Warmup Scheduling') 'Opted-out settings retained or recreated the background task'
+'PASS: background processes stay console-free, scheduling is explicit, and its task has a clear identity.'

@@ -103,7 +103,8 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     }
     if ($WarmupSettings) {
         $warmState=if($Names.Count){Get-DeckWarmupStatus $WarmupSettings $(if($Cache[$Names[$Selected]]){$Cache[$Names[$Selected]]}else{@{Account=$Names[$Selected]}}) $WarmupHistory[$Names[$Selected]]}else{'No account selected'}
-        Add-Line ('  AUTO WARM-UP: '+$(if($WarmupSettings.WarmupEnabled){'ON'}else{'PAUSED'})+' | '+$warmState) 'Yellow'
+        $warmMode=if(-not $WarmupSettings.WarmupEnabled){'PAUSED'}elseif($WarmupSettings.WarmupSchedulingEnabled){'SCHEDULED'}else{'UNSCHEDULED'}
+        Add-Line ('  AUTO WARM-UP: '+$warmMode+' | '+$warmState) 'Yellow'
     }
     Add-Line '  WARMUP   U run now  T daily times  W select account  P pause/resume' 'DarkMagenta'
     Add-Line ('  ' + $Notice) 'Yellow'
@@ -260,16 +261,16 @@ function Show-DeckTerminal {
                         if($times){
                             if($times -eq 'off'){$times=''}
                             $warmSettings=Set-DeckWarmupTimes $SuiteRoot $times
-                            $notice='Daily warm-up: '+$(if($warmSettings.WarmupTimedEnabled){$warmSettings.WarmupTimes+' (local)'}else{'off'})
+                            $notice='Daily warm-up: '+$(if($warmSettings.WarmupTimedEnabled){$warmSettings.WarmupTimes+' (local)'}else{'off'})+$(if($warmSettings.WarmupTimedEnabled -and -not $warmSettings.WarmupSchedulingEnabled){'; background scheduling is off in desktop Settings'}else{''})
                         }
                     } catch { $notice=$_.Exception.Message }
                     finally { [Console]::CursorVisible=$false; Clear-Host; $lastFrame='' }
                 }
                 'W' {
-                    try{$warmSettings=Set-DeckWarmupControl $root $name; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice='Warm-up selection saved. Windows Task Scheduler works with Deck and this dashboard closed.'}catch{$notice=$_.Exception.Message}
+                    try{$warmSettings=Set-DeckWarmupControl $root $name; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice=if($warmSettings.WarmupSchedulingEnabled){'Warm-up selection saved. Background scheduling is enabled.'}else{'Warm-up selection saved. Enable background scheduling in desktop Settings for automatic runs.'}}catch{$notice=$_.Exception.Message}
                 }
                 'P' {
-                    try{$warmSettings=Set-DeckWarmupControl $root -Pause; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice='Warm-up '+$(if($warmSettings.WarmupEnabled){'resumed in Windows Task Scheduler.'}else{'paused; in-flight requests may finish.'})}catch{$notice=$_.Exception.Message}
+                    try{$warmSettings=Set-DeckWarmupControl $root -Pause; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice='Warm-up '+$(if(-not $warmSettings.WarmupEnabled){'paused; in-flight requests may finish.'}elseif($warmSettings.WarmupSchedulingEnabled){'resumed with background scheduling.'}else{'resumed; background scheduling is off in desktop Settings.'})}catch{$notice=$_.Exception.Message}
                 }
                 'G' { Open-DeckGlobalRules $SuiteRoot; $notice='Global Rules editor opened.' }
                 'S' { Start-DeckCompanion $SuiteRoot -OpenSettings; $notice='Desktop Settings opened.' }

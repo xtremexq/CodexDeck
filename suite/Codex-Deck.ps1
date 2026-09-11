@@ -506,10 +506,10 @@ function Show-DeckSettings {
         Appearance=@('ViewMode','Compact','AlwaysOnTop','CloseToTray','AutoStart','OpacityPercent','FontSize','DefaultFolder','AlwaysAskFolder')
         Details=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
-        'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupEnabled','WarmupAllPaid','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
+        'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupAllPaid','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
     }
-    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='A visible Windows Scheduled Task wakes a short-lived headless worker; Deck can be completely closed. At each wake it checks selected paid accounts, warms only eligible ones, refreshes their real next reset times, records a concise log, and exits. Turn off the master switch to remove the task.'}
-    $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up (master switch)';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupAllPaid='All Plus or higher (including future accounts)';WarmupAccounts='Additional accounts (type to find; select one or more)';WarmupModel='Model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
+    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
+    $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupAllPaid='All Plus or higher (including future accounts)';WarmupAccounts='Additional accounts (type to find; select one or more)';WarmupModel='Model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
     $panels=@{}; $controls=@{}
     foreach($group in $groups.Keys){
         $tab=[Windows.Controls.TabItem]::new(); $tab.Header=$group
@@ -538,9 +538,19 @@ function Show-DeckSettings {
         if(-not $group){$group='Appearance'}
         $panel=if($group -eq 'Details'){$detailPanels[$key]}else{$panels[$group]}
         if($key -eq 'AutoCheck'){[void]$panel.Children.Add((New-DeckText 'Checks' '#EDF1F7' 18))}
-        if($key -eq 'WarmupResetEnabled'){[void]$panel.Children.Add((New-DeckText 'Usage Warmup' '#EDF1F7' 18)); [void]$panel.Children.Add((New-DeckText $descriptions['Usage Warmup'] '#929CA4'))}
+        if($key -eq 'WarmupEnabled'){[void]$panel.Children.Add((New-DeckText 'Usage Warmup' '#EDF1F7' 18)); [void]$panel.Children.Add((New-DeckText $descriptions['Usage Warmup'] '#929CA4'))}
         $caption=if($labels.ContainsKey($key)){$labels[$key]}else{(($key -replace '^Show','') -creplace '([a-z])([A-Z])','$1 $2')}
-        if ($settings[$key] -is [bool]) {
+        if($key -eq 'WarmupSchedulingEnabled'){
+            $control=[Windows.Controls.Button]::new(); $control.Tag=[bool]$settings[$key]
+            $control.Content=if($control.Tag){'Disable background scheduling'}else{'Enable background scheduling'}
+            $control.ToolTip='Creates or removes the CodexDeck Warmup Scheduling task when you save settings.'
+            $control.HorizontalAlignment='Left'; $control.Padding='12,7'; $control.Margin='0,0,10,16'; $control.MinHeight=34
+            $control.Add_Click({
+                $control.Tag=-not [bool]$control.Tag
+                $control.Content=if($control.Tag){'Disable background scheduling'}else{'Enable background scheduling'}
+                if($control.Tag){$controls.WarmupEnabled.IsChecked=$true}
+            }.GetNewClosure())
+        }elseif ($settings[$key] -is [bool]) {
             $control=[Windows.Controls.CheckBox]::new(); $control.Content=$caption; $control.IsChecked=$settings[$key]
             $control.Foreground='#EAF0FA'; $control.Margin='0,0,0,14'; $control.MinHeight=24
         } else {
@@ -587,7 +597,8 @@ function Show-DeckSettings {
             $updated=Get-DeckDefaults
             foreach ($key in $settings.Keys) {
                 if (-not $controls.ContainsKey($key)) { $updated[$key]=$settings[$key]; continue }
-                if ($settings[$key] -is [bool]) { $updated[$key]=[bool]$controls[$key].IsChecked }
+                if ($key -eq 'WarmupSchedulingEnabled') { $updated[$key]=[bool]$controls[$key].Tag }
+                elseif ($settings[$key] -is [bool]) { $updated[$key]=[bool]$controls[$key].IsChecked }
                 elseif ($key -eq 'WarmupAccounts') { $updated[$key]=@($controls[$key].SelectedItems) -join ',' }
                 elseif ($key -eq 'FailoverAccounts') {
                     $membership=$controls[$key].Resources['Membership']; $members=$controls[$key].Resources['Members']
@@ -690,17 +701,18 @@ function Render-Deck {
     $names = @($sessions | ForEach-Object Account | Select-Object -Unique)
     if ($allProfiles) { $names=@(Get-DeckAccounts) }
     $names=@($names | Sort-Object @{Expression={if($_ -in $pins){0}else{1}}},@{Expression={if($_ -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},{$_})
-    $Summary.Text="{0} connected accounts  /  {1} terminals  /  warm-up {2}" -f @($sessions | ForEach-Object Account | Select-Object -Unique).Count,$sessions.Count,$(if($settings.WarmupEnabled){'on'}else{'off'})
+    $warmupLabel=if(-not $settings.WarmupEnabled){'off'}elseif($settings.WarmupSchedulingEnabled){'scheduled'}else{'scheduling off'}
+    $Summary.Text="{0} connected accounts  /  {1} terminals  /  warm-up {2}" -f @($sessions | ForEach-Object Account | Select-Object -Unique).Count,$sessions.Count,$warmupLabel
     if($widget){$Summary.Text="{0} online  /  {1} terminals" -f @($sessions | ForEach-Object Account | Select-Object -Unique).Count,$sessions.Count}
     $warming=@($tasks.Values | Where-Object Kind -eq 'Warm-up').Count
     $StatusLine.Text = if ($tasks.Count) { "Checking $($tasks.Count-$warming) / warming $warming…" } else { $(if($settings.AutoCheck){"$notice / auto-check every $($settings.PollMinutes)m"}else{"$notice / auto-check off"}) }
-    if($widget -and -not $tasks.Count){$StatusLine.Text='Checks '+$(if($settings.AutoCheck){'on'}else{'off'})+'  /  warm-up '+$(if($settings.WarmupEnabled){'on'}else{'off'})}
+    if($widget -and -not $tasks.Count){$StatusLine.Text='Checks '+$(if($settings.AutoCheck){'on'}else{'off'})+'  /  warm-up '+$warmupLabel}
     $SummaryButton.ToolTip=if($allProfiles){'Showing all accounts. Click for connected only.'}else{'Showing connected accounts. Click to see all.'}
     $Summary.Foreground=if($allProfiles){'#69DEC0'}else{'#8493AA'}
     $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + $allProfiles + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
     if ($signature -eq $lastRender) { return }
     $script:lastRender=$signature
-    $style=(@('Compact','FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowResetCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupAllPaid','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
+    $style=(@('Compact','FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowResetCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupSchedulingEnabled','WarmupAllPaid','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
     if($style -ne $rowStyle){
         $poolKey=[string]$widget; $pool=$rowPools[$poolKey]
         if($pool -and $pool.Style -eq $style){$script:rowControls=$pool.Controls}else{$script:rowControls=@{}; $rowPools[$poolKey]=@{Style=$style;Controls=$rowControls}}
@@ -1019,6 +1031,10 @@ try{
         if($headers -notcontains 'Checks & Warmup' -or $headers -contains 'Checks' -or $headers -contains 'Usage Warmup'){throw 'Checks and warmup must share one tab.'}
         $checkPanel=$settingsTest.Controls.AutoCheck.Parent
         if($checkPanel -ne $settingsTest.Controls.WarmupEnabled.Parent -or $checkPanel.Children.IndexOf($settingsTest.Controls.AutoCheck) -ge $checkPanel.Children.IndexOf($settingsTest.Controls.WarmupEnabled)){throw 'Checks must appear above warmup.'}
+        $schedulingControl=$settingsTest.Controls.WarmupSchedulingEnabled
+        if($schedulingControl -isnot [Windows.Controls.Button] -or [bool]$schedulingControl.Tag -or $schedulingControl.Content -ne 'Enable background scheduling'){throw 'Background scheduling must be an explicit opt-in button.'}
+        $schedulingControl.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        if(-not [bool]$schedulingControl.Tag -or $schedulingControl.Content -ne 'Disable background scheduling' -or -not $settingsTest.Controls.WarmupEnabled.IsChecked){throw 'Background scheduling opt-in did not update its saved state.'}
         $before=$allProfiles
         $SummaryButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         if($allProfiles -eq $before){throw 'Summary did not switch account view.'}
