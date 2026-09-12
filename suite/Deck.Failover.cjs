@@ -99,14 +99,14 @@ async function createProxy(config, dependencies = {}) {
   // prevent an ordinary account from opening.
   if (automatic) for (const name of pool) getCredentials(name); else getCredentials(current);
   const secret = crypto.randomBytes(32).toString('hex');
-  let busy = false;
+  let activeRequests = 0;
   let lastRequestAccount = null;
   let lastRequestRoute = null;
   const status = () => ({
     version: 1,
     environment: { name:config.environment || null, pooled:environmentPool.length > 0, accounts:environmentPool },
     failover: { automatic, mode:config.mode, accounts:pool, active:current, unavailable:[...excluded], lastRequestAccount, lastRequestRoute },
-    busy
+    busy: activeRequests > 0
   });
   const server = http.createServer(async (req, res) => {
     // A capability URL, exact Host and no browser Origin prevent unauthenticated LAN/browser access.
@@ -133,8 +133,7 @@ async function createProxy(config, dependencies = {}) {
     // supplied destination. Only Responses requests are eligible for replay.
     if (!['GET','POST'].includes(req.method) || routePath.startsWith('/_deck/') || !routePath.startsWith('/')) return reply(res, 404, 'Unsupported Deck routing request.');
     const conversation = req.method === 'POST' && ['/responses','/responses/compact'].includes(routePath);
-    if (conversation && busy) return reply(res, 409, 'Another request is active; concurrent failover requests are not supported.');
-    if (conversation) busy = true;
+    if (conversation) activeRequests++;
     let outbound;
     const cancel = () => { if (!res.writableFinished) outbound?.destroy(); };
     res.on('close', cancel);
@@ -169,7 +168,7 @@ async function createProxy(config, dependencies = {}) {
           // independently and have caused otherwise-valid requests to be rejected.
           for (const name of ['user-agent','originator','version','openai-beta']) if (req.headers[name]) headers[name]=req.headers[name];
         } else {
-          const blockedHeaders = new Set(['host','authorization','chatgpt-account-id','x-account-id','x-chatgpt-account-id','openai-account-id','cookie','origin','content-length','accept-encoding','connection','proxy-connection','transfer-encoding','upgrade']);
+          const blockedHeaders = new Set(['host','authorization','chatgpt-account-id','x-account-id','x-chatgpt-account-id','openai-account-id','cookie','origin','content-length','content-encoding','accept-encoding','connection','proxy-connection','transfer-encoding','upgrade']);
           for (const [name,value] of Object.entries(req.headers)) if (!blockedHeaders.has(name) && !name.startsWith('sec-') && value != null) headers[name] = value;
         }
         headers.authorization='Bearer ' + auth.token;
@@ -206,7 +205,7 @@ async function createProxy(config, dependencies = {}) {
         return;
       }
     } catch { reply(res, 502, 'Deck routing request failed. No retry was made for an ambiguous transport or credential error.'); }
-    finally { if (conversation) busy = false; res.removeListener('close', cancel); }
+    finally { if (conversation) activeRequests--; res.removeListener('close', cancel); }
   });
   // Codex immediately falls back to HTTP when the endpoint declines WebSockets.
   server.on('upgrade', (_req, socket) => socket.end('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'));

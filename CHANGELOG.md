@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added independent concurrent Responses and compaction failover requests, including correct active-request tracking, cancellation handling and safe forwarding of decoded auxiliary request bodies.
+- Made repeat Deck launches wake the resident window immediately, restored it reliably without hiding the caller's terminal, and populated installed accounts and recent sessions in the first rendered frame.
+- Moved warm-up schedule repair off the UI thread, added persistent watchdog health checks and preserved known future quota resets to avoid tight retry loops.
+
 ## 1.4.0 - 2026-09-11
 
 - Added isolated pooled environments that rotate across selected accounts while retaining one Codex home, plus explicit sharing controls for skills, memories, instructions and individual MCP definitions.

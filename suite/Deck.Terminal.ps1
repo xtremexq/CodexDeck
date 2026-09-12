@@ -139,6 +139,9 @@ function Show-DeckTerminal {
     $selected = 0; $filter = ''; $notice = 'Ready. Fresh checks start automatically for missing or stale usage.'; $mask = $true
     $interactive = -not $Snapshot -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
     if (-not $interactive) { $notice = 'Cached snapshot. Run codex-auth in a terminal for live checks and actions.' }
+    elseif($warmSettings.WarmupEnabled -and $warmSettings.WarmupSchedulingEnabled){
+        try{if(Repair-DeckWarmupSchedule $SuiteRoot $warmSettings){$notice='Repaired the missing automatic warm-up schedule.'}}catch{$notice='Warm-up schedule repair failed: '+$_.Exception.Message}
+    }
     $oldColor = [Console]::ForegroundColor; $oldBackground = [Console]::BackgroundColor
     $oldCursor = $true
     if ($interactive) { $oldCursor = [Console]::CursorVisible; [Console]::CursorVisible = $false; Clear-Host; $lastFrame = '' }

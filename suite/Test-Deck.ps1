@@ -161,6 +161,9 @@ Assert ((Get-DeckWarmupReset $fresh $null $now) -eq ($now-90)) 'Fresh empty wind
 Assert ((Get-DeckWarmupReset $fresh ($now-120) $now) -eq ($now-120)) 'Observed reset was replaced by inferred reset'
 $fresh.Windows[0].UsedPct=1
 Assert ($null -eq (Get-DeckWarmupReset $fresh $null $now)) 'Used window inferred as empty'
+$fresh.Windows[0].UsedPct=0; $futureBoundary=$now+18000
+$fresh.Windows[0].ResetsAtUnix=$futureBoundary
+Assert ((Get-DeckWarmupReset $fresh $futureBoundary $now) -eq $futureBoundary) 'Known future reset was reinterpreted as a fresh window start'
 $settings=Get-DeckDefaults; $settings.WarmupEnabled=$true; $settings.WarmupAllPaid=$true
 $fresh=@{Account='account1';PlanType='plus';Status='available';Windows=@(@{DurationSeconds=18000;UsedPct=0},@{DurationSeconds=604800;UsedPct=100})}
 Assert (-not (Test-DeckWarmup $settings $fresh ($now-90) $null $now)) 'Exhausted weekly quota warmed'
@@ -169,9 +172,14 @@ Assert (-not (Test-DeckWarmup $settings $fresh ($now-90) $null $now)) 'Exhausted
 Assert (-not (Get-DeckDefaults).AutoStart) 'Desktop auto-opening must be opt-in'
 $scheduleSettings=Get-DeckDefaults; $scheduleSettings.WarmupEnabled=$true; $scheduleSettings.WarmupResetEnabled=$true; $scheduleSettings.WarmupGraceSeconds=60
 $scheduleNow=[DateTimeOffset]'2026-09-09T20:00:00-03:00'; $scheduleReset=$scheduleNow.ToUnixTimeSeconds()+600
-$scheduleCache=@{account1=[pscustomobject]@{Windows=@([pscustomobject]@{DurationSeconds=18000;ResetsAtUnix=$scheduleReset})}}
+$scheduleCache=@{account1=[pscustomobject]@{Status='available';Error=$null;Windows=@([pscustomobject]@{DurationSeconds=18000;ResetsAtUnix=$scheduleReset})}}
 $nextWarm=Get-DeckNextWarmupRun $scheduleSettings @('account1') $scheduleCache @{} @{} $scheduleNow
 Assert ($nextWarm.ToUnixTimeSeconds() -eq $scheduleReset+60) 'Next reset wake was not scheduled precisely after grace'
+$blockedReset=$scheduleReset+604800
+$scheduleCache.account1.Status='blocked'; $scheduleCache.account1.Windows+=@([pscustomobject]@{DurationSeconds=604800;UsedPct=100;Dead=$true;ResetsAtUnix=$blockedReset})
+$nextBlocked=Get-DeckNextWarmupRun $scheduleSettings @('account1') $scheduleCache @{} @{} $scheduleNow
+Assert ($nextBlocked.ToUnixTimeSeconds() -eq $blockedReset+60) 'Exhausted account kept a one-minute warm-up retry loop'
+$scheduleCache.account1.Status='available'; $scheduleCache.account1.Windows=@($scheduleCache.account1.Windows | Select-Object -First 1)
 $scheduleSettings.WarmupResetEnabled=$false
 Assert ($null -eq (Get-DeckNextWarmupRun $scheduleSettings @('account1') $scheduleCache @{} @{} $scheduleNow)) 'Reset-disabled settings created a reset wake'
 Assert ((ConvertTo-DeckWarmupTimes '19:00,08:00 08:00') -eq '08:00, 19:00') 'Daily times normalization failed'
@@ -205,11 +213,14 @@ $scheduledSuite=Join-Path $fixture 'scheduled-suite'; [void][IO.Directory]::Crea
 $script:removedTaskNames=@(); $script:registeredTask=$null; $script:failTaskRegistration=$true
 function Remove-ItemProperty { [CmdletBinding()]param([string]$Path,[string]$Name); }
 function Unregister-ScheduledTask { [CmdletBinding(SupportsShouldProcess=$true)]param([string]$TaskName); $script:removedTaskNames+=$TaskName }
-function New-ScheduledTaskTrigger { param([switch]$AtLogOn,[string]$User,[switch]$Daily,[switch]$Once,[datetime]$At); [pscustomobject]@{AtLogOn=$AtLogOn;User=$User;Daily=$Daily;Once=$Once;At=$At} }
-function New-ScheduledTaskAction { param([string]$Execute,[string]$Argument,[string]$WorkingDirectory); [pscustomobject]@{Execute=$Execute;Argument=$Argument;WorkingDirectory=$WorkingDirectory} }
+function New-ScheduledTaskTrigger { param([switch]$AtLogOn,[string]$User,[switch]$Daily,[switch]$Once,[datetime]$At,[timespan]$RepetitionDuration,[timespan]$RepetitionInterval); [pscustomobject]@{AtLogOn=$AtLogOn;User=$User;Daily=$Daily;Once=$Once;At=$At;RepetitionDuration=$RepetitionDuration;RepetitionInterval=$RepetitionInterval} }
+function New-ScheduledTaskAction { param([string]$Execute,[string]$Argument,[string]$WorkingDirectory); [pscustomobject]@{Execute=$Execute;Argument=$Argument;Arguments=$Argument;WorkingDirectory=$WorkingDirectory} }
 function New-ScheduledTaskPrincipal { param([string]$UserId,[string]$LogonType,[string]$RunLevel); [pscustomobject]@{UserId=$UserId;LogonType=$LogonType;RunLevel=$RunLevel} }
 function New-ScheduledTaskSettingsSet { param([switch]$StartWhenAvailable,[string]$MultipleInstances,[timespan]$ExecutionTimeLimit,[switch]$AllowStartIfOnBatteries,[switch]$DontStopIfGoingOnBatteries); [pscustomobject]@{StartWhenAvailable=$StartWhenAvailable} }
-function Register-ScheduledTask { param([string]$TaskName,$Action,$Trigger,$Settings,$Principal,[string]$Description,[switch]$Force); if($script:failTaskRegistration){throw 'Synthetic registration failure'}; $script:registeredTask=[pscustomobject]@{TaskName=$TaskName;Action=$Action;Principal=$Principal;Description=$Description} }
+function Register-ScheduledTask { param([string]$TaskName,$Action,$Trigger,$Settings,$Principal,[string]$Description,[switch]$Force); if($script:failTaskRegistration){throw 'Synthetic registration failure'}; $script:registeredTask=[pscustomobject]@{TaskName=$TaskName;Action=$Action;Trigger=$Trigger;Principal=$Principal;Description=$Description} }
+$script:healthTask=$null; $script:healthNext=[datetime]::Now.AddHours(1)
+function Get-ScheduledTask { [CmdletBinding()]param([string]$TaskName); if(-not $script:healthTask){throw 'Synthetic missing task'}; return $script:healthTask }
+function Get-ScheduledTaskInfo { [CmdletBinding()]param([string]$TaskName); return [pscustomobject]@{NextRunTime=$script:healthNext} }
 $scheduledSettings=Get-DeckDefaults; $scheduledSettings.WarmupEnabled=$true; $scheduledSettings.WarmupSchedulingEnabled=$true; $scheduledSettings.WarmupStartAtLogin=$true
 $registrationFailed=$false; try{Sync-DeckWarmupStartup $scheduledSuite $scheduledSettings ([DateTimeOffset]::Now.AddHours(1))}catch{$registrationFailed=$true}
 Assert ($registrationFailed -and $removedTaskNames.Count -eq 0) 'Failed task migration removed the working legacy schedule'
@@ -219,7 +230,14 @@ Assert ($removedTaskNames -contains 'CodexDeck Automatic Warm-up') 'Legacy warm-
 Assert ($registeredTask.TaskName -eq 'CodexDeck Warmup Scheduling') 'Warm-up task does not have a clear identity'
 Assert ($registeredTask.Principal.LogonType -eq 'Interactive') 'Warm-up task uses an unexpected principal'
 Assert ($registeredTask.Action.Execute -match 'wscript\.exe$' -and $registeredTask.Action.Argument -match '//B' -and $registeredTask.Action.Argument -match 'Deck\.Background\.vbs') 'Scheduled worker bypasses the windowless launcher'
+Assert (@($registeredTask.Trigger | Where-Object { $_.RepetitionInterval.TotalMinutes -eq 15 }).Count -eq 1) 'Warm-up task has no persistent watchdog trigger'
+$script:healthTask=[pscustomobject]@{State='Ready';Actions=@($registeredTask.Action)}
+Assert (Test-DeckWarmupScheduleHealthy $scheduledSuite $scheduledSettings) 'Healthy warm-up task was rejected'
+$script:healthTask=$null; Assert (-not (Test-DeckWarmupScheduleHealthy $scheduledSuite $scheduledSettings)) 'Missing warm-up task was accepted'
+$script:registeredTask=$null; Assert ((Repair-DeckWarmupSchedule $scheduledSuite $scheduledSettings) -and $registeredTask) 'Missing warm-up task was not repaired'
 $script:registeredTask=$null; $script:removedTaskNames=@(); $scheduledSettings.WarmupSchedulingEnabled=$false
-Sync-DeckWarmupStartup $scheduledSuite $scheduledSettings ([DateTimeOffset]::Now.AddHours(1))
+$script:healthTask=[pscustomobject]@{State='Ready';Actions=@($registeredTask.Action)}
+Assert (-not (Test-DeckWarmupScheduleHealthy $scheduledSuite $scheduledSettings)) 'Opted-out settings treated an existing background task as healthy'
+Assert (Repair-DeckWarmupSchedule $scheduledSuite $scheduledSettings) 'Opted-out background task was not repaired by removal'
 Assert ($null -eq $registeredTask -and $removedTaskNames -contains 'CodexDeck Warmup Scheduling') 'Opted-out settings retained or recreated the background task'
 'PASS: background processes stay console-free, scheduling is explicit, and its task has a clear identity.'

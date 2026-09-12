@@ -70,6 +70,19 @@ try{
         if($valid -and $request.Mode -eq 'Manual'){$valid=$unix-[long]$request.At -le 3600}
         if($valid){$requests[$account]=[pscustomobject]@{Request=$request;Path=$file.FullName}}else{Remove-Item -LiteralPath $file.FullName -ErrorAction SilentlyContinue}
     }
+    # The scheduled task includes a 15-minute watchdog in addition to its exact
+    # next-reset trigger. Watchdog wakes are intentionally network-free when the
+    # recorded exact run is still in the future; they only keep the task healthy.
+    $workerState=Read-DeckJson $statePath; $scheduledDue=$true; $recordedNext=$null
+    if($workerState.NextRun){
+        try{$recordedNext=[DateTimeOffset]$workerState.NextRun; $scheduledDue=$now -ge $recordedNext.AddSeconds(-5)}catch{}
+    }
+    if(-not $requests.Count -and -not $scheduledDue){
+        Write-DeckJson $statePath ([ordered]@{LastRun=$now.ToString('o');Outcome='Watchdog idle; exact run still scheduled';Checked=@();Warmed=@();NextRun=$recordedNext.ToString('o')})
+        Sync-DeckWarmupStartup $SuiteRoot $settings $recordedNext
+        Write-DeckWarmupLog ('watchdog idle; next='+$recordedNext.ToString('o'))
+        return
+    }
     $checked=@(); $changed=@{}
     if($settings.WarmupEnabled -and $accounts.Count){
         $checks=Invoke-DeckWorkerBatch $accounts Check $settings.WarmupModel

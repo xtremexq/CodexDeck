@@ -1,29 +1,38 @@
 ﻿param([switch]$SmokeTest, [switch]$Demo, [switch]$Attach, [switch]$Background, [switch]$OpenSettings, [string]$ScreenshotPath, [switch]$LifecycleTest, [switch]$PreviewExpanded, [ValidateSet('Panel','Widget')][string]$PreviewMode='Widget')
 if($LifecycleTest){$Demo=$true}
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'Deck.Core.ps1')
-. (Join-Path $PSScriptRoot 'Deck.Backup.ps1')
 $script:suite = $PSScriptRoot
 $script:root = Join-Path $suite 'deck'
+# Take the single-instance mutex before loading the rest of Deck. A second
+# invocation can now wake the resident window immediately instead of spending
+# time loading every dependency first.
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$created = $false
+$mutex = [Threading.Mutex]::new($true, "Local\CodexDeck-$sid", [ref]$created)
+if (-not $created -and -not $SmokeTest -and -not $Demo) {
+    if (-not $Attach) {
+        $showPath=Join-Path $root 'show.json'; [void][IO.Directory]::CreateDirectory($root)
+        $showTemp=Join-Path $root ([guid]::NewGuid().ToString('N')+'.tmp')
+        try {
+            [IO.File]::WriteAllText($showTemp,(@{At=[DateTimeOffset]::UtcNow.ToString('o');OpenSettings=[bool]$OpenSettings}|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+            if([IO.File]::Exists($showPath)){[IO.File]::Replace($showTemp,$showPath,[System.Management.Automation.Language.NullString]::Value)}else{[IO.File]::Move($showTemp,$showPath)}
+        } finally { if([IO.File]::Exists($showTemp)){[IO.File]::Delete($showTemp)} }
+    }
+    $mutex.Dispose(); exit
+}
+. (Join-Path $PSScriptRoot 'Deck.Core.ps1')
+. (Join-Path $PSScriptRoot 'Deck.Backup.ps1')
 $script:settings = if($SmokeTest -or $Demo){Get-DeckDefaults}else{Get-DeckSettings $root}
 $script:cache = @{}; $script:nextCheck = @{}; $script:resets = @{}; $script:history = @{}
 $script:rowPools=@{}; $script:rowControls=@{}; $script:rowStyle=''; $script:expandedRows=@{}; $script:profiles=@{}; $script:profileStamps=@{}; $script:cacheVersion=0; $script:lastPicker=[DateTimeOffset]::MinValue
 $script:tasks = @{}; $script:batchAccounts=@(); $script:batchUntil=[DateTimeOffset]::MinValue; $script:task = $null
-$script:quit = $false; $script:allProfiles = $false
+$script:quit = $false; $script:allProfiles = $false; $script:lastWarmupScheduleCheck=[DateTimeOffset]::UtcNow; $script:scheduleRepairTask=$null; $script:initialScheduleRepairStarted=$false
 $script:sessions = @(); $script:notice = 'Ready'; $script:lastRender = ''
 $script:pins=@(if(-not $SmokeTest -and -not $Demo){Read-DeckJson (Join-Path $root 'pins.json')})
 $script:viewStates=@{}
 if(-not $SmokeTest -and -not $Demo){
     $savedViews=Read-DeckJson (Join-Path $root 'views.json')
     foreach($mode in @('Panel','Widget')){if($savedViews.$mode){$viewStates[$mode]=$savedViews.$mode}}
-}
-# Named mutex is user/session scoped. Other launches signal the existing window.
-$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$created = $false
-$mutex = [Threading.Mutex]::new($true, "Local\CodexDeck-$sid", [ref]$created)
-if (-not $created -and -not $SmokeTest -and -not $Demo) {
-    if (-not $Attach) { Write-DeckJson (Join-Path $root 'show.json') @{ At=[DateTimeOffset]::UtcNow.ToString('o'); OpenSettings=[bool]$OpenSettings } }
-    $mutex.Dispose(); exit
 }
 if (-not $SmokeTest -and -not $Demo) {
     foreach ($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $root 'cache.json')))) {
@@ -45,9 +54,57 @@ if (-not $SmokeTest -and -not $Demo) {
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
 Add-Type @'
 using System.Runtime.InteropServices;
+using System;
+using System.Threading;
 public static class DeckTaskbarIdentity {
     [DllImport("shell32.dll", CharSet=CharSet.Unicode)]
     public static extern int SetCurrentProcessExplicitAppUserModelID(string id);
+
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] static extern bool AttachThreadInput(uint attach, uint attachTo, bool value);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window, int command);
+    [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr window);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+
+    static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+    static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+    static readonly object SurfaceLock = new object();
+    static int SurfaceGeneration;
+
+    public static bool ActivateWindow(IntPtr window) {
+        if (window == IntPtr.Zero) return false;
+        uint ignored;
+        uint foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out ignored);
+        uint currentThread = GetCurrentThreadId();
+        bool attached = foregroundThread != 0 && foregroundThread != currentThread && AttachThreadInput(currentThread, foregroundThread, true);
+        try {
+            ShowWindow(window, 9);
+            BringWindowToTop(window);
+            return SetForegroundWindow(window);
+        } finally {
+            if (attached) AttachThreadInput(currentThread, foregroundThread, false);
+        }
+    }
+
+    public static bool SurfaceWindow(IntPtr window, bool keepTopmost) {
+        bool activated = ActivateWindow(window);
+        int generation;
+        lock (SurfaceLock) { generation = ++SurfaceGeneration; }
+        SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, 0x53);
+        if (!keepTopmost) {
+            ThreadPool.QueueUserWorkItem(delegate(object ignored) {
+                Thread.Sleep(1200);
+                lock (SurfaceLock) {
+                    if (generation != SurfaceGeneration) return;
+                    SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0, 0x53);
+                }
+            });
+        }
+        return activated;
+    }
 }
 '@
 [void][DeckTaskbarIdentity]::SetCurrentProcessExplicitAppUserModelID('Codex.Deck')
@@ -309,6 +366,15 @@ function Set-DeckAppearance {
     $window.Topmost=$settings.AlwaysOnTop; $window.Opacity=$settings.OpacityPercent / 100
     $window.FontSize=$settings.FontSize
 }
+function Show-DeckWindow {
+    $window.Show(); $window.WindowState='Normal'
+    [void]$window.Activate(); [void]$window.Focus()
+    $handle=[Windows.Interop.WindowInteropHelper]::new($window).Handle
+    [void][DeckTaskbarIdentity]::SurfaceWindow($handle,[bool]$settings.AlwaysOnTop)
+    # A hidden launcher may still be denied lasting foreground ownership. Lift
+    # Deck briefly at the native z-order level. Its independent reset cannot be
+    # delayed by account discovery or scheduled-task checks on the UI thread.
+}
 function Set-DeckMode([string]$Mode, [switch]$Initial) {
     if (-not $Initial) {
         Save-DeckView
@@ -339,7 +405,7 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
     $ModeButton.ToolTip=if($widget){'Open control panel'}else{'Floating widget'}
     $script:lastRender=''
     if(-not $SmokeTest -and -not $Demo){Write-DeckJson (Join-Path $root 'settings.json') $settings}
-    if($Mode -eq 'Tray'){$window.Hide()}elseif(-not $Initial){$window.Show(); [void]$window.Activate()}
+    if($Mode -eq 'Tray'){$window.Hide()}elseif(-not $Initial){Show-DeckWindow}
 }
 function Set-DeckSavedSettings($Saved) {
     # Settings click handlers use GetNewClosure so TestUI can invoke them after
@@ -361,6 +427,15 @@ function Get-DeckAccounts {
     @(Get-ChildItem -LiteralPath (Join-Path $suite 'accounts') -Directory -ErrorAction SilentlyContinue |
         Where-Object Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' | Sort-Object @{Expression={if(Test-Path -LiteralPath (Join-Path $_.FullName 'deck-entry.json')){-1}elseif($_.Name -in $pins){0}else{1}}},@{Expression={if($_.Name -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},Name | ForEach-Object Name)
 }
+function Set-DeckPickerNames($Names) {
+    $names=@($Names)
+    if (($names -join ',') -eq (@($AccountPicker.Items | ForEach-Object Tag) -join ',')) {return}
+    $selected=$AccountPicker.SelectedValue; $AccountPicker.Items.Clear()
+    $AccountPicker.SelectedValuePath='Tag'
+    foreach ($name in $names) { $item=[Windows.Controls.ComboBoxItem]::new(); $item.Tag=$name; $item.Content=$name; [void]$AccountPicker.Items.Add($item) }
+    if ($selected -in $names) { $AccountPicker.SelectedValue=$selected }
+    elseif ($names.Count) { $AccountPicker.SelectedIndex=0 }
+}
 function Update-DeckPicker {
     if(([DateTimeOffset]::UtcNow-$lastPicker).TotalSeconds -lt 15){return}
     $script:lastPicker=[DateTimeOffset]::UtcNow
@@ -371,13 +446,7 @@ function Update-DeckPicker {
         $stamp=([IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'auth.json')).Ticks.ToString())+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'config.toml')).Ticks
         if($profileStamps[$name] -ne $stamp){$profiles[$name]=Get-DeckProfile $suite $name; $profileStamps[$name]=$stamp; $script:lastRender=''}
     }
-    if (($names -join ',') -ne (@($AccountPicker.Items | ForEach-Object Tag) -join ',')) {
-        $selected=$AccountPicker.SelectedValue; $AccountPicker.Items.Clear()
-        $AccountPicker.SelectedValuePath='Tag'
-        foreach ($name in $names) { $item=[Windows.Controls.ComboBoxItem]::new(); $item.Tag=$name; [void]$AccountPicker.Items.Add($item) }
-        if ($selected -in $names) { $AccountPicker.SelectedValue=$selected }
-        elseif ($names.Count) { $AccountPicker.SelectedIndex=0 }
-    }
+    Set-DeckPickerNames $names
     foreach($item in $AccountPicker.Items){
         $name=[string]$item.Tag
         if(-not $settings.AccountPickerUsage){$item.Content=$name; continue}
@@ -791,6 +860,36 @@ function Render-Deck {
     if($structureChanged -or $built -gt 0 -or $script:defaultViewHeight){Update-DeckWidgetHeight}
 
 }
+function Invoke-DeckShowRequest {
+    $signal=Join-Path $root 'show.json'
+    if(-not (Test-Path -LiteralPath $signal)){return}
+    $request=Read-DeckJson $signal
+    Remove-Item -LiteralPath $signal -ErrorAction SilentlyContinue
+    Show-DeckWindow
+    if($request.OpenSettings){Show-DeckSettings}
+}
+function Start-DeckScheduleRepair {
+    if($scheduleRepairTask -and -not $scheduleRepairTask.Process.HasExited){return}
+    if($scheduleRepairTask){$scheduleRepairTask.Process.Dispose(); $script:scheduleRepairTask=$null}
+    $corePath=(Join-Path $suite 'Deck.Core.ps1').Replace("'","''")
+    $suitePath=$suite.Replace("'","''")
+    $rootPath=$root.Replace("'","''")
+    $code=@"
+`$ErrorActionPreference='Stop'
+. '$corePath'
+`$settings=Get-DeckSettings '$rootPath'
+if(Repair-DeckWarmupSchedule '$suitePath' `$settings){[Console]::Out.Write('repaired')}else{[Console]::Out.Write('healthy')}
+"@
+    $script:scheduleRepairTask=Start-DeckTask $code 'Schedule repair' ''
+}
+function Complete-DeckScheduleRepair {
+    if(-not $scheduleRepairTask -or -not $scheduleRepairTask.Process.HasExited -or $scheduleRepairTask.Out.IsCompleted -eq $false -or $scheduleRepairTask.Err.IsCompleted -eq $false){return}
+    try {
+        if($scheduleRepairTask.Process.ExitCode -ne 0){throw $scheduleRepairTask.Err.Result}
+        if($scheduleRepairTask.Out.Result -eq 'repaired'){$script:notice='Repaired the automatic warm-up schedule'; $script:lastRender=''}
+    } catch {$script:notice='Warm-up schedule repair failed: '+$_.Exception.Message; $script:lastRender=''}
+    finally {$scheduleRepairTask.Process.Dispose(); $script:scheduleRepairTask=$null}
+}
 function Invoke-DeckTick {
     if($SmokeTest -or $Demo){Render-Deck; return}
     $settingsSignal=Join-Path $root 'warmup-settings-changed.json'
@@ -808,10 +907,14 @@ function Invoke-DeckTick {
         $savedResets=Read-DeckJson (Join-Path $root 'warmup-resets.json'); if($savedResets){foreach($property in $savedResets.PSObject.Properties){$resets[$property.Name]=[long]$property.Value}}
         $script:cacheVersion++; $script:lastRender=''
     }
+    Complete-DeckScheduleRepair
     $script:sessions=@(Get-DeckSessions $root); Update-DeckPicker
-    $signal=Join-Path $root 'show.json'
-    if(Test-Path -LiteralPath $signal){$request=Read-DeckJson $signal; Remove-Item -LiteralPath $signal -ErrorAction SilentlyContinue; $window.Show(); $window.WindowState='Normal'; [void]$window.Activate(); if($request.OpenSettings){Show-DeckSettings}}
     $now=[DateTimeOffset]::UtcNow; $unix=$now.ToUnixTimeSeconds()
+    if(-not $initialScheduleRepairStarted -or ($settings.WarmupEnabled -and $settings.WarmupSchedulingEnabled -and ($now-$lastWarmupScheduleCheck).TotalMinutes -ge 5)){
+        $script:initialScheduleRepairStarted=$true
+        $script:lastWarmupScheduleCheck=$now
+        try{Start-DeckScheduleRepair}catch{$script:notice='Warm-up schedule repair failed: '+$_.Exception.Message; $script:lastRender=''}
+    }
     $tickWatch=[Diagnostics.Stopwatch]::StartNew(); $cacheDirty=$false; $yieldTick=$false
     foreach($task in @($tasks.Values)){
         $timeout=($now-$task.Started).TotalSeconds -gt 120
@@ -970,13 +1073,11 @@ $NewButton.Add_Click({
 })
 $deckIcon=[Drawing.Icon]::new((Join-Path $root 'assets/codex-deck.ico'),32,32)
 $tray=[Windows.Forms.NotifyIcon]::new(); $tray.Icon=$deckIcon; $tray.Text='Codex Deck'; $tray.Visible=$true
-$menu=[Windows.Forms.ContextMenuStrip]::new(); $show=$menu.Items.Add('Show Codex Deck'); $panelMenu=$menu.Items.Add('Control panel'); $widgetMenu=$menu.Items.Add('Floating widget'); $settingsMenu=$menu.Items.Add('Settings'); $exit=$menu.Items.Add('Quit Deck (scheduled warm-up stays on)'); $tray.ContextMenuStrip=$menu
-$panelMenu.Add_Click({Set-DeckMode 'Panel'; Render-Deck})
-$widgetMenu.Add_Click({Set-DeckMode 'Widget'; Render-Deck})
-$settingsMenu.Add_Click({$window.Show(); Show-DeckSettings})
-$show.Add_Click({$window.Show(); $window.WindowState='Normal'; [void]$window.Activate()})
-$tray.Add_DoubleClick({$window.Show(); $window.WindowState='Normal'; [void]$window.Activate()})
-$exit.Add_Click({$script:quit=$true; $window.Close()})
+$menu=[Windows.Forms.ContextMenuStrip]::new(); $openDeckItem=$menu.Items.Add('Open Deck'); $openSettingsItem=$menu.Items.Add('Open Settings'); $quitDeckItem=$menu.Items.Add('Quit Deck'); $tray.ContextMenuStrip=$menu
+$openDeckItem.Add_Click({Show-DeckWindow})
+$openSettingsItem.Add_Click({Show-DeckWindow; Show-DeckSettings})
+$tray.Add_DoubleClick({Show-DeckWindow})
+$quitDeckItem.Add_Click({$script:quit=$true; $window.Close()})
 $window.Add_Closing({param($sender,$eventArgs)
     Save-DeckView
     if($settings.CloseToTray -and -not $quit -and -not $SmokeTest -and (-not $Demo -or $LifecycleTest)){
@@ -989,19 +1090,32 @@ $window.Add_Closing({param($sender,$eventArgs)
         Write-DeckJson (Join-Path $root 'settings.json') $settings
     }
 })
-$window.Width=$settings.Width; $window.Height=[Math]::Max(100,$settings.Height); Set-DeckAppearance; Update-DeckPicker
+$window.Width=$settings.Width; $window.Height=[Math]::Max(100,$settings.Height); Set-DeckAppearance
+if($SmokeTest -or $Demo){Update-DeckPicker}else{
+    # Put account names and the last session snapshot into the first painted
+    # frame. The normal tick validates processes and fills richer profile data.
+    Set-DeckPickerNames @(Get-DeckAccounts)
+    $sessionDir=Join-Path $root 'sessions'
+    if(Test-Path -LiteralPath $sessionDir){
+        $script:sessions=@(Get-ChildItem -LiteralPath $sessionDir -Filter '*.json' -File -ErrorAction SilentlyContinue | ForEach-Object { $entry=Read-DeckJson $_.FullName; if($entry.Account -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){$entry} })
+    }
+}
 Set-DeckMode $settings.ViewMode -Initial
 $window.Add_SizeChanged({if(-not $script:sizing){[void]$window.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Loaded,[Action]{Update-DeckWidgetHeight})}})
 $timer=[Windows.Threading.DispatcherTimer]::new(); $timer.Interval=[TimeSpan]::FromSeconds(2)
 $timer.Add_Tick({try{Invoke-DeckTick}catch{$script:notice='Companion error: '+$_.Exception.Message; $StatusLine.Text=$notice}})
+$showTimer=[Windows.Threading.DispatcherTimer]::new(); $showTimer.Interval=[TimeSpan]::FromMilliseconds(125)
+$showTimer.Add_Tick({try{Invoke-DeckShowRequest}catch{$script:notice='Open Deck failed: '+$_.Exception.Message; $StatusLine.Text=$notice}})
 try{
     if($SmokeTest -or $Demo){
         $script:sessions=@([pscustomobject]@{Account='account1';ProcessId=$PID;StartedAt=[DateTimeOffset]::Now.AddMinutes(-42).ToString('o');Folder='C:\Projects\example'})
         $cache.account1=[pscustomobject]@{Account='account1';Email='demo@example.com';PlanType='plus';Status='available';CheckedAt=[DateTimeOffset]::Now.ToString('o');Source='http';Windows=@([pscustomobject]@{Label='5H';DurationSeconds=18000;RemainingPct=72;UsedPct=28;Dead=$false;ResetsAtUnix=[DateTimeOffset]::Now.AddHours(3).ToUnixTimeSeconds()})}
     }
     if($SmokeTest -or $Demo){Set-DeckMode $PreviewMode -Initial}
-    Invoke-DeckTick
+    if($SmokeTest -or $Demo){Invoke-DeckTick}
     if($SmokeTest){
+        $trayLabels=@($menu.Items | ForEach-Object Text)
+        if($trayLabels.Count -ne 3 -or ($trayLabels -join '|') -ne 'Open Deck|Open Settings|Quit Deck'){throw 'Tray menu labels or ordering are incorrect.'}
         $script:supportTestPath=Join-Path ([IO.Path]::GetTempPath()) ('deck-support-test-'+[guid]::NewGuid().ToString('N')+'.json')
         $settingsTest=Show-DeckSettings -TestUI
         $failoverAccounts=$settingsTest.Controls.FailoverAccounts; $failoverMembership=$failoverAccounts.Resources['Membership']; $failoverMembers=$failoverAccounts.Resources['Members']
@@ -1159,7 +1273,8 @@ try{
         if(-not $window.ShowInTaskbar -or $MinimizeButton.Visibility -ne 'Visible'){throw 'Panel taskbar/minimize failed.'}
         if($MinimizeButton.Parent.Children[0] -ne $MinimizeButton){throw 'Minimize must be the first caption button.'}
         $MinimizeButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
-        if($window.WindowState -ne 'Minimized'){throw 'Minimize action failed.'}; $window.WindowState='Normal'
+        if($window.WindowState -ne 'Minimized'){throw 'Minimize action failed.'}; Show-DeckWindow
+        if(-not $window.IsVisible -or $window.WindowState -ne 'Normal' -or $window.Topmost){throw 'Open Deck did not restore and surface the window without changing Always on top.'}
         [void]$configMenu.ApplyTemplate()
         $menuSurface=[Windows.Media.VisualTreeHelper]::GetChild($configMenu,0)
         if($menuSurface -isnot [Windows.Controls.Border] -or $menuSurface.Background.ToString() -ne '#FF141619'){throw 'Configs menu background template failed.'}
@@ -1300,8 +1415,14 @@ try{
         }finally{$script:suite=$originalSuite;$script:root=$originalRoot;$script:settings=$originalSettings}
         'PASS: WPF constructed and synthetic account card rendered; no network calls or warm-ups.'
     }else{
-        if(-not $Demo){Sync-DeckWarmupStartup $suite $settings}
-        $timer.Start()
+        if(-not $Demo){
+            [void]$window.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Loaded,[Action]{Render-Deck})
+            # Account/profile discovery and rendering can be noticeable with a
+            # large collection. Queue the first tick so the window exists before
+            # that work.
+            [void]$window.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Background,[Action]{Invoke-DeckTick})
+        }
+        $timer.Start(); $showTimer.Start()
         # ShowDialog ends when hidden, which used to dispose the tray icon. A real
         # application message loop stays alive while the main window is hidden.
         $app=[Windows.Application]::new(); $app.ShutdownMode='OnMainWindowClose'
@@ -1327,6 +1448,9 @@ try{
                 }catch{$script:lifecycleFailure=$_.Exception.Message; $script:quit=$true; $lifeTimer.Stop(); $app.Shutdown()}
             }); $lifeTimer.Start()
         }
+        if(-not ($Background -or ($settings.ViewMode -eq 'Tray' -and $Attach))){
+            $window.Add_ContentRendered({if(-not $script:surfacedInitialWindow){$script:surfacedInitialWindow=$true; Show-DeckWindow}})
+        }
         if($OpenSettings){$window.Add_ContentRendered({if(-not $script:openedInitialSettings){$script:openedInitialSettings=$true; Show-DeckSettings}})}
         $app.MainWindow=$window
         if(($Background -or ($settings.ViewMode -eq 'Tray' -and $Attach)) -and -not $OpenSettings){
@@ -1341,6 +1465,6 @@ try{
     [IO.File]::AppendAllText((Join-Path $root 'errors.log'),([DateTimeOffset]::Now.ToString('o')+"`n"+$_.ToString()+"`n"+$_.ScriptStackTrace+"`n"))
     throw
 }finally{
-    $timer.Stop(); foreach($worker in @($tasks.Values)){Stop-DeckTask $worker; $worker.Process.Dispose()}; $tray.Dispose(); $deckIcon.Dispose()
+    $timer.Stop(); $showTimer.Stop(); if($scheduleRepairTask){Stop-DeckTask $scheduleRepairTask; $scheduleRepairTask.Process.Dispose()}; foreach($worker in @($tasks.Values)){Stop-DeckTask $worker; $worker.Process.Dispose()}; $tray.Dispose(); $deckIcon.Dispose()
     if($created){$mutex.ReleaseMutex()}; $mutex.Dispose()
 }

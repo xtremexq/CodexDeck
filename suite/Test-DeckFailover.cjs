@@ -86,6 +86,9 @@ async function main() {
       assert.equal(response.status,200); await response.text();
       assert.equal(JSON.parse(seen.at(-1).body).input,'compressed context');
     }
+    behavior=(req,res)=>{assert.equal(req.url,'/extensions/web/run');assert.equal(req.headers['content-encoding'],undefined);assert.equal(req.headers['content-length'],'16');res.writeHead(200);res.end('ok');};
+    result=await fetch(url+'/extensions/web/run',{method:'POST',headers:{'content-encoding':'gzip'},body:zlib.gzipSync(Buffer.from('decoded payload!'))});
+    assert.equal(result.status,200);await result.text();assert.equal(seen.at(-1).body,'decoded payload!');
     behavior=(req,res)=>{assert.equal(req.url,'/responses/compact');res.writeHead(200,{'content-type':'application/json'});res.end('{"output":[]}');};
     url=await start();
     const compact=(base,body={})=>fetch(base+'/responses/compact',{method:'POST',body:JSON.stringify(body)});
@@ -99,16 +102,34 @@ async function main() {
     behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
     url=await start(); assert.equal((await compact(url,{input:[{encrypted_content:'portable'}]})).status,429);
     assert.equal(seen.length,3,'Encrypted compact history must try the configured pool');
+    const concurrency=4;
+    let pending=[];
+    behavior=(req,res)=>{
+      if(req.headers['chatgpt-account-id']==='a') {
+        pending.push(res);
+        if(pending.length===concurrency) for(const waiting of pending) {waiting.writeHead(429);waiting.end(quota);}
+      } else {res.writeHead(200,{'content-type':'text/event-stream'});res.end('data: concurrent success\n\n');}
+    };
+    url=await start();
+    const concurrent=await Promise.all(Array.from({length:concurrency},(_,index)=>send(url,{input:'request-'+index})));
+    assert.deepEqual(concurrent.map(response=>response.status),Array(concurrency).fill(200));
+    assert.deepEqual(await Promise.all(concurrent.map(response=>response.text())),Array(concurrency).fill('data: concurrent success\n\n'));
+    assert.deepEqual(seen.map(request=>request.account).sort(),[...Array(concurrency).fill('a'),...Array(concurrency).fill('b')],'Concurrent quota rejections must independently retry on a usable account');
     behavior=(_req,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.write('data: waiting\n\n');};
-    url=await start(); const controller=new AbortController();
-    result=await fetch(url+'/responses',{method:'POST',body:'{}',signal:controller.signal});
-    assert.equal((await send(url)).status,409);
-    state=await (await select(url,'b')).json(); assert.equal(state.busy,true); assert.equal(state.failover.active,'b'); controller.abort();
-    await new Promise(resolve=>setTimeout(resolve,30)); assert.equal(seen.length,1);
+    url=await start(); const firstController=new AbortController(), secondController=new AbortController();
+    const active=await Promise.all([
+      fetch(url+'/responses',{method:'POST',body:'{}',signal:firstController.signal}),
+      fetch(url+'/responses',{method:'POST',body:'{}',signal:secondController.signal})
+    ]);
+    assert.deepEqual(active.map(response=>response.status),[200,200]);
+    state=await (await select(url,'b')).json(); assert.equal(state.busy,true); assert.equal(state.failover.active,'b'); firstController.abort();
+    await new Promise(resolve=>setTimeout(resolve,30)); state=await (await fetch(url+'/_deck/account')).json(); assert.equal(state.busy,true,'One cancellation must not mark another active request idle');
+    secondController.abort(); await new Promise(resolve=>setTimeout(resolve,30)); state=await (await fetch(url+'/_deck/account')).json(); assert.equal(state.busy,false);
+    assert.equal(seen.length,2);
     behavior=(_req,res)=>{res.writeHead(200);res.end('ok');}; await (await send(url)).text();
     assert.equal(seen.at(-1).account,'b','A switch during an accepted stream must apply to the next request');
     state=await (await fetch(url+'/_deck/account')).json(); assert.equal(state.failover.lastRequestAccount,'b');
-    console.log('PASS: failover routing, live account control, fresh ranking, bounded quota retries, affinity protection, credential isolation, stream interruption, transport errors, access controls and cancellation.');
+    console.log('PASS: failover routing, concurrent requests, live account control, fresh ranking, bounded quota retries, affinity protection, credential isolation, stream interruption, transport errors, access controls and cancellation.');
   } finally {
     for(const server of [...proxies,upstream]) { server.closeAllConnections(); server.close(); }
   }

@@ -9,6 +9,8 @@ function Get-DeckAccounts { 'work-main'; 1..12 | ForEach-Object {"account$_"} }
 function Update-DeckPicker {}
 function Render-Deck {}
 function Write-DeckJson {}
+function Complete-DeckScheduleRepair {}
+function Start-DeckScheduleRepair {$script:scheduleRepairStarts++}
 function Start-DeckTask($code,$kind,$account){
     $script:started+= $account
     $process=[pscustomobject]@{HasExited=$false;ExitCode=0}; $process | Add-Member ScriptMethod Dispose {}
@@ -19,8 +21,9 @@ $root=Join-Path $env:TEMP ('deck-scheduler-'+[guid]::NewGuid().ToString('N'))
 $suite=$PSScriptRoot; $settings=Get-DeckDefaults; $tasks=@{}; $manualChecks=@{}; $nextCheck=@{}
 $cache=@{}; $history=@{}; $resets=@{}; $batchAccounts=@(); $batchUntil=[DateTimeOffset]::MinValue
 $StatusButton=[pscustomobject]@{IsEnabled=$true}
-$allProfiles=$false; $widget=$false; $started=@()
+$allProfiles=$false; $widget=$false; $started=@(); $scheduleRepairStarts=0
 Invoke-DeckTick; Assert ($started.Count -eq 0) 'Disabled auto-check started a request'
+Assert ($scheduleRepairStarts -eq 1) 'Initial background schedule repair was not requested'
 $settings.AutoCheck=$true
 Invoke-DeckTick; Assert ($started.Count -eq 1 -and $started[0] -eq 'work-main') 'Auto-check missed connected account'
 Invoke-DeckTick; Assert ($started.Count -eq 1) 'Duplicate in-flight check'

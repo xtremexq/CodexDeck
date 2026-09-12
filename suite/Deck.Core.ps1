@@ -448,8 +448,19 @@ function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, 
     if(-not @($Accounts).Count){return $Now.AddHours(6)}
     $unix=$Now.ToUnixTimeSeconds(); $candidates=@()
     foreach($account in @($Accounts)){
+        $record=$Cache[$account]
+        $blockedWindows=@($record.Windows | Where-Object { $_.Dead -or ($null -ne $_.UsedPct -and $_.UsedPct -ge 99.5) })
+        if($blockedWindows.Count){
+            # A reset on one window cannot make the account usable while another
+            # quota window is still exhausted. Wake after the last blocking reset.
+            $blockingResets=@($blockedWindows | Where-Object { $_.ResetsAtUnix -and [long]$_.ResetsAtUnix -gt $unix } | ForEach-Object { [long]$_.ResetsAtUnix })
+            if($blockingResets.Count){$candidates+=[DateTimeOffset]::FromUnixTimeSeconds(($blockingResets|Measure-Object -Maximum).Maximum).AddSeconds($Settings.WarmupGraceSeconds).ToLocalTime()}
+            else{$candidates+=$Now.AddMinutes([Math]::Max(20,$UnknownDelayMinutes))}
+            continue
+        }
+        if($record -and ($record.Error -or $record.Status -eq 'error')){$candidates+=$Now.AddMinutes([Math]::Max(20,$UnknownDelayMinutes)); continue}
         $reset=if($Resets[$account]){[long]$Resets[$account]}else{
-            $five=$Cache[$account].Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
+            $five=$record.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
             if($five.ResetsAtUnix){[long]$five.ResetsAtUnix}else{0}
         }
         if(-not $reset){$candidates+=$Now.AddMinutes($UnknownDelayMinutes); continue}
@@ -466,6 +477,31 @@ function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, 
         }else{$candidates+=$Now.AddMinutes([Math]::Max(20,$UnknownDelayMinutes))}
     }
     $candidates | Sort-Object | Select-Object -First 1
+}
+function Test-DeckWarmupScheduleHealthy([string]$SuiteRoot, $Settings) {
+    if($env:OS -ne 'Windows_NT'){return $true}
+    $taskName='CodexDeck Warmup Scheduling'
+    if(-not $Settings.WarmupEnabled -or -not $Settings.WarmupSchedulingEnabled){
+        foreach($disabledTaskName in @($taskName,'CodexDeck Automatic Warm-up')){
+            try{if(Get-ScheduledTask -TaskName $disabledTaskName -ErrorAction Stop){return $false}}catch{}
+        }
+        return $true
+    }
+    try{
+        $task=Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        if(-not $task){return $false}
+        $action=@($task.Actions | Select-Object -First 1)[0]
+        $worker=Join-Path $SuiteRoot 'Deck.WarmupWorker.ps1'
+        if(-not $action -or [IO.Path]::GetFileName([string]$action.Execute) -ine 'wscript.exe' -or ([string]$action.Arguments).IndexOf($worker,[StringComparison]::OrdinalIgnoreCase) -lt 0){return $false}
+        if([string]$task.State -eq 'Running'){return $true}
+        $info=Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop
+        return $info.NextRunTime -and [datetime]$info.NextRunTime -gt [datetime]::Now.AddMinutes(-1)
+    }catch{return $false}
+}
+function Repair-DeckWarmupSchedule([string]$SuiteRoot, $Settings) {
+    if(Test-DeckWarmupScheduleHealthy $SuiteRoot $Settings){return $false}
+    Sync-DeckWarmupStartup $SuiteRoot $Settings
+    return $true
 }
 function Sync-DeckWarmupStartup([string]$SuiteRoot, $Settings, $NextRun = $null) {
     # Remove the legacy Run entry. Automatic warm-up is a clearly named per-user
@@ -501,6 +537,12 @@ function Sync-DeckWarmupStartup([string]$SuiteRoot, $Settings, $NextRun = $null)
         $at=([DateTimeOffset]$NextRun).ToLocalTime(); if($at -lt [DateTimeOffset]::Now.AddSeconds(15)){$at=[DateTimeOffset]::Now.AddSeconds(15)}
         $triggers+=New-ScheduledTaskTrigger -Once -At $at.LocalDateTime
     }
+    # Keep an independent trigger in the task definition. Normally the precise
+    # one-shot trigger above is replaced after every worker run. If that update
+    # ever fails, this watchdog gives the existing task another chance to repair
+    # itself instead of leaving warm-up silently dead until the next sign-in.
+    $watchdogInterval=New-TimeSpan -Minutes 15
+    $triggers+=New-ScheduledTaskTrigger -Once -At ([datetime]::Now.Add($watchdogInterval)) -RepetitionInterval $watchdogInterval -RepetitionDuration (New-TimeSpan -Days 1)
     if(-not $triggers.Count){$triggers+=New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes(1))}
     $scriptHost=Join-Path $env:SystemRoot 'System32\wscript.exe'
     $actionArguments=@('//B','//Nologo',$backgroundLauncher,$worker) | ForEach-Object { ConvertTo-DeckProcessArgument ([string]$_) }
@@ -557,7 +599,13 @@ function Invoke-DeckQueuedWarmups([string]$SuiteRoot, $Settings, $Tasks, $Histor
 }
 
 function Get-DeckWarmupReset($Record, $PreviousReset, [long]$Now) {
-    if ($PreviousReset -and [long]$PreviousReset -le $Now -and $Now - [long]$PreviousReset -le 3600) { return [long]$PreviousReset }
+    if ($PreviousReset) {
+        # A known future boundary is authoritative. Inferring the current window
+        # start from its end would make the just-warmed window look new and can
+        # send a duplicate warm-up while integer usage still rounds to zero.
+        if ([long]$PreviousReset -gt $Now) { return [long]$PreviousReset }
+        if ($Now - [long]$PreviousReset -le 3600) { return [long]$PreviousReset }
+    }
     $five=$Record.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
     # A full, freshly reported empty window also permits discovery after starting Deck.
     # The inferred start must be in the past; future/incomplete data is never eligible.

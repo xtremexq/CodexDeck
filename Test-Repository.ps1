@@ -22,6 +22,8 @@ try {
         git check-ignore -q -- $path
         if ($LASTEXITCODE -ne 0) { throw "Private/generated path is not ignored: $path" }
     }
+    $deckLauncher=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'bin/codex-deck.cmd'))
+    if($deckLauncher -match '(?im)^start\s+""\s+/b\s+'){throw 'Deck launcher must not share and hide the calling console.'}
     git diff --check
     if ($LASTEXITCODE -ne 0) { throw 'Whitespace check failed' }
     'PASS: tracked paths, sensitive-content patterns, encodings, parsing, ignores and whitespace.'
