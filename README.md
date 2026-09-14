@@ -43,7 +43,7 @@ Always optional; Deck is free and open source.
 
 **Requires Windows, Windows PowerShell 5.1, and Codex CLI available as `codex`.** The desktop companion uses WPF and the Windows system tray. Linux and macOS are not supported. No administrator account is required.
 
-Download **[CodexDeck-1.4.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/1.4.0/CodexDeck-1.4.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
+Download **[CodexDeck-1.5.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/1.5.0/CodexDeck-1.5.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
@@ -84,6 +84,10 @@ The installer adds command wrappers to your user PATH and preserves existing acc
 | **L** | Log in to the selected account |
 | **N** | Create a new profile and log in |
 | **D** | Open the desktop companion |
+| **G** | Edit rules that apply globally |
+| **I** | Read or edit the selected account or pool's global `AGENTS.md` instructions |
+| **E** | Read or edit the selected account or pool's memory files |
+| **K** | Open the selected account or pool's skills folder |
 | **M** | Toggle email masking; masking starts enabled |
 | **Esc** | Clear the search, or quit when no search is active |
 | **Q** | Quit the dashboard |
@@ -140,13 +144,13 @@ codex-check -NoColor             # Plain-text usage report
 ```
 
 Inside any signed-in `codex-auth` conversation, use Codex's local shell
-prefix: `!account`, `!pool`, `!usage`, or `!check`. These commands run locally
+prefix: `!account`, `!pool`, `!usage`, `!check`, or `!deck`. These commands run locally
 and do not submit a prompt or consume a model turn. Account first lets you choose
 the session's selectable accounts or, in a named environment, its current pool
 by printing numbered lists. Pool prints the current-pool list directly. Switch with a second local
 command such as `!pool 2` or `!pool account7`. Usage checks
 only the account currently routing the session; Check runs the complete local
-`codex-check` report.
+`codex-check` report, and Deck opens the desktop companion.
 Codex does not expose a third-party bare-slash extension point, so these commands
 use `!` and cannot appear as `/account` entries in the built-in command menu.
 Ordinary launches use a manual-only loopback route so `!account` works even when
@@ -154,6 +158,8 @@ automatic failover is Off. Their `CODEX_HOME`, saved conversation, and files sta
 with the account used to launch the session; only subsequent API requests switch.
 
 Each profile has a separate `CODEX_HOME`. New profiles can inherit local configuration, rules and skills; authentication remains separate. Deletion keeps a recovery copy and refuses an account with a tracked connected terminal.
+
+Deck keeps credentials, configuration, databases and histories isolated. Once a week, background storage maintenance leaves active account homes untouched, removes curated-plugin staging directories older than 24 hours from inactive homes, and hard-links verified-identical sandbox executables and managed plugin-cache files of at least 1 MiB. Each account retains its expected paths and Windows sandbox boundary; only immutable duplicate file contents share disk blocks. The result is recorded in `.codex-loop/deck/storage-maintenance.json`, and skipped active homes are retried later.
 
 ## Local data and privacy
 

@@ -23,7 +23,10 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Private/generated path is not ignored: $path" }
     }
     $deckLauncher=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'bin/codex-deck.cmd'))
-    if($deckLauncher -match '(?im)^start\s+""\s+/b\s+'){throw 'Deck launcher must not share and hide the calling console.'}
+    if($deckLauncher -notmatch '(?im)^start\s+""\s+"%SystemRoot%\\System32\\wscript\.exe"\s+//B\s+//Nologo\s+'){throw 'Deck launcher must use the windowless WScript host.'}
+    if($deckLauncher -match '(?im)^start\s+.*powershell(?:\.exe)?\b'){throw 'Deck launcher must not create a PowerShell console.'}
+    $installer=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Install-CodexDeck.ps1'))
+    if($installer -match '\.bak-install-'){throw 'Installer must not accumulate unbounded per-install backups.'}
     git diff --check
     if ($LASTEXITCODE -ne 0) { throw 'Whitespace check failed' }
     'PASS: tracked paths, sensitive-content patterns, encodings, parsing, ignores and whitespace.'

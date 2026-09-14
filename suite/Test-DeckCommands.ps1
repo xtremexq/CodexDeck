@@ -19,14 +19,17 @@ try {
         if(Test-Path -LiteralPath (Join-Path $pool "skills/$name")){throw "Legacy AI-backed command skill was not removed: $name"}
     }
     if([IO.File]::ReadAllText((Join-Path $custom 'skills/account/SKILL.md')) -ne 'user-owned'){throw 'An unmanaged same-name skill was removed.'}
-    foreach($name in @('account','pool','usage','check')){
+    foreach($name in @('account','pool','usage','check','deck')){
         $wrapper=Join-Path $PSScriptRoot "../bin/$name.cmd"
         if(-not (Test-Path -LiteralPath $wrapper -PathType Leaf)){throw "Missing local shell command: $name"}
+    }
+    if([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../bin/deck.cmd')) -notmatch 'codex-deck\.cmd'){
+        throw '!deck does not open the desktop companion.'
     }
     if([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../bin/codex-deck-session.ps1')) -match '\bRead-Host\b'){
         throw 'Local shell commands must not wait for interactive stdin inside the Codex TUI.'
     }
-    Write-Output 'PASS: local shell commands are packaged and legacy AI-backed command skills are removed without touching unmanaged skills.'
+    Write-Output 'PASS: local shell commands, including !deck, are packaged and legacy AI-backed command skills are removed without touching unmanaged skills.'
 } finally {
     if(Test-Path -LiteralPath $fixture){Remove-Item -LiteralPath $fixture -Recurse -Force}
 }

@@ -21,6 +21,7 @@ jobs:
           ./suite/Test-DeckScheduler.ps1
           ./suite/Test-DeckBackup.ps1
           ./suite/Test-DeckAccountTools.ps1
+          ./suite/Test-DeckStorage.ps1
           ./suite/Test-DeckFailover.ps1
           ./suite/Test-DeckEnvironments.ps1
           ./suite/Test-DeckEnvironmentLaunch.ps1
@@ -36,7 +37,9 @@ jobs:
           $destination = Join-Path $env:RUNNER_TEMP 'deck-install'
           ./Install-CodexDeck.ps1 -InstallHome $destination -SkipPath
           if (!(Test-Path "$destination/.codex-loop/deck/assets/codex-deck.ico")) { throw 'Missing installed icon' }
-          foreach ($name in 'account','pool','usage','check') {
+          if (!(Test-Path "$destination/.codex-loop/Deck.AccountResources.ps1")) { throw 'Missing installed account resource shortcuts' }
+          if (!(Test-Path "$destination/.codex-loop/Deck.Storage.ps1")) { throw 'Missing installed storage maintenance' }
+          foreach ($name in 'account','pool','usage','check','deck') {
             if (!(Test-Path "$destination/.local/bin/$name.cmd")) { throw "Missing installed local shell command: $name" }
-            if (Test-Path "$destination/.codex-loop/accounts/pool/skills/$name/.codexdeck-managed") { throw "Legacy AI-backed command skill remains: $name" }
+            if ($name -ne 'deck' -and (Test-Path "$destination/.codex-loop/accounts/pool/skills/$name/.codexdeck-managed")) { throw "Legacy AI-backed command skill remains: $name" }
           }

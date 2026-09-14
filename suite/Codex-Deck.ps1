@@ -425,7 +425,11 @@ function Set-DeckSavedSettings($Saved) {
 function Get-DeckAccounts {
     if($SmokeTest -or $Demo){if($script:testPickerNames){return $script:testPickerNames}; return 'account1'}
     @(Get-ChildItem -LiteralPath (Join-Path $suite 'accounts') -Directory -ErrorAction SilentlyContinue |
-        Where-Object Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' | Sort-Object @{Expression={if(Test-Path -LiteralPath (Join-Path $_.FullName 'deck-entry.json')){-1}elseif($_.Name -in $pins){0}else{1}}},@{Expression={if($_.Name -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},Name | ForEach-Object Name)
+        Where-Object Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' | Sort-Object @{Expression={if($_.Name -eq 'pool'){-2}elseif(Test-Path -LiteralPath (Join-Path $_.FullName 'deck-entry.json')){-1}elseif($_.Name -in $pins){0}else{1}}},@{Expression={if($_.Name -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},Name | ForEach-Object Name)
+}
+function Get-DeckPickerPoolEntry([string]$Name) {
+    if(($SmokeTest -or $Demo) -and $script:testPoolEntries -and $script:testPoolEntries.ContainsKey($Name)){return [pscustomobject]$script:testPoolEntries[$Name]}
+    return Get-DeckPoolEntry $suite $Name
 }
 function Set-DeckPickerNames($Names) {
     $names=@($Names)
@@ -434,7 +438,11 @@ function Set-DeckPickerNames($Names) {
     $AccountPicker.SelectedValuePath='Tag'
     foreach ($name in $names) { $item=[Windows.Controls.ComboBoxItem]::new(); $item.Tag=$name; $item.Content=$name; [void]$AccountPicker.Items.Add($item) }
     if ($selected -in $names) { $AccountPicker.SelectedValue=$selected }
-    elseif ($names.Count) { $AccountPicker.SelectedIndex=0 }
+    elseif ($names.Count) {
+        # Keep the primary pool discoverable at the top without making a pooled
+        # environment the surprising default for a fresh Deck window.
+        $AccountPicker.SelectedIndex=if($names.Count -gt 1 -and (Get-DeckPickerPoolEntry ([string]$names[0]))){1}else{0}
+    }
 }
 function Update-DeckPicker {
     if(([DateTimeOffset]::UtcNow-$lastPicker).TotalSeconds -lt 15){return}
@@ -443,18 +451,34 @@ function Update-DeckPicker {
     foreach($name in $names){
         if($SmokeTest -or $Demo){continue}
         $folder=Join-Path $suite "accounts/$name"
-        $stamp=([IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'auth.json')).Ticks.ToString())+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'config.toml')).Ticks
+        $stamp=([IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'auth.json')).Ticks.ToString())+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'config.toml')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-entry.json')).Ticks.ToString()
         if($profileStamps[$name] -ne $stamp){$profiles[$name]=Get-DeckProfile $suite $name; $profileStamps[$name]=$stamp; $script:lastRender=''}
     }
     Set-DeckPickerNames $names
     foreach($item in $AccountPicker.Items){
         $name=[string]$item.Tag
+        $poolEntry=Get-DeckPickerPoolEntry $name
+        if($poolEntry){
+            $line=[Windows.Controls.TextBlock]::new();$line.FontSize=11;$line.TextWrapping='NoWrap';$line.TextTrimming='CharacterEllipsis'
+            $title=[Windows.Documents.Run]::new($name+'  ');$title.Foreground='#69DEC0';$title.FontWeight='SemiBold';[void]$line.Inlines.Add($title)
+            try{
+                $members=if(($SmokeTest -or $Demo) -and $script:testPoolEntries){@($poolEntry.Accounts)}else{@(Resolve-DeckEntryPool $suite $poolEntry)}
+                $memberLabel=if($members.Count -eq 1){'1 quota account'}else{"$($members.Count) quota accounts"}
+                $summary=[Windows.Documents.Run]::new("Shared history / $memberLabel / $($poolEntry.Mode)");$summary.Foreground='#A9E8D5';[void]$line.Inlines.Add($summary)
+                $line.ToolTip='One Codex home and conversation history, routed through the pool accounts.'
+            }catch{
+                $summary=[Windows.Documents.Run]::new('Pool configuration needs attention');$summary.Foreground='#F17D8D';[void]$line.Inlines.Add($summary)
+                $line.ToolTip=$_.Exception.Message
+            }
+            $item.Content=$line
+            continue
+        }
         if(-not $settings.AccountPickerUsage){$item.Content=$name; continue}
         $row=$cache[$name]
         $line=[Windows.Controls.TextBlock]::new(); $line.FontSize=11; $line.TextWrapping='NoWrap'; $line.TextTrimming='CharacterEllipsis'
         $title=[Windows.Documents.Run]::new($(if($name -in $pins){'★ '}else{''})+$name+'  '); $title.Foreground='#E4EBF5'; $title.FontWeight='SemiBold'; [void]$line.Inlines.Add($title)
         $usage=[Windows.Controls.TextBlock]::new(); $usage.FontSize=10
-        foreach($quota in $row.Windows){
+        foreach($quota in @($row.Windows)){
             $used=$quota.UsedPct
             if($null -eq $used -and $null -ne $quota.RemainingPct){$used=100-$quota.RemainingPct}
             $label=switch([long]$quota.DurationSeconds){18000 {'5h'} 604800 {'Weekly'} default {$quota.Label}}
@@ -1099,6 +1123,8 @@ if($SmokeTest -or $Demo){Update-DeckPicker}else{
     if(Test-Path -LiteralPath $sessionDir){
         $script:sessions=@(Get-ChildItem -LiteralPath $sessionDir -Filter '*.json' -File -ErrorAction SilentlyContinue | ForEach-Object { $entry=Read-DeckJson $_.FullName; if($entry.Account -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){$entry} })
     }
+    $storageProcess=Start-DeckStorageMaintenance $suite
+    if($storageProcess){$storageProcess.Dispose()}
 }
 Set-DeckMode $settings.ViewMode -Initial
 $window.Add_SizeChanged({if(-not $script:sizing){[void]$window.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Loaded,[Action]{Update-DeckWidgetHeight})}})
@@ -1170,13 +1196,17 @@ try{
             if($node -is $type){$node}
             for($i=0;$i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($node);$i++){Find-DeckVisual ([Windows.Media.VisualTreeHelper]::GetChild($node,$i)) $type}
         }
-        $script:testPickerNames=@('account1','account2'); $settings.AccountPickerUsage=$true; $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker
+        $script:testPoolEntries=@{pool=@{Mode='Best';Accounts=@('account1','account2')}}
+        $script:testPickerNames=@('pool','account1','account2'); $settings.AccountPickerUsage=$true; $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker
+        if($AccountPicker.Items[0].Tag -ne 'pool' -or $AccountPicker.SelectedValue -ne 'account1'){throw 'Pool must be first while the second dropdown row remains the initial selection.'}
+        $poolEntry=$AccountPicker.Items[0]
+        if((($poolEntry.Content.Inlines|ForEach-Object Text)-join '') -notmatch 'Shared history / 2 quota accounts / Best'){throw 'Pool dropdown row does not explain pooled behavior.'}
         $pickerEntry=@($AccountPicker.Items | Where-Object Tag -eq 'account1')[0]
         if((($pickerEntry.Content.Inlines | ForEach-Object Text) -join '') -notmatch '5h 28%' -or $pickerEntry.Content.TextWrapping -ne 'NoWrap'){throw ('Picker: '+ [string]::Join('|',@($pickerEntry.Content.Inlines | ForEach-Object Text)))}
         $AccountPicker.SelectedValue='account1'
         if($AccountPicker.SelectedValue -ne 'account1'){throw 'Account picker identity lost.'}
         # Exercise the actual dropdown, including an unselected account.
-        $otherEntry=@($AccountPicker.Items | Where-Object Tag -ne 'account1')[0]
+        $otherEntry=@($AccountPicker.Items | Where-Object {$_.Tag -ne 'account1' -and $_.Tag -ne 'pool'})[0]
         if($otherEntry){
             $otherName=[string]$otherEntry.Tag; $previousRecord=$cache[$otherName]
             $record=$cache.account1 | ConvertTo-Json -Depth 20 | ConvertFrom-Json; $record.Account=$otherName
@@ -1197,7 +1227,7 @@ try{
             Write-Output 'PASS: open account picker renders usage/reset details on unselected rows in a compact content-sized popup.'
         }
 
-        $script:testPickerNames=$null
+        $script:testPickerNames=$null;$script:testPoolEntries=$null
         $folderUI=Select-DeckFolder $HOME -TestUI
         if($folderUI.PathBox.Text -ne $HOME -or $folderUI.Folders.Items.Count -eq 0){throw 'Folder picker initialization failed.'}
         $folderUI.Dialog.Close()
@@ -1411,7 +1441,31 @@ try{
             $rulesUI.Editor.Text='Always answer hi.'
             $rulesUI.Save.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             if($rulesUI.Error.Text -or [IO.File]::ReadAllText((Join-Path $root 'global-rules.md')) -ne 'Always answer hi.'){throw 'Global Rules editor did not save.'}
-            'PASS: Save settings persists drafts across tabs; Global Rules editor saves plain text.'
+            [void][IO.Directory]::CreateDirectory((Join-Path $settingsFixture 'accounts/account1/memories'))
+            [IO.File]::WriteAllText((Join-Path $settingsFixture 'accounts/account1/memories/notes.md'),'Remember the old value.',[Text.UTF8Encoding]::new($false))
+            $memoryUI=Show-DeckMemories $settingsFixture account1 -TestUI
+            $memoryUI.Editor.Text='Remember the new value.'
+            $memoryUI.Save.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            if($memoryUI.Error.Text -or [IO.File]::ReadAllText((Join-Path $settingsFixture 'accounts/account1/memories/notes.md')) -ne 'Remember the new value.'){throw 'Memories editor did not save the selected account file.'}
+            $memoryUI.Dialog.Close()
+            [IO.File]::WriteAllText((Join-Path $settingsFixture 'accounts/account1/AGENTS.md'),'Old account instructions.',[Text.UTF8Encoding]::new($false))
+            $instructionsUI=Show-DeckAccountInstructions $settingsFixture account1 -TestUI
+            $instructionsUI.Editor.Text='New account instructions.'
+            $instructionsUI.Save.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            if($instructionsUI.Error.Text -or [IO.File]::ReadAllText((Join-Path $settingsFixture 'accounts/account1/AGENTS.md')) -ne 'New account instructions.'){throw 'Account instructions editor did not save AGENTS.md.'}
+            $instructionsUI.Dialog.Close()
+            [IO.File]::WriteAllText((Join-Path $settingsFixture 'accounts/account1/AGENTS.override.md'),'Temporary override.',[Text.UTF8Encoding]::new($false))
+            $overrideUI=Show-DeckAccountInstructions $settingsFixture account1 -TestUI
+            if(-not $overrideUI.OverrideActive){throw 'Account instructions editor did not report the active override.'}
+            $overrideUI.Dialog.Close()
+            [IO.File]::Delete((Join-Path $settingsFixture 'accounts/account1/AGENTS.override.md'))
+            Copy-Item -LiteralPath (Join-Path $settingsFixture 'accounts/account1/AGENTS.md') -Destination (Join-Path $settingsFixture 'accounts/account2/AGENTS.md')
+            Write-DeckEnvironmentJson (Join-Path $settingsFixture 'accounts/account2/deck-sharing.json') ([pscustomobject]@{Version=1;Bindings=@([pscustomobject]@{Resource='AGENTS.md';Source='account1';Hash=(Get-FileHash -LiteralPath (Join-Path $settingsFixture 'accounts/account2/AGENTS.md')).Hash})})
+            $sharedInstructionsUI=Show-DeckAccountInstructions $settingsFixture account2 -TestUI
+            if(-not $sharedInstructionsUI.Editor.IsReadOnly -or $sharedInstructionsUI.Save.IsEnabled -or $sharedInstructionsUI.SharedSource -ne 'account1'){throw 'Shared recipient instructions were not protected as a source-owned copy.'}
+            $sharedInstructionsUI.Dialog.Close()
+            if((Get-DeckSkillsDirectory $settingsFixture account1 -Create) -ne (Join-Path $settingsFixture 'accounts/account1/skills')){throw 'Skills folder shortcut resolved the wrong account directory.'}
+            'PASS: Save settings persists drafts across tabs; Global Rules, Memories and account Instructions editors save plain text.'
         }finally{$script:suite=$originalSuite;$script:root=$originalRoot;$script:settings=$originalSettings}
         'PASS: WPF constructed and synthetic account card rendered; no network calls or warm-ups.'
     }else{

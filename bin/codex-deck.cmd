@@ -1,2 +1,2 @@
 @echo off
-start "" powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -STA -ExecutionPolicy Bypass -File "%USERPROFILE%\.codex-loop\Codex-Deck.ps1" %*
+start "" "%SystemRoot%\System32\wscript.exe" //B //Nologo "%USERPROFILE%\.codex-loop\Deck.Background.vbs" "%USERPROFILE%\.codex-loop\Codex-Deck.ps1" %*

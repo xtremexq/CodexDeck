@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.5.0 - 2026-09-14
 
+- Reduced duplicated multi-account storage with guarded stale plugin-sync cleanup and hard-link deduplication for identical sandbox runtimes and managed plugin caches, while preserving per-account credentials, databases, configuration and histories.
+- Clarified the primary pool in the account picker, kept it first without selecting it by default, and stopped treating it like a directly authenticated quota account.
+- Added local `!deck` launching from Codex conversations plus terminal-dashboard shortcuts for each account or pool's memory files, global `AGENTS.md` instructions and skills folder.
 - Added independent concurrent Responses and compaction failover requests, including correct active-request tracking, cancellation handling and safe forwarding of decoded auxiliary request bodies.
-- Made repeat Deck launches wake the resident window immediately, restored it reliably without hiding the caller's terminal, and populated installed accounts and recent sessions in the first rendered frame.
+- Made repeat Deck launches wake the resident window immediately, made the desktop launcher fully windowless, and populated installed accounts and recent sessions in the first rendered frame.
 - Moved warm-up schedule repair off the UI thread, added persistent watchdog health checks and preserved known future quota resets to avoid tight retry loops.
 
 ## 1.4.0 - 2026-09-11

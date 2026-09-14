@@ -110,7 +110,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     Add-Line ('  ' + $Notice) 'Yellow'
     Add-Line '  NAVIGATE Up/Down select  Enter launch  / search  B best  Q quit' 'Gray'
     Add-Line '  MANAGE   R refresh  A all  H history  F2 rename  L login  N new' 'DarkGray'
-    Add-Line '  DISPLAY  D desktop Deck  S settings  G global rules  M mask email' 'DarkGray'
+    Add-Line '  DISPLAY  D desktop  S settings  G global  I instructions  E memories  K skills  M mask' 'DarkGray'
     return $lines.ToArray()
 }
 function Read-DeckTerminalInput([string]$Prompt, [int]$MaxLength = 40) {
@@ -276,6 +276,9 @@ function Show-DeckTerminal {
                     try{$warmSettings=Set-DeckWarmupControl $root -Pause; if($warmSettings.WarmupEnabled){Start-DeckWarmupScheduler $SuiteRoot}; $notice='Warm-up '+$(if(-not $warmSettings.WarmupEnabled){'paused; in-flight requests may finish.'}elseif($warmSettings.WarmupSchedulingEnabled){'resumed with background scheduling.'}else{'resumed; background scheduling is off in desktop Settings.'})}catch{$notice=$_.Exception.Message}
                 }
                 'G' { Open-DeckGlobalRules $SuiteRoot; $notice='Global Rules editor opened.' }
+                'I' { if($name){Open-DeckAccountInstructions $SuiteRoot $name;$notice="$name account instructions opened."} }
+                'E' { if($name){Open-DeckMemories $SuiteRoot $name;$notice="$name memories editor opened."} }
+                'K' { if($name){Open-DeckSkillsFolder $SuiteRoot $name;$notice="$name skills folder opened."} }
                 'S' { Start-DeckCompanion $SuiteRoot -OpenSettings; $notice='Desktop Settings opened.' }
                 'D' { Start-DeckCompanion $SuiteRoot; $notice = 'Desktop Deck opened; use its settings for scheduling and warm-up.' }
                 default {

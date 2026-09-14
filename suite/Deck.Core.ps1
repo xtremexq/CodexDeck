@@ -7,6 +7,9 @@
 }
 . (Join-Path $PSScriptRoot 'Deck.AccountTools.ps1')
 if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.GlobalRules.ps1')){. (Join-Path $PSScriptRoot 'Deck.GlobalRules.ps1')}
+if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Memories.ps1')){. (Join-Path $PSScriptRoot 'Deck.Memories.ps1')}
+if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.AccountResources.ps1')){. (Join-Path $PSScriptRoot 'Deck.AccountResources.ps1')}
+if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Storage.ps1')){. (Join-Path $PSScriptRoot 'Deck.Storage.ps1')}
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Environments.ps1')) { . (Join-Path $PSScriptRoot 'Deck.Environments.ps1') }
 # Codex Deck - local state and scheduling. No credentials are written to Deck state.
 function Get-DeckDueAccounts($Automatic, $Manual, $NextCheck, [DateTimeOffset]$Now) {

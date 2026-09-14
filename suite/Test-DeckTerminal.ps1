@@ -23,12 +23,25 @@ $names = @(1..40 | ForEach-Object { "account$_" })
 $profiles = @{}; foreach ($name in $names) { $profiles[$name] = @{PlanType='plus';Email='person@example.com';Model='default';Effort='default'} }
 $frame = @(Get-DeckTerminalFrame $names @{} $profiles @() @{} 39 100 25 '' 'Ready')
 Assert (($frame.Text -join "`n") -match '> account40') 'Selection not paged into view'
+Assert (($frame.Text -join "`n") -match 'E memories') 'Per-account memories shortcut missing'
+Assert (($frame.Text -join "`n") -match 'I instructions') 'Per-account instructions shortcut missing'
+Assert (($frame.Text -join "`n") -match 'K skills') 'Per-account skills shortcut missing'
 Assert (($frame.Text -join "`n") -notmatch 'person@example.com') 'Email not masked by default'
 Assert ($frame.Count -le 24) 'Frame overflows terminal height'
 $empty = @(Get-DeckTerminalFrame @() @{} @{} @() @{} 0 60 25 '' 'Ready')
 Assert (($empty.Text -join "`n") -match 'No matching accounts') 'Missing empty state'
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('deck-terminal-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'deck'))
+$memoryRoot=Join-Path $fixture 'accounts/account1/memories';[void][IO.Directory]::CreateDirectory($memoryRoot)
+$instructionsPath=Get-DeckAccountInstructionsPath $fixture account1
+Assert ($instructionsPath -eq (Join-Path $fixture 'accounts/account1/AGENTS.md')) 'Account instructions path incorrect'
+$skillsPath=Get-DeckSkillsDirectory $fixture account1 -Create
+Assert ((Test-Path -LiteralPath $skillsPath -PathType Container) -and $skillsPath -eq (Join-Path $fixture 'accounts/account1/skills')) 'Skills directory path incorrect'
+Assert ((Get-DeckMemoryPath $memoryRoot 'project/notes.md').StartsWith($memoryRoot,[StringComparison]::OrdinalIgnoreCase)) 'Nested memory path was not accepted'
+foreach($unsafeMemory in @('../outside.md','C:\outside.md','notes.exe','con.md')){
+    $rejected=$false;try{[void](Get-DeckMemoryPath $memoryRoot $unsafeMemory)}catch{$rejected=$true}
+    Assert $rejected "Unsafe memory path accepted: $unsafeMemory"
+}
 foreach($file in 'Deck.Core.ps1','Deck.AccountTools.ps1'){Copy-Item (Join-Path $PSScriptRoot $file) (Join-Path $fixture $file)}
 Write-DeckJson (Join-Path $fixture 'deck/cache.json') @(@{Account='account1';CheckedAt='2026-01-01T00:00:00Z';Status='available'})
 Write-DeckJson (Join-Path $fixture 'deck/terminal-cache.json') @(@{Account='account1';CheckedAt='2026-01-02T00:00:00Z';Status='blocked'})

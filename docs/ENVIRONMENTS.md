@@ -6,6 +6,8 @@ New accounts start with independent Codex homes. No configuration, skills, instr
 
 The installer creates a first-listed `pool` entry unless that name already exists. It has its own configuration, skills, memory and conversation history, but no login of its own. Its defaults are every signed-in ordinary account (including accounts added later), Ordered rotation, and no resource sharing. Membership does not copy or share those accounts' environments.
 
+The main account picker keeps `pool` first but initially selects the next row, so opening Deck does not silently change the launch target. The pool row describes its shared history, resolved quota-account count and rotation mode instead of attempting a direct account usage check.
+
 Run `codex-auth pool` to open a Codex session immediately using the pool's configured membership and rotation. Ordered starts with the first member; Best requires fresh usage checks in the regular dashboard. To start with a specific member:
 
 ```powershell
@@ -49,6 +51,12 @@ To opt into a one-time bootstrap when creating an account, use `codex-auth accou
 ## Global Rules
 
 Choose **Configs > Global Rules**, press **G** in the terminal dashboard, or run `codex-auth -GlobalRules`. Save plain text instructions; leave the editor blank to disable them. Rules are stored in `deck/global-rules.md`, and saving keeps a backup of the previous text.
+
+Press **E** in the terminal dashboard to read or edit the selected account or pool's files under `memories`. The editor supports common UTF-8 text formats, can create files by relative name, detects outside edits before saving, and links to the full folder. When `memories` is explicitly shared, edits are live for the owner and every recipient.
+
+Press **I** to read or edit the selected account or pool's `AGENTS.md` in its Codex home. This is global guidance for that entry, so it loads wherever that account or pool is opened. Repository and nested `AGENTS.md` files are directory-dependent and layer on top; more specific guidance can override the account file. A shared recipient copy is read-only in this editor—select its source entry to edit it—and a non-empty `AGENTS.override.md` warning explains when that override takes precedence. Start a new Codex session after saving.
+
+Press **K** to open the selected account or pool's `skills` folder in Explorer. Skills can contain scripts, references and assets as well as `SKILL.md`, so Deck opens the complete directory instead of treating it as one text file. Explicitly shared skills still open their verified shared location.
 
 Every conversation launched through Deck or `codex-auth` loads these rules as startup developer instructions, regardless of account, pool or working folder. Existing account/profile developer instructions are preserved. Account and project `AGENTS.md` files remain untouched. Rules become part of the conversation context; they are not resent as new user messages on every turn. Already-running Codex processes keep their launch-time rules; relaunch to load edits. Resuming through a new launch loads the current rules too. Running plain `codex` bypasses Deck's launcher.
 
