@@ -46,7 +46,7 @@ if (-not $SmokeTest -and -not $Demo) {
     }
     $savedResets=Read-DeckJson (Join-Path $root 'warmup-resets.json')
     foreach ($key in $cache.Keys) {
-        $w = $cache[$key].Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
+        $w = Get-DeckWarmupWindow $cache[$key]
         if ($w.ResetsAtUnix) { $resets[$key]=[long]$w.ResetsAtUnix }
         if($savedResets.$key){$resets[$key]=[long]$savedResets.$key}
     }
@@ -284,10 +284,12 @@ function New-DeckEntryMenu([string]$Name) {
         foreach($item in $sender.Items){if($item -is [Windows.Controls.MenuItem]){
             $item.Tag.Account=$account
             if($item.Tag.Action -eq 'Toggle automatic warm-up'){
-                $selected=Test-DeckWarmupSelected $settings $account
+                $plan=[string]$(if($cache[$account].PlanType){$cache[$account].PlanType}else{$profiles[$account].PlanType})
+                $managed=Test-DeckWarmupPlanSelected $settings $plan
+                $selected=Test-DeckWarmupSelected $settings $account $plan
                 $item.Header=if($selected){'Disable automatic warm-up'}else{'Enable automatic warm-up (uses quota)'}
-                $item.IsCheckable=$true; $item.IsChecked=$selected; $item.IsEnabled=-not $settings.WarmupAllPaid
-                $item.ToolTip=if($settings.WarmupAllPaid){'Managed by All paid accounts in Settings'}else{'Runs through Windows Task Scheduler, even with Deck closed'}
+                $item.IsCheckable=$true; $item.IsChecked=$selected; $item.IsEnabled=-not $managed
+                $item.ToolTip=if($managed){'Managed by the account-type selection in Settings'}else{'Runs through Windows Task Scheduler, even with Deck closed'}
             }
             if($item.Tag.Action -eq 'Pause / resume warm-up'){$item.Header=if($settings.WarmupEnabled){'Pause all automatic warm-ups'}else{'Resume automatic warm-ups'}}
         }}
@@ -598,10 +600,10 @@ function Show-DeckSettings {
         Appearance=@('ViewMode','Compact','AlwaysOnTop','CloseToTray','AutoStart','OpacityPercent','FontSize','DefaultFolder','AlwaysAskFolder')
         Details=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
-        'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupAllPaid','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
+        'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupPlanTypes','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
     }
     $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
-    $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupAllPaid='All Plus or higher (including future accounts)';WarmupAccounts='Additional accounts (type to find; select one or more)';WarmupModel='Model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
+    $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupPlanTypes='Account types (select one or more)';WarmupAccounts='Specific accounts (optional with account types; select one or more)';WarmupModel='Paid-plan model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
     $panels=@{}; $controls=@{}
     foreach($group in $groups.Keys){
         $tab=[Windows.Controls.TabItem]::new(); $tab.Header=$group
@@ -647,11 +649,30 @@ function Show-DeckSettings {
             $control.Foreground='#EAF0FA'; $control.Margin='0,0,0,14'; $control.MinHeight=24
         } else {
             $label=New-DeckText $caption '#A2ADB5'; $label.Margin='0,2,0,6'; [void]$panel.Children.Add($label)
-            if($key -eq 'WarmupModel'){
+            if($key -eq 'WarmupPlanTypes'){
+                $control=[Windows.Controls.Button]::new(); $control.HorizontalContentAlignment='Left'
+                $scopeMenu=[Windows.Controls.ContextMenu]::new()
+                $scopeOptions=[ordered]@{all='All account types';free='Free';go='Go';paid='Plus or higher'}
+                $scopeTokens=@((ConvertTo-DeckWarmupPlanTypes $settings.WarmupPlanTypes) -split ',' | Where-Object {$_})
+                foreach($token in $scopeOptions.Keys){
+                    $option=[Windows.Controls.MenuItem]::new(); $option.Header=$scopeOptions[$token]; $option.Tag=$token; $option.IsCheckable=$true; $option.StaysOpenOnClick=$true; $option.IsChecked=$token -in $scopeTokens
+                    $option.Add_Click({param($sender,$eventArgs)
+                        if($sender.Tag -eq 'all' -and $sender.IsChecked){foreach($peer in $scopeMenu.Items){if($peer -ne $sender){$peer.IsChecked=$false}}}
+                        elseif($sender.IsChecked){$scopeMenu.Items[0].IsChecked=$false}
+                        $chosen=@($scopeMenu.Items | Where-Object IsChecked | ForEach-Object {[string]$_.Tag})
+                        $control.Content=if($chosen -contains 'all'){'All account types ⌄'}elseif($chosen.Count){(@($scopeMenu.Items | Where-Object IsChecked | ForEach-Object Header) -join ' + ')+' ⌄'}else{'Specific accounts only ⌄'}
+                    }.GetNewClosure())
+                    [void]$scopeMenu.Items.Add($option)
+                }
+                $control.Content=if($scopeTokens -contains 'all'){'All account types ⌄'}elseif($scopeTokens.Count){(@($scopeMenu.Items | Where-Object IsChecked | ForEach-Object Header) -join ' + ')+' ⌄'}else{'Specific accounts only ⌄'}
+                $control.ToolTip='Free and Go use their primary allowance window and Codex-default model. Plus or higher uses the 5-hour window and the model below.'
+                $control.ContextMenu=$scopeMenu; $control.Resources['ScopeMenu']=$scopeMenu
+                $control.Add_Click({$scopeMenu.PlacementTarget=$control; $scopeMenu.IsOpen=$true}.GetNewClosure())
+            }elseif($key -eq 'WarmupModel'){
                 $control=[Windows.Controls.ComboBox]::new()
                 $cachedModels=Read-DeckJson (Join-Path $root 'models.json')
                 foreach($model in @(Get-DeckModelNames @($settings.WarmupModel,'gpt-5.6-luna',$cachedModels.Models))){[void]$control.Items.Add([string]$model)}
-                $control.SelectedItem=$settings.WarmupModel; $control.ToolTip='Warm-up uses low reasoning effort. Loading models from Codex...'
+                $control.SelectedItem=$settings.WarmupModel; $control.ToolTip='Paid-plan warm-up uses low reasoning effort. Free and Go use their Codex-default model. Loading models from Codex...'
             }elseif($key -eq 'WarmupAccounts'){
                 $control=[Windows.Controls.ListBox]::new(); $control.SelectionMode='Multiple'; $control.MaxHeight=150
                 $control.IsTextSearchEnabled=$true; $control.Background='#111315'; $control.Foreground='#E4EAF4'; $control.BorderBrush='#363C42'
@@ -690,6 +711,7 @@ function Show-DeckSettings {
             foreach ($key in $settings.Keys) {
                 if (-not $controls.ContainsKey($key)) { $updated[$key]=$settings[$key]; continue }
                 if ($key -eq 'WarmupSchedulingEnabled') { $updated[$key]=[bool]$controls[$key].Tag }
+                elseif ($key -eq 'WarmupPlanTypes') { $updated[$key]=ConvertTo-DeckWarmupPlanTypes (@($controls[$key].Resources['ScopeMenu'].Items | Where-Object IsChecked | ForEach-Object {[string]$_.Tag}) -join ',') }
                 elseif ($settings[$key] -is [bool]) { $updated[$key]=[bool]$controls[$key].IsChecked }
                 elseif ($key -eq 'WarmupAccounts') { $updated[$key]=@($controls[$key].SelectedItems) -join ',' }
                 elseif ($key -eq 'FailoverAccounts') {
@@ -713,7 +735,7 @@ function Show-DeckSettings {
             foreach ($name in @($updated.WarmupAccounts -split '[,;\s]+' | Where-Object { $_ })) {
                 if ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -notin @(Get-DeckAccounts)) { throw "Unknown warm-up account: $name" }
             }
-            if ($updated.WarmupEnabled -and -not $updated.WarmupAllPaid -and -not $updated.WarmupAccounts) { throw 'Select at least one warm-up account.' }
+            if ($updated.WarmupEnabled -and -not $updated.WarmupPlanTypes -and -not $updated.WarmupAccounts) { throw 'Select at least one warm-up account type or specific account.' }
             $updated.WarmupTimes=ConvertTo-DeckWarmupTimes $updated.WarmupTimes
             if($updated.WarmupTimedEnabled -and -not $updated.WarmupTimes){throw 'Enter at least one daily time.'}
             if($tabs.SelectedItem -eq $environmentTab -or $environmentState.Pools.Count){& $rememberPool}
@@ -743,9 +765,9 @@ function Show-DeckSettings {
             $picker=$controls.WarmupModel; $selected=[string]$picker.SelectedItem
             $picker.Items.Clear()
             foreach($model in @(Get-DeckModelNames @($selected,'gpt-5.6-luna',$models))){[void]$picker.Items.Add($model)}
-            $picker.SelectedItem=$selected; $picker.ToolTip='Models from Codex. Warm-up uses low reasoning effort.'
+            $picker.SelectedItem=$selected; $picker.ToolTip='Models from Codex. Paid-plan warm-up uses low reasoning effort; Free and Go use their Codex-default model.'
             Write-DeckJson (Join-Path $root 'models.json') @{Models=$models;CheckedAt=[DateTimeOffset]::Now.ToString('o')}
-        }catch{$controls.WarmupModel.ToolTip='Model list unavailable; showing saved choices. Warm-up uses low reasoning effort.'}
+        }catch{$controls.WarmupModel.ToolTip='Model list unavailable; showing saved choices. Paid-plan warm-up uses low reasoning effort; Free and Go use their Codex-default model.'}
         finally{$worker.Process.Dispose(); $modelState.Task=$null}
     })
     try{
@@ -775,7 +797,7 @@ function New-DeckPanelDetails([string]$Name) {
         if($settings.ShowSource){$fields['Source']=if($row.Source){$row.Source}else{'Not checked'}}
         if($settings.ShowProcessIds){$fields['Process IDs']=($connected | ForEach-Object ProcessId)-join ', '}
         if($settings.ShowFolder){$fields['Folders']=($connected | ForEach-Object Folder | Select-Object -Unique)-join "`n"}
-        if($settings.ShowWarmup -or (Test-DeckWarmupSelected $settings $name)){$fields['Warm-up']=Get-DeckWarmupStatus $settings $(if($row){$row}else{@{Account=$name}}) $history[$name]}
+        if($settings.ShowWarmup -or (Test-DeckWarmupSelected $settings $name $plan)){$fields['Warm-up']=Get-DeckWarmupStatus $settings $(if($row){$row}else{@{Account=$name;PlanType=$plan}}) $history[$name]}
         if($settings.ShowCredits){$fields['Credits']=if($null -ne $row.Credits){($row.Credits.PSObject.Properties | ForEach-Object { $_.Name+': '+$_.Value }) -join ' · '}else{'Not provided by Codex'}}
         if($row.Error){$fields['Check error']=$row.Error}
         foreach($key in @($fields.Keys)){
@@ -826,7 +848,7 @@ function Render-Deck {
     $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + $allProfiles + '/' + $accountFilter + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
     if ($signature -eq $lastRender) { return }
     $script:lastRender=$signature
-    $style=(@('Compact','FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowResetCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupSchedulingEnabled','WarmupAllPaid','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
+    $style=(@('Compact','FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowResetCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupSchedulingEnabled','WarmupPlanTypes','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
     if($style -ne $rowStyle){
         $poolKey=[string]$widget; $pool=$rowPools[$poolKey]
         if($pool -and $pool.Style -eq $style){$script:rowControls=$pool.Controls}else{$script:rowControls=@{}; $rowPools[$poolKey]=@{Style=$style;Controls=$rowControls}}
@@ -980,8 +1002,8 @@ function Invoke-DeckTick {
                     $script:cacheVersion++
                     $previous=Get-DeckWarmupReset $result $resets[$account] $unix
                     if($previous){$resets[$account]=$previous}
-                    $five=$result.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
-                    if($five.ResetsAtUnix -and [long]$five.ResetsAtUnix -gt $unix -and (-not $previous -or $five.UsedPct -gt 0 -or $unix -gt ([long]$previous+60*$settings.WarmupMaxDelayMinutes))){$resets[$account]=[long]$five.ResetsAtUnix}
+                    $primary=Get-DeckWarmupWindow $result
+                    if($primary.ResetsAtUnix -and [long]$primary.ResetsAtUnix -gt $unix -and (-not $previous -or $primary.UsedPct -gt 0 -or $unix -gt ([long]$previous+60*$settings.WarmupMaxDelayMinutes))){$resets[$account]=[long]$primary.ResetsAtUnix}
                     $nextCheck[$account]=Get-DeckNextCheck $settings $result $now
                     $cacheDirty=$true
                     $script:notice="Updated $account at $($now.ToLocalTime().ToString('HH:mm'))"
@@ -1211,6 +1233,14 @@ try{
         if($checkPanel -ne $settingsTest.Controls.WarmupEnabled.Parent -or $checkPanel.Children.IndexOf($settingsTest.Controls.AutoCheck) -ge $checkPanel.Children.IndexOf($settingsTest.Controls.WarmupEnabled)){throw 'Checks must appear above warmup.'}
         $schedulingControl=$settingsTest.Controls.WarmupSchedulingEnabled
         if($schedulingControl -isnot [Windows.Controls.Button] -or [bool]$schedulingControl.Tag -or $schedulingControl.Content -ne 'Enable background scheduling'){throw 'Background scheduling must be an explicit opt-in button.'}
+        $scopeControl=$settingsTest.Controls.WarmupPlanTypes; $scopeMenu=$scopeControl.Resources['ScopeMenu']
+        if($scopeControl -isnot [Windows.Controls.Button] -or $scopeMenu.Items.Count -ne 4 -or @($scopeMenu.Items | Where-Object IsChecked).Count -ne 0 -or $scopeControl.Content -ne 'Specific accounts only ⌄'){throw 'Warm-up account-type multi-select defaults failed.'}
+        $scopeMenu.Items[1].IsChecked=$true; $scopeMenu.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+        $scopeMenu.Items[3].IsChecked=$true; $scopeMenu.Items[3].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+        if((@($scopeMenu.Items | Where-Object IsChecked | ForEach-Object Tag) -join ',') -ne 'free,paid' -or $scopeControl.Content -ne 'Free + Plus or higher ⌄'){throw 'Warm-up account-type multi-select did not retain combined choices.'}
+        $scopeMenu.Items[0].IsChecked=$true; $scopeMenu.Items[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+        if((@($scopeMenu.Items | Where-Object IsChecked | ForEach-Object Tag) -join ',') -ne 'all' -or $scopeControl.Content -ne 'All account types ⌄'){throw 'All warm-up account types did not clear narrower choices.'}
+        $scopeMenu.Items[0].IsChecked=$false; $scopeMenu.Items[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
         $schedulingControl.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         if(-not [bool]$schedulingControl.Tag -or $schedulingControl.Content -ne 'Disable background scheduling' -or -not $settingsTest.Controls.WarmupEnabled.IsChecked){throw 'Background scheduling opt-in did not update its saved state.'}
         $before=$allProfiles
@@ -1467,18 +1497,22 @@ try{
             $draftFailover.Resources['Membership'].SelectedIndex=3
             [void]$draftFailover.Resources['Members'].SelectedItems.Add('account2')
             $draftUI.Controls.AutoCheck.IsChecked=$true
+            $draftScope=$draftUI.Controls.WarmupPlanTypes.Resources['ScopeMenu']
+            $draftScope.Items[1].IsChecked=$true; $draftScope.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+            $draftScope.Items[3].IsChecked=$true; $draftScope.Items[3].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
             $draftUI.Tabs.SelectedItem=@($draftUI.Tabs.Items | Where-Object Header -eq 'Appearance')[0]
             $draftUI.Save.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             if($draftUI.Error.Text){throw $draftUI.Error.Text}
             $savedSettings=Read-DeckJson (Join-Path $root 'settings.json')
             if((Get-DeckPoolEntry $settingsFixture pool).Accounts[0] -ne '*free' -or -not $savedSettings.MaskEmail){throw 'Save settings did not persist environment and another tab together.'}
             if(-not $savedSettings.FailoverEnabled -or $savedSettings.FailoverMode -ne 'Best' -or $savedSettings.FailoverAccounts -ne 'account2' -or -not $savedSettings.AutoCheck){throw 'Save settings did not persist failover and general controls.'}
-            if(-not $settings.FailoverEnabled -or $settings.FailoverAccounts -ne 'account2' -or -not $settings.MaskEmail){throw 'Saved settings did not update the live Deck state.'}
+            if($savedSettings.WarmupPlanTypes -ne 'free,paid'){throw 'Save settings did not persist multiple warm-up account types.'}
+            if(-not $settings.FailoverEnabled -or $settings.FailoverAccounts -ne 'account2' -or -not $settings.MaskEmail -or $settings.WarmupPlanTypes -ne 'free,paid'){throw 'Saved settings did not update the live Deck state.'}
             $reopenedUI=Show-DeckSettings -TestUI
             try{
                 foreach($key in @($settings.Keys | Where-Object {$reopenedUI.Controls.ContainsKey($_)})){
                     $control=$reopenedUI.Controls[$key]
-                    $actual=if($settings[$key] -is [bool]){[bool]$control.IsChecked}elseif($key -eq 'WarmupAccounts'){@($control.SelectedItems) -join ','}elseif($key -eq 'FailoverAccounts'){$membership=$control.Resources['Membership']; if($membership.SelectedIndex -eq 3){@($control.Resources['Members'].SelectedItems) -join ','}else{@('*','*free','*paid')[$membership.SelectedIndex]}}elseif($key -in @('WarmupModel','ViewMode','FailoverMode')){[string]$control.SelectedItem}elseif($settings[$key] -is [int]){[int]$control.Text}else{$control.Text.Trim()}
+                    $actual=if($settings[$key] -is [bool]){[bool]$control.IsChecked}elseif($key -eq 'WarmupPlanTypes'){ConvertTo-DeckWarmupPlanTypes (@($control.Resources['ScopeMenu'].Items | Where-Object IsChecked | ForEach-Object {[string]$_.Tag}) -join ',')}elseif($key -eq 'WarmupAccounts'){@($control.SelectedItems) -join ','}elseif($key -eq 'FailoverAccounts'){$membership=$control.Resources['Membership']; if($membership.SelectedIndex -eq 3){@($control.Resources['Members'].SelectedItems) -join ','}else{@('*','*free','*paid')[$membership.SelectedIndex]}}elseif($key -in @('WarmupModel','ViewMode','FailoverMode')){[string]$control.SelectedItem}elseif($settings[$key] -is [int]){[int]$control.Text}else{$control.Text.Trim()}
                     if($actual -ne $settings[$key]){throw "Reopened setting does not match saved value: $key"}
                 }
             }finally{$reopenedUI.Dialog.Close()}

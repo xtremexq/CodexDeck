@@ -2,6 +2,7 @@
 
 ## 1.5.0 - 2026-09-14
 
+- Replaced the paid-only warm-up checkbox with a multi-select account-type dropdown for all, Free, Go and Plus-or-higher plans, including plan-aware quota windows and account-default models for Free/Go warm-ups.
 - Reduced duplicated multi-account storage with guarded stale plugin-sync cleanup and hard-link deduplication for identical sandbox runtimes and managed plugin caches, while preserving per-account credentials, databases, configuration and histories.
 - Clarified the primary pool in the account picker, kept it first without selecting it by default, and stopped treating it like a directly authenticated quota account.
 - Added local `!deck` launching from Codex conversations plus terminal-dashboard shortcuts for each account or pool's memory files, global `AGENTS.md` instructions and skills folder.

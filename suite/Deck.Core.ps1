@@ -31,7 +31,7 @@ function Get-DeckDefaults {
         ShowModel=$false; AccountPickerUsage=$false
         ViewMode='Widget'; WidgetOneLine=$true; WidgetShowEmail=$false; WidgetShowResets=$true; WidgetAutoHeight=$true
         WidgetWidth=238; WidgetHeight=0
-        WarmupEnabled=$false; WarmupSchedulingEnabled=$false; WarmupAllPaid=$false; WarmupAccounts=''; WarmupModel='gpt-5.6-luna'
+        WarmupEnabled=$false; WarmupSchedulingEnabled=$false; WarmupPlanTypes=''; WarmupAccounts=''; WarmupModel='gpt-5.6-luna'
         WarmupGraceSeconds=60; WarmupMaxDelayMinutes=30
         WarmupResetEnabled=$true; WarmupTimedEnabled=$false; WarmupTimes=''
         WarmupStartAtLogin=$true
@@ -66,10 +66,10 @@ function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
 function Get-DeckNextCheck($Settings, $Record, [DateTimeOffset]$CheckedAt) {
     if($Record.Status -eq 'error'){return $CheckedAt.AddMinutes([Math]::Max(20,$Settings.PollMinutes))}
     $next=$CheckedAt.AddMinutes($Settings.PollMinutes)
-    if($Settings.WarmupEnabled -and $Record.PlanType -in @('plus','pro','team','business','enterprise','edu') -and ($Settings.WarmupAllPaid -or $Record.Account -in @($Settings.WarmupAccounts -split '[,;\s]+'))){
-        $five=$Record.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
-        if($five.ResetsAtUnix){
-            $target=[DateTimeOffset]::FromUnixTimeSeconds([long]$five.ResetsAtUnix).AddSeconds($Settings.WarmupGraceSeconds)
+    if($Settings.WarmupEnabled -and (Test-DeckWarmupSelected $Settings $Record.Account $Record.PlanType)){
+        $primary=Get-DeckWarmupWindow $Record
+        if($primary.ResetsAtUnix){
+            $target=[DateTimeOffset]::FromUnixTimeSeconds([long]$primary.ResetsAtUnix).AddSeconds($Settings.WarmupGraceSeconds)
             if($target -gt $CheckedAt -and $target -lt $next){$next=$target}
             elseif($target -le $CheckedAt -and $CheckedAt -le $target.AddMinutes($Settings.WarmupMaxDelayMinutes)){$next=$CheckedAt.AddSeconds(60)}
         }
@@ -140,6 +140,12 @@ function Get-DeckSettings([string]$Root) {
                 try { $settings[$key]=[Convert]::ToInt32($candidate) } catch { }
             }
         }
+        # WarmupAllPaid was the pre-1.5 boolean selector. Migrate it only when
+        # the new multi-select scope has not already been saved.
+        if (-not $saved.PSObject.Properties['WarmupPlanTypes'] -and
+            $saved.PSObject.Properties['WarmupAllPaid'] -and $saved.WarmupAllPaid -is [bool] -and $saved.WarmupAllPaid) {
+            $settings.WarmupPlanTypes='paid'
+        }
     }
     $settings.PollMinutes = [Math]::Min(120, [Math]::Max(5, $settings.PollMinutes))
     $settings.MinimumGapSeconds = [Math]::Min(300, [Math]::Max(15, $settings.MinimumGapSeconds))
@@ -153,6 +159,7 @@ function Get-DeckSettings([string]$Root) {
     $settings.WidgetHeight = [Math]::Min(800, [Math]::Max(0, $settings.WidgetHeight))
     if ($settings.FailoverMode -notin @('Ordered','Best')) { $settings.FailoverMode='Ordered' }
     if ($settings.ViewMode -notin @('Panel','Widget','Tray')) { $settings.ViewMode='Widget' }
+    $settings.WarmupPlanTypes=ConvertTo-DeckWarmupPlanTypes $settings.WarmupPlanTypes
     return $settings
 }
 function Register-DeckSession([string]$Root, [string]$Account, [string]$Folder) {
@@ -220,14 +227,12 @@ function Start-DeckCompanion([string]$SuiteRoot, [switch]$OpenSettings) {
 }
 function Test-DeckWarmup($Settings, $Record, $PreviousReset, $History, [long]$Now) {
     if (-not $Settings.WarmupEnabled -or $Settings.WarmupResetEnabled -eq $false) { return $false }
-    if ($Record.PlanType -notin @('plus','pro','team','business','enterprise','edu')) { return $false }
-    $selected = @($Settings.WarmupAccounts -split '[,;\s]+' | Where-Object { $_ })
-    if (-not $Settings.WarmupAllPaid -and $selected -notcontains $Record.Account) { return $false }
+    if (-not (Test-DeckWarmupSelected $Settings $Record.Account $Record.PlanType)) { return $false }
     if ($Record.Status -ne 'available' -or $Record.Error -or -not $PreviousReset) { return $false }
     if ($Now -lt ([long]$PreviousReset + $Settings.WarmupGraceSeconds) -or
         $Now -gt ([long]$PreviousReset + 60 * $Settings.WarmupMaxDelayMinutes)) { return $false }
-    $window = @($Record.Windows | Where-Object DurationSeconds -eq 18000)
-    if ($window.Count -ne 1 -or $null -eq $window[0].UsedPct -or $window[0].UsedPct -ne 0) { return $false }
+    $window = Get-DeckWarmupWindow $Record
+    if (-not $window -or $null -eq $window.UsedPct -or $window.UsedPct -ne 0) { return $false }
     if (@($Record.Windows | Where-Object { $_.Dead -or ($null -ne $_.UsedPct -and $_.UsedPct -ge 99.5) }).Count) { return $false }
     # A confirmed request already started this window. Failed/unconfirmed requests
     # may retry after 90 seconds while the configured reset window remains open.
@@ -276,9 +281,10 @@ function Get-DeckCheckCode([string]$SuiteRoot, [string]$Account) {
     return "`$ErrorActionPreference='Stop'; `$text=[IO.File]::ReadAllText('$path'); `$body=(`$text -split '(?m)^__POWERSHELL__\r?`$')[1]; & ([scriptblock]::Create(`$body)) -AccountsRoot '$accounts' -Account '$Account' -Json"
 }
 function Get-DeckWarmupCode([string]$SuiteRoot, [string]$Account, [string]$Model) {
-    if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $Model -notmatch '^gpt-[a-zA-Z0-9.-]+$') { throw 'Invalid warm-up account or model.' }
+    if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or ($Model -and $Model -notmatch '^gpt-[a-zA-Z0-9.-]+$')) { throw 'Invalid warm-up account or model.' }
     $accountPath = (Join-Path $SuiteRoot "accounts/$Account").Replace("'", "''")
     $workPath = (Join-Path $SuiteRoot 'deck/empty-workspace').Replace("'", "''")
+    $modelArgument=if($Model){"`$deckArgs+=@('-m','$Model')"}else{''}
     return @"
 `$ErrorActionPreference='Stop'
 `$env:CODEX_HOME='$accountPath'
@@ -288,7 +294,10 @@ Set-Location -LiteralPath '$workPath'
 `$exe = Get-Command codex.cmd -ErrorAction SilentlyContinue
 if (-not `$exe) { `$exe = Get-Command codex -ErrorAction Stop }
 `$ErrorActionPreference='Continue'
-& `$exe.Source exec --json --ignore-user-config --ignore-rules --ephemeral --skip-git-repo-check --sandbox read-only -c 'approval_policy="never"' -c 'project_doc_max_bytes=0' -c 'model_reasoning_effort="low"' -m '$Model' 'Hi. Reply only with hi. Do not use tools or read files.'
+`$deckArgs=@('exec','--json','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','-c','approval_policy="never"','-c','project_doc_max_bytes=0','-c','model_reasoning_effort="low"')
+$modelArgument
+`$deckArgs+='Hi. Reply only with hi. Do not use tools or read files.'
+& `$exe.Source @deckArgs
 exit `$LASTEXITCODE
 "@
 }
@@ -351,22 +360,54 @@ function Get-DeckHealth($Record) {
 }
 
 # Shared controls and status for the desktop and terminal. One desktop/tray process owns execution.
-function Test-DeckWarmupSelected($Settings, [string]$Account) {
-    return $Settings.WarmupAllPaid -or $Account -in @($Settings.WarmupAccounts -split '[,;\s]+')
+function ConvertTo-DeckWarmupPlanTypes([string]$Value) {
+    $chosen=@($Value -split '[,;\s]+' | ForEach-Object {$_.Trim().ToLowerInvariant()} | Where-Object {$_ -in @('all','free','go','paid')} | Select-Object -Unique)
+    if($chosen -contains 'all'){return 'all'}
+    return (@('free','go','paid') | Where-Object {$_ -in $chosen}) -join ','
+}
+function Test-DeckWarmupPlanSupported([string]$PlanType) {
+    return $PlanType.ToLowerInvariant() -in @('free','go','plus','pro','team','business','enterprise','edu')
+}
+function Test-DeckWarmupPlanSelected($Settings, [string]$PlanType) {
+    $plan=$PlanType.ToLowerInvariant()
+    if(-not (Test-DeckWarmupPlanSupported $plan)){return $false}
+    $types=@((ConvertTo-DeckWarmupPlanTypes $Settings.WarmupPlanTypes) -split ',' | Where-Object {$_})
+    return $types -contains 'all' -or $types -contains $plan -or ($types -contains 'paid' -and $plan -in @('plus','pro','team','business','enterprise','edu'))
+}
+function Test-DeckWarmupSelected($Settings, [string]$Account, [string]$PlanType = '') {
+    $accountSelected=$Account -in @($Settings.WarmupAccounts -split '[,;\s]+' | Where-Object {$_})
+    return $accountSelected -or (Test-DeckWarmupPlanSelected $Settings $PlanType)
+}
+function Get-DeckWarmupWindow($Record) {
+    $plan=([string]$Record.PlanType).ToLowerInvariant()
+    if($plan -in @('free','go')){
+        # Free/Go expose their primary allowance as a longer window. Do not
+        # require the paid-plan 5-hour window for these accounts.
+        return $Record.Windows | Where-Object {$_.DurationSeconds -gt 0} | Sort-Object DurationSeconds | Select-Object -First 1
+    }
+    if($plan -in @('plus','pro','team','business','enterprise','edu')){
+        return $Record.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
+    }
+}
+function Get-DeckWarmupModel($Settings, [string]$PlanType) {
+    # Free and Go can have a narrower model catalog. Let Codex choose the
+    # account's supported default instead of forcing the configured paid model.
+    if($PlanType.ToLowerInvariant() -in @('free','go')){return ''}
+    return [string]$Settings.WarmupModel
 }
 function Get-DeckWarmupStatus($Settings, $Record, $History, [long]$Now = ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())) {
     if ($History -and $Now - [long]$History.AttemptAt -lt 14400) { return $History.Outcome }
-    if (-not (Test-DeckWarmupSelected $Settings $Record.Account)) { return 'Not selected' }
+    if (-not (Test-DeckWarmupSelected $Settings $Record.Account $Record.PlanType)) { return 'Not selected' }
     if (-not $Settings.WarmupEnabled) { return 'Paused' }
     if (-not $Settings.WarmupSchedulingEnabled) { return 'Background scheduling off' }
     if ($Settings.WarmupTimedEnabled -and -not $Settings.WarmupResetEnabled) { return 'Daily ' + $Settings.WarmupTimes + ' (local)' }
-    if ($Record.PlanType -and $Record.PlanType -notin @('plus','pro','team','business','enterprise','edu')) { return 'Paid plans only' }
+    if ($Record.PlanType -and -not (Test-DeckWarmupPlanSupported $Record.PlanType)) { return 'Unsupported account plan' }
     if ($History -and $Now - [long]$History.AttemptAt -lt 14400) { return $History.Outcome }
     if (-not $Record.CheckedAt -or $Record.Error -or $Record.Status -ne 'available') { return 'Waiting for fresh quota' }
     if (@($Record.Windows | Where-Object { $_.Dead -or ($null -ne $_.UsedPct -and $_.UsedPct -ge 99.5) }).Count) { return 'Waiting for quota reset' }
-    $five=$Record.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
-    if (-not $five.ResetsAtUnix) { return 'Waiting for reset data' }
-    $reset=Get-DeckWarmupReset $Record $five.ResetsAtUnix $Now
+    $primary=Get-DeckWarmupWindow $Record
+    if (-not $primary.ResetsAtUnix) { return 'Waiting for reset data' }
+    $reset=Get-DeckWarmupReset $Record $primary.ResetsAtUnix $Now
     $due=[long]$reset + $Settings.WarmupGraceSeconds
     if ($due -gt $Now) { return 'Reset check ' + [DateTimeOffset]::FromUnixTimeSeconds($due).ToLocalTime().ToString('MMM dd HH:mm') }
     if ($Now -gt ([long]$reset + 60*$Settings.WarmupMaxDelayMinutes)) { return 'Reset window missed' }
@@ -377,7 +418,8 @@ function Set-DeckWarmupControl([string]$Root, [string]$Account, [switch]$Pause) 
     if ($Pause) { $current.WarmupEnabled=-not $current.WarmupEnabled }
     else {
         if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') { throw 'Select an account first.' }
-        if ($current.WarmupAllPaid) { throw 'All paid accounts is enabled. Change the selection in Deck settings first.' }
+        $plan=[string](Get-DeckProfile (Split-Path $Root -Parent) $Account).PlanType
+        if (Test-DeckWarmupPlanSelected $current $plan) { throw 'This account is included by account type. Change the selection in Deck settings first.' }
         $selected=@($current.WarmupAccounts -split '[,;\s]+' | Where-Object { $_ })
         if ($Account -in $selected) { $selected=@($selected | Where-Object { $_ -ne $Account }) }
         else { $selected+= $Account; $current.WarmupEnabled=$true }
@@ -446,10 +488,9 @@ function Get-DeckSignedInAccounts([string]$SuiteRoot) {
 }
 function Get-DeckWarmupAccounts([string]$SuiteRoot, $Settings, $Cache = @{}) {
     foreach($account in @(Get-DeckSignedInAccounts $SuiteRoot)){
-        if(-not (Test-DeckWarmupSelected $Settings $account)){continue}
         $plan=[string]$Cache[$account].PlanType
         if(-not $plan){$plan=[string](Get-DeckProfile $SuiteRoot $account).PlanType}
-        if($plan -in @('plus','pro','team','business','enterprise','edu')){$account}
+        if((Test-DeckWarmupPlanSupported $plan) -and (Test-DeckWarmupSelected $Settings $account $plan)){$account}
     }
 }
 function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, [DateTimeOffset]$Now = [DateTimeOffset]::Now, [int]$UnknownDelayMinutes = 1) {
@@ -469,8 +510,8 @@ function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, 
         }
         if($record -and ($record.Error -or $record.Status -eq 'error')){$candidates+=$Now.AddMinutes([Math]::Max(20,$UnknownDelayMinutes)); continue}
         $reset=if($Resets[$account]){[long]$Resets[$account]}else{
-            $five=$record.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
-            if($five.ResetsAtUnix){[long]$five.ResetsAtUnix}else{0}
+            $primary=Get-DeckWarmupWindow $record
+            if($primary.ResetsAtUnix){[long]$primary.ResetsAtUnix}else{0}
         }
         if(-not $reset){$candidates+=$Now.AddMinutes($UnknownDelayMinutes); continue}
         $due=[DateTimeOffset]::FromUnixTimeSeconds($reset).AddSeconds($Settings.WarmupGraceSeconds).ToLocalTime()
@@ -575,10 +616,9 @@ function Add-DeckTimedWarmups([string]$SuiteRoot, $Settings, $Accounts, $Cache, 
     $dirty=$false
     foreach($slot in @(Get-DeckDueWarmupTimes $Settings.WarmupTimes $Now)){
         foreach($account in $Accounts){
-            if(-not (Test-DeckWarmupSelected $Settings $account)){continue}
             $plan=$Cache[$account].PlanType
             if(-not $plan){$plan=(Get-DeckProfile $SuiteRoot $account).PlanType}
-            if($plan -notin @('plus','pro','team','business','enterprise','edu')){continue}
+            if(-not (Test-DeckWarmupPlanSupported $plan) -or -not (Test-DeckWarmupSelected $Settings $account $plan)){continue}
             if(-not (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$account/auth.json"))){continue}
             $key="$slot/$account"; if($ledger.ContainsKey($key)){continue}
             $request=Join-Path $root "warmup-requests/$account.json"
@@ -596,13 +636,14 @@ function Invoke-DeckQueuedWarmups([string]$SuiteRoot, $Settings, $Tasks, $Histor
         if($account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $request.Mode -notin @('Manual','Timed')){Remove-Item -LiteralPath $file.FullName; continue}
         if($Tasks.ContainsKey($account)){continue}
         $expired=$Now-[long]$request.At -gt $(if($request.Mode -eq 'Timed'){300}else{3600})
-        $paused=$request.Mode -eq 'Timed' -and (-not $Settings.WarmupEnabled -or -not $Settings.WarmupTimedEnabled -or -not (Test-DeckWarmupSelected $Settings $account))
+        $plan=[string](Get-DeckProfile $SuiteRoot $account).PlanType
+        $paused=$request.Mode -eq 'Timed' -and (-not $Settings.WarmupEnabled -or -not $Settings.WarmupTimedEnabled -or -not (Test-DeckWarmupSelected $Settings $account $plan))
         $recent=$History[$account] -and $Now-[long]$History[$account].AttemptAt -lt 30
         if($expired -or $paused -or $recent -or -not (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$account/auth.json"))){Remove-Item -LiteralPath $file.FullName; continue}
         $History[$account]=[pscustomobject]@{Account=$account;Reset=0;AttemptAt=$Now;Mode=$request.Mode;Outcome='Sending / waiting for reply';Reply=''}
         Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $History)
         Remove-Item -LiteralPath $file.FullName
-        try{$Tasks[$account]=Start-DeckTask (Get-DeckWarmupCode $SuiteRoot $account $Settings.WarmupModel) 'Warm-up' $account}
+        try{$Tasks[$account]=Start-DeckTask (Get-DeckWarmupCode $SuiteRoot $account (Get-DeckWarmupModel $Settings $plan)) 'Warm-up' $account}
         catch{$History[$account].Outcome='Failed to start'; Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $History)}
     }
 }
@@ -615,11 +656,11 @@ function Get-DeckWarmupReset($Record, $PreviousReset, [long]$Now) {
         if ([long]$PreviousReset -gt $Now) { return [long]$PreviousReset }
         if ($Now - [long]$PreviousReset -le 3600) { return [long]$PreviousReset }
     }
-    $five=$Record.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
+    $primary=Get-DeckWarmupWindow $Record
     # A full, freshly reported empty window also permits discovery after starting Deck.
     # The inferred start must be in the past; future/incomplete data is never eligible.
-    if ($five.ResetsAtUnix -and $null -ne $five.UsedPct -and $five.UsedPct -eq 0) {
-        $start=[long]$five.ResetsAtUnix - 18000
+    if ($primary.ResetsAtUnix -and $null -ne $primary.UsedPct -and $primary.UsedPct -eq 0) {
+        $start=[long]$primary.ResetsAtUnix - [long]$primary.DurationSeconds
         if ($start -gt 0 -and $start -le $Now -and $Now-$start -le 300) { return $start }
     }
     return $PreviousReset

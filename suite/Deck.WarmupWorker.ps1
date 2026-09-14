@@ -12,13 +12,17 @@ function Write-DeckWarmupLog([string]$Message) {
     }
     [IO.File]::AppendAllText($logPath,([DateTimeOffset]::Now.ToString('o')+'  '+$Message+"`r`n"),[Text.UTF8Encoding]::new($false))
 }
-function Invoke-DeckWorkerBatch($Accounts, [ValidateSet('Check','Warm-up')][string]$Kind, [string]$Model) {
+function Invoke-DeckWorkerBatch($Accounts, [ValidateSet('Check','Warm-up')][string]$Kind, [string]$Model, $Records = @{}) {
     $queue=[Collections.Generic.Queue[string]]::new(); foreach($account in @($Accounts|Select-Object -Unique)){$queue.Enqueue($account)}
     $active=@{}; $results=@{}
     while($queue.Count -or $active.Count){
         while($queue.Count -and $active.Count -lt 8){
             $account=$queue.Dequeue()
-            try{$code=if($Kind -eq 'Check'){Get-DeckCheckCode $SuiteRoot $account}else{Get-DeckWarmupCode $SuiteRoot $account $Model}; $active[$account]=Start-DeckTask $code $Kind $account}
+            try{
+                $accountModel=if($Kind -eq 'Warm-up'){Get-DeckWarmupModel @{WarmupModel=$Model} ([string]$Records[$account].PlanType)}else{$Model}
+                $code=if($Kind -eq 'Check'){Get-DeckCheckCode $SuiteRoot $account}else{Get-DeckWarmupCode $SuiteRoot $account $accountModel}
+                $active[$account]=Start-DeckTask $code $Kind $account
+            }
             catch{$results[$account]=[pscustomobject]@{Success=$false;Output='';Error=$_.Exception.Message}}
         }
         foreach($account in @($active.Keys)){
@@ -66,7 +70,10 @@ try{
     foreach($file in @(Get-ChildItem -LiteralPath (Join-Path $root 'warmup-requests') -Filter '*.json' -File -ErrorAction SilentlyContinue)){
         $request=Read-DeckJson $file.FullName; $account=[string]$request.Account
         $valid=$account -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -and (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$account/auth.json")) -and $request.Mode -in @('Manual','Timed')
-        if($valid -and $request.Mode -eq 'Timed'){$valid=$settings.WarmupEnabled -and $settings.WarmupTimedEnabled -and (Test-DeckWarmupSelected $settings $account) -and $unix-[long]$request.At -le 300}
+        if($valid -and $request.Mode -eq 'Timed'){
+            $plan=[string]$cache[$account].PlanType; if(-not $plan){$plan=[string](Get-DeckProfile $SuiteRoot $account).PlanType}
+            $valid=$settings.WarmupEnabled -and $settings.WarmupTimedEnabled -and (Test-DeckWarmupSelected $settings $account $plan) -and $unix-[long]$request.At -le 300
+        }
         if($valid -and $request.Mode -eq 'Manual'){$valid=$unix-[long]$request.At -le 3600}
         if($valid){$requests[$account]=[pscustomobject]@{Request=$request;Path=$file.FullName}}else{Remove-Item -LiteralPath $file.FullName -ErrorAction SilentlyContinue}
     }
@@ -104,9 +111,9 @@ try{
         if(Test-DeckWarmup $settings $record $previous $history[$account] $unix){
             if($warmJobs[$account]){$warmJobs[$account].Reset=$previous}else{$warmJobs[$account]=[pscustomobject]@{Mode='Reset';Reset=$previous;Path=$null}}
         }
-        $five=$record.Windows|Where-Object DurationSeconds -eq 18000|Select-Object -First 1
+        $primary=Get-DeckWarmupWindow $record
         $confirmed=$history[$account] -and [long]$history[$account].Reset -eq [long]$previous -and [string]$history[$account].Outcome -like 'Replied:*'
-        if($five.ResetsAtUnix -and [long]$five.ResetsAtUnix -gt $unix -and (-not $previous -or $five.UsedPct -gt 0 -or $confirmed -or $unix -gt ([long]$previous+60*$settings.WarmupMaxDelayMinutes))){$resets[$account]=[long]$five.ResetsAtUnix}
+        if($primary.ResetsAtUnix -and [long]$primary.ResetsAtUnix -gt $unix -and (-not $previous -or $primary.UsedPct -gt 0 -or $confirmed -or $unix -gt ([long]$previous+60*$settings.WarmupMaxDelayMinutes))){$resets[$account]=[long]$primary.ResetsAtUnix}
     }
     foreach($account in @($warmJobs.Keys)){
         $job=$warmJobs[$account]; $history[$account]=[pscustomobject]@{Account=$account;Reset=[long]$job.Reset;AttemptAt=$unix;Mode=$job.Mode;Outcome='Sending / waiting for reply';Reply=''}
@@ -115,7 +122,12 @@ try{
     if($warmJobs.Count){Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $history)}
     $warmed=@()
     if($warmJobs.Count){
-        $runs=Invoke-DeckWorkerBatch @($warmJobs.Keys) 'Warm-up' $settings.WarmupModel
+        $warmRecords=@{}
+        foreach($account in @($warmJobs.Keys)){
+            $warmRecords[$account]=$cache[$account]
+            if(-not $warmRecords[$account].PlanType){$warmRecords[$account]=Get-DeckProfile $SuiteRoot $account}
+        }
+        $runs=Invoke-DeckWorkerBatch @($warmJobs.Keys) 'Warm-up' $settings.WarmupModel $warmRecords
         foreach($account in @($warmJobs.Keys)){
             $result=$runs[$account]; $reply=if($result.Success){Get-DeckWarmupReply $result.Output}else{$null}
             $history[$account].Outcome=if($reply){'Replied: '+$reply}elseif($result.Success){'No assistant reply / unconfirmed'}else{'Request failed'}
@@ -127,7 +139,7 @@ try{
         $post=Invoke-DeckWorkerBatch @($warmJobs.Keys) Check $settings.WarmupModel
         foreach($account in @($warmJobs.Keys)){
             $result=$post[$account]; if(-not $result.Success){continue}
-            try{$records=@(Expand-DeckCheckRecords ($result.Output|ConvertFrom-Json)); if($records.Count -ne 1 -or $records[0].Account -ne $account){continue}; $record=$records[0]; if($record.Status -eq 'error'){continue}; $record|Add-Member NoteProperty CheckedAt ([DateTimeOffset]::Now.ToString('o')) -Force; $cache[$account]=$record; $changed[$account]=$record; $five=$record.Windows|Where-Object DurationSeconds -eq 18000|Select-Object -First 1; if($five.ResetsAtUnix -and [long]$five.ResetsAtUnix -gt [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() -and ($history[$account].Outcome -like 'Replied:*' -or $five.UsedPct -gt 0)){$resets[$account]=[long]$five.ResetsAtUnix}}catch{}
+            try{$records=@(Expand-DeckCheckRecords ($result.Output|ConvertFrom-Json)); if($records.Count -ne 1 -or $records[0].Account -ne $account){continue}; $record=$records[0]; if($record.Status -eq 'error'){continue}; $record|Add-Member NoteProperty CheckedAt ([DateTimeOffset]::Now.ToString('o')) -Force; $cache[$account]=$record; $changed[$account]=$record; $primary=Get-DeckWarmupWindow $record; if($primary.ResetsAtUnix -and [long]$primary.ResetsAtUnix -gt [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() -and ($history[$account].Outcome -like 'Replied:*' -or $primary.UsedPct -gt 0)){$resets[$account]=[long]$primary.ResetsAtUnix}}catch{}
         }
     }
     $summary="checked=$($checked.Count); warmed=$($warmed.Count); selected=$($accounts.Count)"

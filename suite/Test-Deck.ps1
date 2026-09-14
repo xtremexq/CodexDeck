@@ -43,11 +43,15 @@ Assert (-not (Test-Path -LiteralPath $session)) 'Stale lease not removed'
 $settings.AutoCheck=$true; $settings.WarmupEnabled=$true; $settings.WarmupAccounts='account5'; $now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $record=[pscustomobject]@{Account='account5';PlanType='plus';Status='available';Error=$null;Windows=@([pscustomobject]@{DurationSeconds=18000;UsedPct=0})}
 Assert (Test-DeckWarmup $settings $record ($now-90) $null $now) 'Eligible reset refused'
-foreach($plan in 'free','unknown','go',''){
+$record.PlanType='free'; $record.Windows=@([pscustomobject]@{DurationSeconds=2592000;UsedPct=0})
+Assert (Test-DeckWarmup $settings $record ($now-90) $null $now) 'Selected Free account was not eligible on its primary window'
+Assert ((Get-DeckWarmupWindow $record).DurationSeconds -eq 2592000) 'Free warm-up did not select its primary allowance window'
+Assert (-not (Get-DeckWarmupModel $settings free)) 'Free warm-up forced the paid-plan model'
+foreach($plan in 'unknown',''){
     $record.PlanType=$plan
     Assert (-not (Test-DeckWarmup $settings $record ($now-90) $null $now)) "Excluded plan accepted: $plan"
 }
-$record.PlanType='plus'
+$record.PlanType='plus'; $record.Windows=@([pscustomobject]@{DurationSeconds=18000;UsedPct=0})
 foreach($state in 'blocked','unknown','error'){
     $record.Status=$state
     Assert (-not (Test-DeckWarmup $settings $record ($now-90) $null $now)) "Bad state accepted: $state"
@@ -63,11 +67,15 @@ $history.Reset=$now-200
 Assert (-not (Test-DeckWarmup $settings $record ($now-90) $history $now)) 'Four-hour cooldown ignored'
 $settings.WarmupAccounts='account7'
 Assert (-not (Test-DeckWarmup $settings $record ($now-90) $null $now)) 'Unselected account warmed'
-$settings.WarmupAllPaid=$true
-Assert (Test-DeckWarmup $settings $record ($now-90) $null $now) 'All paid selector missed unselected paid account'
+$settings.WarmupPlanTypes='paid'
+Assert (Test-DeckWarmup $settings $record ($now-90) $null $now) 'Paid account-type selector missed an unselected Plus account'
 $record.PlanType='free'
-Assert (-not (Test-DeckWarmup $settings $record ($now-90) $null $now)) 'All paid selector included free account'
-$record.PlanType='plus'; $settings.WarmupAllPaid=$false
+Assert (-not (Test-DeckWarmup $settings $record ($now-90) $null $now)) 'Paid account-type selector included Free'
+$record.Windows=@([pscustomobject]@{DurationSeconds=2592000;UsedPct=0}); $settings.WarmupPlanTypes='free,paid'
+Assert (Test-DeckWarmup $settings $record ($now-90) $null $now) 'Multi-select scope missed Free'
+$settings.WarmupPlanTypes='all'; Assert (Test-DeckWarmup $settings $record ($now-90) $null $now) 'All account types missed Free'
+Assert ((ConvertTo-DeckWarmupPlanTypes 'paid,free,free') -eq 'free,paid') 'Warm-up account types were not normalized'
+$record.PlanType='plus'; $record.Windows=@([pscustomobject]@{DurationSeconds=18000;UsedPct=0}); $settings.WarmupPlanTypes=''
 $settings.WarmupAccounts='account5'; $settings.AutoCheck=$false
 Assert (Test-DeckWarmup $settings $record ($now-90) $null $now) 'Warm-up incorrectly depends on ordinary auto-check'
 $settings.AutoCheck=$true
@@ -83,7 +91,9 @@ Write-DeckJson (Join-Path $fixture 'settings.json') $settings
 $clamped=Get-DeckSettings $fixture
 Assert ($clamped.PollMinutes -eq 5 -and $clamped.MinimumGapSeconds -eq 15) 'Request throttles not clamped'
 $code=Get-DeckWarmupCode $PSScriptRoot account5 gpt-5.6-luna
-Assert ($code -match '--ignore-user-config' -and $code -match '--sandbox read-only' -and $code -match '--ephemeral') 'Warm-up isolation missing'
+Assert ($code -match '--ignore-user-config' -and $code -match "'--sandbox','read-only'" -and $code -match '--ephemeral' -and $code -match "'-m','gpt-5.6-luna'") 'Paid warm-up isolation or model selection missing'
+$freeCode=Get-DeckWarmupCode $PSScriptRoot account2 ''
+Assert ($freeCode -notmatch "'-m'") 'Free warm-up forced a configured model'
 $failed=$false; try{Get-DeckWarmupCode $PSScriptRoot '../outside' 'gpt-5.6-luna'}catch{$failed=$true}
 Assert $failed 'Account injection accepted'
 $failed=$false; try{Get-DeckWarmupCode $PSScriptRoot account5 "bad'; echo injected"}catch{$failed=$true}
@@ -124,7 +134,7 @@ foreach($file in @('Deck.Core.ps1','Deck.WarmupWorker.ps1','Codex-Deck.ps1','../
     [void][Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
     Assert ($errors.Count -eq 0) "Parse failed: $file / $errors"
 }
-'PASS: defaults, PID identity/cleanup, paid-only warm-up, reset grace/expiry, deduplication, cooldown, opt-in, throttles, injection guards, worker execution, script parsing.'
+'PASS: defaults, PID identity/cleanup, plan-aware warm-up, reset grace/expiry, deduplication, cooldown, opt-in, throttles, injection guards, worker execution, script parsing.'
 "Synthetic test state: $fixture"
 
 $now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -156,7 +166,7 @@ Assert (-not ([IO.File]::ReadAllText($cachePath) -match '"value"\s*:')) 'Hashtab
 'PASS: persisted check details and legacy array-wrapper recovery.'
 
 $now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-$fresh=@{Windows=@(@{DurationSeconds=18000;UsedPct=0;ResetsAtUnix=$now+17910})}
+$fresh=@{PlanType='plus';Windows=@(@{DurationSeconds=18000;UsedPct=0;ResetsAtUnix=$now+17910})}
 Assert ((Get-DeckWarmupReset $fresh $null $now) -eq ($now-90)) 'Fresh empty window was not discovered'
 Assert ((Get-DeckWarmupReset $fresh ($now-120) $now) -eq ($now-120)) 'Observed reset was replaced by inferred reset'
 $fresh.Windows[0].UsedPct=1
@@ -164,15 +174,22 @@ Assert ($null -eq (Get-DeckWarmupReset $fresh $null $now)) 'Used window inferred
 $fresh.Windows[0].UsedPct=0; $futureBoundary=$now+18000
 $fresh.Windows[0].ResetsAtUnix=$futureBoundary
 Assert ((Get-DeckWarmupReset $fresh $futureBoundary $now) -eq $futureBoundary) 'Known future reset was reinterpreted as a fresh window start'
-$settings=Get-DeckDefaults; $settings.WarmupEnabled=$true; $settings.WarmupAllPaid=$true
+$settings=Get-DeckDefaults; $settings.WarmupEnabled=$true; $settings.WarmupPlanTypes='paid'
 $fresh=@{Account='account1';PlanType='plus';Status='available';Windows=@(@{DurationSeconds=18000;UsedPct=0},@{DurationSeconds=604800;UsedPct=100})}
 Assert (-not (Test-DeckWarmup $settings $fresh ($now-90) $null $now)) 'Exhausted weekly quota warmed'
-'PASS: fresh-window discovery, observed reset preservation and exhausted weekly guard.'
+$freeFresh=@{PlanType='free';Windows=@(@{DurationSeconds=2592000;UsedPct=0;ResetsAtUnix=$now+2591910})}
+Assert ((Get-DeckWarmupReset $freeFresh $null $now) -eq ($now-90)) 'Fresh Free allowance window was not discovered'
+$legacySuite=Join-Path $fixture 'legacy-warmup-settings'; [void][IO.Directory]::CreateDirectory($legacySuite)
+Write-DeckJson (Join-Path $legacySuite 'settings.json') @{WarmupAllPaid=$true}
+Assert ((Get-DeckSettings $legacySuite).WarmupPlanTypes -eq 'paid') 'Legacy all-paid warm-up setting was not migrated'
+Write-DeckJson (Join-Path $legacySuite 'settings.json') @{WarmupAllPaid=$true;WarmupPlanTypes='free,paid'}
+Assert ((Get-DeckSettings $legacySuite).WarmupPlanTypes -eq 'free,paid') 'Saved warm-up account types did not override the legacy setting'
+'PASS: plan-aware window discovery, observed reset preservation, legacy migration and exhausted weekly guard.'
 
 Assert (-not (Get-DeckDefaults).AutoStart) 'Desktop auto-opening must be opt-in'
 $scheduleSettings=Get-DeckDefaults; $scheduleSettings.WarmupEnabled=$true; $scheduleSettings.WarmupResetEnabled=$true; $scheduleSettings.WarmupGraceSeconds=60
 $scheduleNow=[DateTimeOffset]'2026-09-09T20:00:00-03:00'; $scheduleReset=$scheduleNow.ToUnixTimeSeconds()+600
-$scheduleCache=@{account1=[pscustomobject]@{Status='available';Error=$null;Windows=@([pscustomobject]@{DurationSeconds=18000;ResetsAtUnix=$scheduleReset})}}
+$scheduleCache=@{account1=[pscustomobject]@{PlanType='plus';Status='available';Error=$null;Windows=@([pscustomobject]@{DurationSeconds=18000;ResetsAtUnix=$scheduleReset})}}
 $nextWarm=Get-DeckNextWarmupRun $scheduleSettings @('account1') $scheduleCache @{} @{} $scheduleNow
 Assert ($nextWarm.ToUnixTimeSeconds() -eq $scheduleReset+60) 'Next reset wake was not scheduled precisely after grace'
 $blockedReset=$scheduleReset+604800
