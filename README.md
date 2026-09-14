@@ -107,7 +107,7 @@ For a non-interactive view, use **`codex-auth status`**. It prints cached data w
 Run **`codex-deck`**, or press **D** in the terminal dashboard.
 
 - **Open Terminal** launches the selected account in your default or chosen folder.
-- Click the **online / terminals** bar to switch between connected accounts and all profiles, in either view.
+- Click the **online / terminals** bar to switch between connected accounts and all profiles, in either view. Use the adjacent plan filter to show all, Free, or Plus and higher accounts.
 - Click the status bar below the list to check every visible account.
 - Switch between the **panel** and **widget**, then expand account rows for more detail.
 - **Settings** controls appearance, visible fields, email masking, automatic checks and warm-up.

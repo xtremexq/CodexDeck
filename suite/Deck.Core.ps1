@@ -247,7 +247,13 @@ function Start-DeckTask([string]$Code, [string]$Kind, [string]$Account) {
 function Stop-DeckTask($Task) {
     if ($Task -and -not $Task.Process.HasExited) {
         # Kill only the process tree we spawned, never account terminals.
-        & taskkill.exe /PID $Task.Process.Id /T /F 2>$null | Out-Null
+        try{
+            $previousPreference=$ErrorActionPreference; $ErrorActionPreference='Continue'
+            & taskkill.exe /PID $Task.Process.Id /T /F 2>$null | Out-Null
+        }catch{}finally{$ErrorActionPreference=$previousPreference}
+        # taskkill can report a race when a child exits during traversal. Make a
+        # best-effort direct stop too, and never let cleanup strand a UI task.
+        try{if(-not $Task.Process.HasExited){$Task.Process.Kill(); [void]$Task.Process.WaitForExit(1000)}}catch{}
     }
 }
 function Get-DeckModelsCode([string]$SuiteRoot, [string]$Account) {

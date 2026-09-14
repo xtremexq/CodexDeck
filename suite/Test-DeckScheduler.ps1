@@ -6,12 +6,14 @@ $tick=$ast.Find({param($node) $node -is [Management.Automation.Language.Function
 Invoke-Expression $tick.Extent.Text
 function Get-DeckSessions { [pscustomobject]@{Account='work-main'} }
 function Get-DeckAccounts { 'work-main'; 1..12 | ForEach-Object {"account$_"} }
+function Get-DeckVisibleAccounts { if($allProfiles){Get-DeckAccounts}else{Get-DeckSessions | ForEach-Object Account | Select-Object -Unique} }
 function Update-DeckPicker {}
 function Render-Deck {}
 function Write-DeckJson {}
 function Complete-DeckScheduleRepair {}
 function Start-DeckScheduleRepair {$script:scheduleRepairStarts++}
 function Start-DeckTask($code,$kind,$account){
+    if($account -in @($script:failStarts)){throw 'Synthetic process start failure'}
     $script:started+= $account
     $process=[pscustomobject]@{HasExited=$false;ExitCode=0}; $process | Add-Member ScriptMethod Dispose {}
     $output=if($kind -eq 'Warm-up'){'{"type":"item.completed","item":{"type":"agent_message","text":"hi"}}'+"`n"+'{"type":"turn.completed"}'}else{ConvertTo-Json -InputObject @(@{Account=$account;Status='available';Windows=@()}) -Compress}
@@ -21,7 +23,7 @@ $root=Join-Path $env:TEMP ('deck-scheduler-'+[guid]::NewGuid().ToString('N'))
 $suite=$PSScriptRoot; $settings=Get-DeckDefaults; $tasks=@{}; $manualChecks=@{}; $nextCheck=@{}
 $cache=@{}; $history=@{}; $resets=@{}; $batchAccounts=@(); $batchUntil=[DateTimeOffset]::MinValue
 $StatusButton=[pscustomobject]@{IsEnabled=$true}
-$allProfiles=$false; $widget=$false; $started=@(); $scheduleRepairStarts=0
+$allProfiles=$false; $widget=$false; $started=@(); $failStarts=@(); $scheduleRepairStarts=0
 Invoke-DeckTick; Assert ($started.Count -eq 0) 'Disabled auto-check started a request'
 Assert ($scheduleRepairStarts -eq 1) 'Initial background schedule repair was not requested'
 $settings.AutoCheck=$true
@@ -46,7 +48,14 @@ Invoke-DeckTick; Assert ($tasks.ContainsKey('account1')) 'Single check blocked b
 $old=$cache.account1; $tasks.account1.Process.HasExited=$true; $tasks.account1.Process.ExitCode=1
 Invoke-DeckTick
 Assert ([object]::ReferenceEquals($old,$cache.account1) -and $cache.account1.Error -and $nextCheck.account1 -gt [DateTimeOffset]::UtcNow.AddMinutes(19)) 'Failure lost previous quota or ignored backoff'
-'PASS: concurrent scheduler, eight-worker cap, no duplicates, polling, list cooldown, single-account bypass and failure retention. No network or terminals.'
+$timeoutTask=Start-DeckTask '' 'Check' 'timed-out'; $timeoutTask.Started=[DateTimeOffset]::UtcNow.AddSeconds(-121); $tasks['timed-out']=$timeoutTask
+Invoke-DeckTick
+Assert (-not $tasks.ContainsKey('timed-out') -and $cache['timed-out'].Error) 'Timed-out worker left its row stuck checking'
+$failStarts=@('account2'); $manualChecks.account2=[DateTimeOffset]::UtcNow
+Invoke-DeckTick
+Assert (-not $manualChecks.ContainsKey('account2') -and -not $tasks.ContainsKey('account2') -and $cache.account2.Error -like 'Unable to start check:*') 'Worker launch failure left a queued row stuck checking'
+$failStarts=@()
+'PASS: concurrent scheduler, eight-worker cap, no duplicates, polling, list cooldown, failure retention, and stuck-check cleanup. No network or terminals.'
 
 # Automatic warm-up belongs exclusively to the short-lived headless worker. The
 # GUI must not become a second executor merely because the setting is enabled.

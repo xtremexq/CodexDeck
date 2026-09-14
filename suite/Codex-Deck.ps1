@@ -26,7 +26,7 @@ $script:settings = if($SmokeTest -or $Demo){Get-DeckDefaults}else{Get-DeckSettin
 $script:cache = @{}; $script:nextCheck = @{}; $script:resets = @{}; $script:history = @{}
 $script:rowPools=@{}; $script:rowControls=@{}; $script:rowStyle=''; $script:expandedRows=@{}; $script:profiles=@{}; $script:profileStamps=@{}; $script:cacheVersion=0; $script:lastPicker=[DateTimeOffset]::MinValue
 $script:tasks = @{}; $script:batchAccounts=@(); $script:batchUntil=[DateTimeOffset]::MinValue; $script:task = $null
-$script:quit = $false; $script:allProfiles = $false; $script:lastWarmupScheduleCheck=[DateTimeOffset]::UtcNow; $script:scheduleRepairTask=$null; $script:initialScheduleRepairStarted=$false
+$script:quit = $false; $script:allProfiles = $false; $script:accountFilter='all'; $script:lastWarmupScheduleCheck=[DateTimeOffset]::UtcNow; $script:scheduleRepairTask=$null; $script:initialScheduleRepairStarted=$false
 $script:sessions = @(); $script:notice = 'Ready'; $script:lastRender = ''
 $script:pins=@(if(-not $SmokeTest -and -not $Demo){Read-DeckJson (Join-Path $root 'pins.json')})
 $script:viewStates=@{}
@@ -112,7 +112,7 @@ public static class DeckTaskbarIdentity {
 $script:window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
 $script:appIcon=[Windows.Media.Imaging.BitmapImage]::new([uri](Join-Path $root 'assets/codex-deck.png'))
 $window.Icon=$appIcon; $window.FindName('AppLogo').Source=$appIcon
-foreach ($name in 'AccountPicker','SettingsButton','LaunchButton','ConfigButton','NewButton','Summary','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','Brand','Subtitle','LayoutRoot','Disclaimer','Header','SummaryButton','StatusButton','CardScroll') {
+foreach ($name in 'AccountPicker','SettingsButton','LaunchButton','ConfigButton','NewButton','Summary','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','Brand','Subtitle','LayoutRoot','Disclaimer','Header','SummaryButton','FilterButton','StatusButton','CardScroll') {
     Set-Variable -Name $name -Value $window.FindName($name) -Scope Script
 }
 # Native caption hit testing covers the top padding, logo, text and gaps too.
@@ -479,17 +479,16 @@ function Update-DeckPicker {
         $title=[Windows.Documents.Run]::new($(if($name -in $pins){'★ '}else{''})+$name+'  '); $title.Foreground='#E4EBF5'; $title.FontWeight='SemiBold'; [void]$line.Inlines.Add($title)
         $usage=[Windows.Controls.TextBlock]::new(); $usage.FontSize=10
         foreach($quota in @($row.Windows)){
-            $used=$quota.UsedPct
-            if($null -eq $used -and $null -ne $quota.RemainingPct){$used=100-$quota.RemainingPct}
-            $label=switch([long]$quota.DurationSeconds){18000 {'5h'} 604800 {'Weekly'} default {$quota.Label}}
-            if([long]$quota.DurationSeconds -ge 2419200 -and [long]$quota.DurationSeconds -le 2764800){$label='Monthly'}
-            $reset=if($quota.ResetsAtUnix){[DateTimeOffset]::FromUnixTimeSeconds([long]$quota.ResetsAtUnix).ToLocalTime().ToString('dd/MM HH:mm')}else{'reset unknown'}
-            $run=[Windows.Documents.Run]::new(('{0} {1} / {2}   ' -f $label,$(if($null -eq $used){'?'}else{('{0:0}%' -f $used)}),$reset))
-            $run.Foreground=if($null -eq $used){'#929CA4'}elseif($used -ge 90){'#F17D8D'}elseif($used -ge 70){'#E7B16A'}else{'#69DEC0'}
+            $remaining=$quota.RemainingPct
+            if($null -eq $remaining -and $null -ne $quota.UsedPct){$remaining=100-$quota.UsedPct}
+            $expired=$quota.ResetsAtUnix -and [long]$quota.ResetsAtUnix -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            $reset=Format-DeckQuotaReset $quota
+            $run=[Windows.Documents.Run]::new(('{0} {1}{2}{3}   ' -f (Get-DeckQuotaLabel $quota),$(if($null -eq $remaining){'?'}else{('{0:0}%' -f $remaining)}),$(if($expired){'*'}else{''}),$(if($reset){' '+$reset}else{''})))
+            $run.Foreground=Get-DeckQuotaColor $quota
             [void]$usage.Inlines.Add($run)
         }
         if(-not $usage.Inlines.Count){$usage.Text='Usage unavailable'; $usage.Foreground='#929CA4'}
-        $usage.ToolTip='Percentage used / next local reset. Windows are shown as reported by the account.'
+        $usage.ToolTip='Percentage remaining / next local reset. Windows are shown as reported by the account.'
         foreach($run in @($usage.Inlines)){ [void]$usage.Inlines.Remove($run); [void]$line.Inlines.Add($run) }
         $age='Never'
         if($row.CheckedAt){
@@ -790,10 +789,32 @@ function New-DeckPanelDetails([string]$Name) {
         }
     return $detailPanel
 }
+function Get-DeckAccountPlan([string]$Name) {
+    $plan=[string]$cache[$Name].PlanType
+    if(-not $plan){$plan=[string]$profiles[$Name].PlanType}
+    return $plan.ToLowerInvariant()
+}
+function Test-DeckAccountFilter([string]$Name) {
+    $plan=Get-DeckAccountPlan $Name
+    if($accountFilter -eq 'free'){return $plan -eq 'free'}
+    if($accountFilter -eq 'paid'){return $plan -in @('plus','pro','team','business','enterprise','edu')}
+    return $true
+}
+function Get-DeckVisibleAccounts {
+    $names=@($sessions | ForEach-Object Account | Select-Object -Unique)
+    if($allProfiles){$names=@(Get-DeckAccounts)}
+    @($names | Where-Object {Test-DeckAccountFilter $_} | Sort-Object @{Expression={if($_ -in $pins){0}else{1}}},@{Expression={if($_ -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},{$_})
+}
+function Set-DeckAccountFilter([string]$Filter) {
+    if($Filter -notin @('all','free','paid')){return}
+    $script:accountFilter=$Filter
+    $FilterButton.Content=@{all='All ▾';free='Free ▾';paid='Plus+ ▾'}[$Filter]
+    $FilterButton.Foreground=if($Filter -eq 'all'){'#DDE2E7'}else{'#A9E8D5'}
+    foreach($item in @($filterMenu.Items)){$item.IsChecked=[string]$item.Tag -eq $Filter}
+    $script:lastRender=''; Render-Deck
+}
 function Render-Deck {
-    $names = @($sessions | ForEach-Object Account | Select-Object -Unique)
-    if ($allProfiles) { $names=@(Get-DeckAccounts) }
-    $names=@($names | Sort-Object @{Expression={if($_ -in $pins){0}else{1}}},@{Expression={if($_ -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},{$_})
+    $names=@(Get-DeckVisibleAccounts)
     $warmupLabel=if(-not $settings.WarmupEnabled){'off'}elseif($settings.WarmupSchedulingEnabled){'scheduled'}else{'scheduling off'}
     $Summary.Text="{0} connected accounts  /  {1} terminals  /  warm-up {2}" -f @($sessions | ForEach-Object Account | Select-Object -Unique).Count,$sessions.Count,$warmupLabel
     if($widget){$Summary.Text="{0} online  /  {1} terminals" -f @($sessions | ForEach-Object Account | Select-Object -Unique).Count,$sessions.Count}
@@ -802,7 +823,7 @@ function Render-Deck {
     if($widget -and -not $tasks.Count){$StatusLine.Text='Checks '+$(if($settings.AutoCheck){'on'}else{'off'})+'  /  warm-up '+$warmupLabel}
     $SummaryButton.ToolTip=if($allProfiles){'Showing all accounts. Click for connected only.'}else{'Showing connected accounts. Click to see all.'}
     $Summary.Foreground=if($allProfiles){'#69DEC0'}else{'#8493AA'}
-    $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + $allProfiles + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
+    $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + $allProfiles + '/' + $accountFilter + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
     if ($signature -eq $lastRender) { return }
     $script:lastRender=$signature
     $style=(@('Compact','FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowResetCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupSchedulingEnabled','WarmupAllPaid','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
@@ -815,7 +836,8 @@ function Render-Deck {
     $built=0
     if (-not $names.Count) {
         $Cards.Children.Clear()
-        [void]$Cards.Children.Add((New-DeckText 'Your deck is clear. Pick an account and launch a terminal. Already-running sessions attach after their next codex-auth launch.' '#9BB5D9' 14)); Update-DeckWidgetHeight; return
+        $emptyText=if($accountFilter -eq 'free'){'No free accounts match this view.'}elseif($accountFilter -eq 'paid'){'No Plus or higher accounts match this view.'}else{'Your deck is clear. Pick an account and launch a terminal. Already-running sessions attach after their next codex-auth launch.'}
+        [void]$Cards.Children.Add((New-DeckText $emptyText '#9BB5D9' 14)); Update-DeckWidgetHeight; return
     }
     foreach ($name in $names) {
         $connected=@($sessions | Where-Object Account -eq $name); $row=$cache[$name]
@@ -943,7 +965,7 @@ function Invoke-DeckTick {
     foreach($task in @($tasks.Values)){
         $timeout=($now-$task.Started).TotalSeconds -gt 120
         if($timeout){Stop-DeckTask $task}
-        if($task.Process.HasExited -and ($timeout -or ($task.Out.IsCompleted -ne $false -and $task.Err.IsCompleted -ne $false))){
+        if($timeout -or ($task.Process.HasExited -and $task.Out.IsCompleted -ne $false -and $task.Err.IsCompleted -ne $false)){
             $account=$task.Account; $success=(-not $timeout -and $task.Process.ExitCode -eq 0)
             if($task.Kind -eq 'Check'){
                 try{
@@ -979,20 +1001,28 @@ function Invoke-DeckTick {
             $task.Process.Dispose(); $tasks.Remove($account); $script:lastRender=''
         }
     }
-    if($cacheDirty){Write-DeckJson (Join-Path $root 'warmup-resets.json') $resets; Write-DeckJson (Join-Path $root 'cache.json') @(Get-DeckMapValues $cache); $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker}
     if($tasks.Count -lt 8 -and ($settings.AutoCheck -or $manualChecks.Count)){
         if($tasks.Count -lt 8){
-            $automatic=@(); if($settings.AutoCheck){$automatic=@($sessions | ForEach-Object Account | Select-Object -Unique); if($allProfiles){$automatic=@(Get-DeckAccounts)}}
+            $automatic=@(); if($settings.AutoCheck){$automatic=@(Get-DeckVisibleAccounts)}
             $due=@(Get-DeckDueAccounts $automatic $manualChecks $nextCheck $now)
             foreach($account in $due){
                 if (Get-DeckPoolEntry $suite $account) { $manualChecks.Remove($account); continue }
                 if($tasks.Count -ge 8){break}; if($tasks.ContainsKey($account)){continue}
                 if($window -and $tickWatch.ElapsedMilliseconds -ge 35){$yieldTick=$true; break}
-                $tasks[$account]=Start-DeckTask (Get-DeckCheckCode $suite $account) 'Check' $account; $manualChecks.Remove($account)
+                try{
+                    $tasks[$account]=Start-DeckTask (Get-DeckCheckCode $suite $account) 'Check' $account
+                    $manualChecks.Remove($account)
+                }catch{
+                    $manualChecks.Remove($account); $nextCheck[$account]=$now.AddMinutes(20)
+                    $message='Unable to start check: '+$_.Exception.Message
+                    if($cache[$account]){$cache[$account] | Add-Member NoteProperty Error $message -Force}else{$cache[$account]=[pscustomobject]@{Account=$account;Status='error';Windows=@();Error=$message}}
+                    $script:cacheVersion++; $cacheDirty=$true; $script:notice="Check failed to start: $account (20m backoff)"
+                }
             }
 
         }
     }
+    if($cacheDirty){Write-DeckJson (Join-Path $root 'warmup-resets.json') $resets; Write-DeckJson (Join-Path $root 'cache.json') @(Get-DeckMapValues $cache); $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker}
     if($batchAccounts.Count -and -not @($batchAccounts | Where-Object { $tasks.ContainsKey($_) -or $manualChecks.ContainsKey($_) }).Count){
         $script:batchAccounts=@(); $script:batchUntil=$now.AddSeconds($settings.MinimumGapSeconds)
         $script:notice='List check complete'
@@ -1057,11 +1087,19 @@ $toggleProfiles={
     $script:lastRender=''; Render-Deck
 }
 $SummaryButton.Add_Click($toggleProfiles)
+$script:filterMenu=[Windows.Controls.ContextMenu]::new(); $filterMenu.Resources=$window.Resources
+foreach($option in @(@('all','All accounts'),@('free','Free'),@('paid','Plus or higher'))){
+    $item=[Windows.Controls.MenuItem]::new(); $item.Header=$option[1]; $item.Tag=$option[0]; $item.IsCheckable=$true; $item.IsChecked=$option[0] -eq $accountFilter
+    $item.Add_Click({param($sender,$eventArgs) Set-DeckAccountFilter ([string]$sender.Tag)})
+    [void]$filterMenu.Items.Add($item)
+}
+$FilterButton.ContextMenu=$filterMenu
+$FilterButton.Add_Click({$filterMenu.PlacementTarget=$FilterButton; $filterMenu.Placement='Bottom'; $filterMenu.IsOpen=$true})
+$FilterButton.ToolTip='Filter visible accounts by plan. Accounts with an unknown plan appear under All.'
 $StatusButton.ToolTip='Check visible accounts. Show all includes disconnected profiles. Up to eight checks run together. A list cooldown starts when they finish.'
 $checkVisible={
     if($batchAccounts.Count -or [DateTimeOffset]::UtcNow -lt $batchUntil){return}
-    $names=@($sessions | ForEach-Object Account | Select-Object -Unique)
-    if($allProfiles){$names=@(Get-DeckAccounts)}
+    $names=@(Get-DeckVisibleAccounts)
     $now=[DateTimeOffset]::UtcNow
     foreach($name in $names){
         if($tasks.ContainsKey($name)){continue}
@@ -1180,6 +1218,14 @@ try{
         if($allProfiles -eq $before){throw 'Summary did not switch account view.'}
         $SummaryButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         if($allProfiles -ne $before){throw 'Summary did not restore account view.'}
+        $script:testPickerNames=@('account1','account2'); $profiles.account2=[pscustomobject]@{PlanType='free';Email='free@example.com';Model='Codex default';Effort='default'}
+        $cache.account2=[pscustomobject]@{Account='account2';PlanType='free';Status='available';Windows=@()}
+        $script:allProfiles=$true
+        $filterMenu.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+        if($FilterButton.Content -ne 'Free ▾' -or (@(Get-DeckVisibleAccounts) -join ',') -ne 'account2'){throw 'Free account filter failed.'}
+        $filterMenu.Items[2].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+        if($FilterButton.Content -ne 'Plus+ ▾' -or (@(Get-DeckVisibleAccounts) -join ',') -ne 'account1'){throw 'Plus or higher account filter failed.'}
+        Set-DeckAccountFilter 'all'; $script:allProfiles=$before; $script:testPickerNames=$null; $script:lastRender=''; Render-Deck
         $StatusButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         foreach($name in @($sessions | ForEach-Object Account | Select-Object -Unique)){if(-not $manualChecks.ContainsKey($name)){throw 'Status check skipped a visible account.'}}
         $manualChecks.Clear(); $script:batchAccounts=@()
@@ -1202,7 +1248,7 @@ try{
         $poolEntry=$AccountPicker.Items[0]
         if((($poolEntry.Content.Inlines|ForEach-Object Text)-join '') -notmatch 'Shared history / 2 quota accounts / Best'){throw 'Pool dropdown row does not explain pooled behavior.'}
         $pickerEntry=@($AccountPicker.Items | Where-Object Tag -eq 'account1')[0]
-        if((($pickerEntry.Content.Inlines | ForEach-Object Text) -join '') -notmatch '5h 28%' -or $pickerEntry.Content.TextWrapping -ne 'NoWrap'){throw ('Picker: '+ [string]::Join('|',@($pickerEntry.Content.Inlines | ForEach-Object Text)))}
+        if((($pickerEntry.Content.Inlines | ForEach-Object Text) -join '') -notmatch '5H 72%' -or $pickerEntry.Content.TextWrapping -ne 'NoWrap'){throw ('Picker: '+ [string]::Join('|',@($pickerEntry.Content.Inlines | ForEach-Object Text)))}
         $AccountPicker.SelectedValue='account1'
         if($AccountPicker.SelectedValue -ne 'account1'){throw 'Account picker identity lost.'}
         # Exercise the actual dropdown, including an unselected account.
@@ -1217,7 +1263,7 @@ try{
             $otherEntry.ApplyTemplate() | Out-Null
             $presenter=@(Find-DeckVisual $otherEntry ([Windows.Controls.ContentPresenter]))[0]
             $visibleText=($presenter.Content.Inlines | ForEach-Object Text) -join ''
-            if(-not $presenter -or $visibleText -notmatch '5h 28%' -or $visibleText -notmatch 'Last checked:'){throw 'Unselected dropdown account is missing usage/reset details'}
+            if(-not $presenter -or $visibleText -notmatch '5H 72%' -or $visibleText -notmatch 'Last checked:'){throw 'Unselected dropdown account is missing current remaining usage/reset details'}
             $longest=0
             foreach($item in $AccountPicker.Items){$item.Content.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity)); $longest=[Math]::Max($longest,$item.Content.DesiredSize.Width)}
             $expectedWidth=[Math]::Min([Windows.SystemParameters]::WorkArea.Width-32,[Math]::Max($AccountPicker.ActualWidth,[Math]::Ceiling($longest+42)))
