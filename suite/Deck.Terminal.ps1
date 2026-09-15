@@ -12,14 +12,7 @@ function Expand-DeckTerminalRecords($Value) {
     }
 }
 function Get-DeckTerminalCache([string]$Root) {
-    $cache = @{}
-    foreach ($file in 'cache.json','terminal-cache.json') {
-        foreach ($row in @(Expand-DeckTerminalRecords (Read-DeckJson (Join-Path $Root $file)))) {
-            $old = $cache[$row.Account]
-            if (-not $old -or [string]$row.CheckedAt -gt [string]$old.CheckedAt) { $cache[$row.Account] = $row }
-        }
-    }
-    return $cache
+    return Get-DeckUsageCache $Root
 }
 function Format-DeckTerminalQuota($Window) {
     if (-not $Window -or $null -eq $Window.RemainingPct) { return '[----------]   ?' }
@@ -135,8 +128,9 @@ function Show-DeckTerminal {
     $accountRoot = Join-Path $SuiteRoot 'accounts'
     $warmSettings=Get-DeckSettings $root
     $cache = Get-DeckTerminalCache $root
-    $profiles = @{}; $tasks = @{}; $attempted = @{}; $pending = [Collections.Generic.Queue[string]]::new()
-    $selected = 0; $filter = ''; $notice = 'Ready. Fresh checks start automatically for missing or stale usage.'; $mask = $true
+    $profiles = @{}; $tasks = @{}; $pending = [Collections.Generic.Queue[string]]::new()
+    $names=@(); $sessions=@(); $warmHistory=@{}; $stateRefreshAt=[DateTimeOffset]::MinValue
+    $selected = 0; $filter = ''; $notice = 'Ready. Cached usage is shown; press R or A for fresh checks.'; $mask = $true
     $interactive = -not $Snapshot -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
     if (-not $interactive) { $notice = 'Cached snapshot. Run codex-auth in a terminal for live checks and actions.' }
     elseif($warmSettings.WarmupEnabled -and $warmSettings.WarmupSchedulingEnabled){
@@ -147,42 +141,40 @@ function Show-DeckTerminal {
     if ($interactive) { $oldCursor = [Console]::CursorVisible; [Console]::CursorVisible = $false; Clear-Host; $lastFrame = '' }
     try {
         do {
-            $warmSettings=Get-DeckSettings $root
-            $warmHistory=@{}; foreach($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $root 'warmup.json')))){if($entry.Account){$warmHistory[$entry.Account]=$entry}}
-            # Merge fresh scheduler results without starting a second warm-up executor.
-            foreach($entry in (Get-DeckTerminalCache $root).Values){if(-not $cache[$entry.Account] -or [string]$entry.CheckedAt -gt [string]$cache[$entry.Account].CheckedAt){$cache[$entry.Account]=$entry}}
-            $names = if (Get-Command Get-DeckEntryNames -ErrorAction SilentlyContinue) { @(Get-DeckEntryNames $SuiteRoot) } else { @(Get-ChildItem -LiteralPath $accountRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object Name) }
-            foreach ($name in $names) {
-                if (-not $profiles.ContainsKey($name)) { $profiles[$name] = Get-DeckProfile $SuiteRoot $name }
-                if ($interactive -and -not $attempted.ContainsKey($name)) {
-                    $attempted[$name] = $true
-                    $fresh = $false
-                    try { $fresh = $cache[$name].CheckedAt -and ([DateTimeOffset]::UtcNow - [DateTimeOffset]$cache[$name].CheckedAt).TotalMinutes -lt 5 } catch {}
-                    if (-not $fresh -and (Test-Path -LiteralPath (Join-Path $accountRoot "$name/auth.json"))) { $pending.Enqueue($name) }
-                }
+            $loopNow=[DateTimeOffset]::UtcNow
+            if($loopNow -ge $stateRefreshAt){
+                $warmSettings=Get-DeckSettings $root
+                $warmHistory=@{}; foreach($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $root 'warmup.json')))){if($entry.Account){$warmHistory[$entry.Account]=$entry}}
+                # Refresh disk-backed state at a human-scale cadence; worker
+                # completion remains responsive without reparsing it twice a second.
+                foreach($entry in (Get-DeckTerminalCache $root).Values){if(-not $cache[$entry.Account] -or (Get-DeckUsageCheckTicks $entry) -gt (Get-DeckUsageCheckTicks $cache[$entry.Account])){$cache[$entry.Account]=$entry}}
+                $names = if (Get-Command Get-DeckEntryNames -ErrorAction SilentlyContinue) { @(Get-DeckEntryNames $SuiteRoot) } else { @(Get-ChildItem -LiteralPath $accountRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object Name) }
+                foreach ($name in $names) {if (-not $profiles.ContainsKey($name)) { $profiles[$name] = Get-DeckProfile $SuiteRoot $name }}
+                $sessions=@(Get-DeckSessions $root)
+                $stateRefreshAt=$loopNow.AddSeconds(2)
             }
+            $terminalCacheDirty=$false
             foreach ($name in @($tasks.Keys)) {
                 $task = $tasks[$name]
-                if (-not $task.Process.HasExited -and ([DateTimeOffset]::UtcNow - $task.Started).TotalSeconds -lt 90) { continue }
+                $timeout=($loopNow-$task.Started).TotalSeconds -ge 90
+                if(-not $timeout -and -not (Test-DeckTaskReady $task)){continue}
                 try {
-                    if (-not $task.Process.HasExited) { throw 'Usage check timed out.' }
+                    if($timeout){Stop-DeckTask $task; throw 'Usage check timed out.'}
                     if ($task.Process.ExitCode -ne 0) { throw 'Usage check failed. Use codex-check for diagnostics.' }
                     $result = @(Expand-DeckTerminalRecords ($task.Out.Result | ConvertFrom-Json) | Where-Object Account -eq $name)
                     if ($result.Count -ne 1) { throw 'Usage check returned no matching account.' }
                     $result[0] | Add-Member NoteProperty CheckedAt ([DateTimeOffset]::UtcNow.ToString('o')) -Force
                     $cache[$name] = $result[0]
-                    # Separate from Deck's writer; merge both caches when reading.
-                    $saved = Get-DeckTerminalCache $root
-                    $saved[$name] = $result[0]
-                    Write-DeckJson (Join-Path $root 'terminal-cache.json') @(Get-DeckMapValues $saved)
+                    $terminalCacheDirty=$true
                     $notice = "$name refreshed."
                 } catch {
                     $notice = "$name : $($_.Exception.Message)"
                     if (-not $cache[$name]) { $cache[$name] = [pscustomobject]@{Account=$name;Status='error';Windows=@()} }
                     $cache[$name] | Add-Member NoteProperty Error 'Last refresh failed; displayed usage is cached.' -Force
                 }
-                finally { Stop-DeckTask $task; $task.Process.Dispose(); $tasks.Remove($name) }
+                finally { Stop-DeckTask $task; Dispose-DeckTask $task; [void]$tasks.Remove($name) }
             }
+            if($terminalCacheDirty){$cache=Save-DeckUsageCache $root $cache 'terminal-cache.json'}
             while ($interactive -and $pending.Count -and $tasks.Count -lt 3) {
                 $name = $pending.Dequeue()
                 if ($tasks.ContainsKey($name) -or $name -notin $names -or $profiles[$name].PlanType -eq 'pool') { continue }
@@ -191,7 +183,6 @@ function Show-DeckTerminal {
             }
             $visible = @($names | Where-Object { -not $filter -or $_.IndexOf($filter,[StringComparison]::OrdinalIgnoreCase) -ge 0 })
             $selected = [Math]::Max(0,[Math]::Min($selected,$visible.Count - 1))
-            $sessions = @(Get-DeckSessions $root)
             $width = 110; $height = [Math]::Max(25,$visible.Count + 18)
             if ($interactive) { $width = [Console]::WindowWidth; $height = [Console]::WindowHeight }
             $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory)
@@ -244,15 +235,25 @@ function Show-DeckTerminal {
                             $newName=Read-DeckTerminalInput ('Rename '+$name+' to (empty cancels)')
                             if ($newName) {
                                 $notice=Rename-DeckAccount $SuiteRoot $name $newName
-                                $profiles.Remove($name); $cache=Get-DeckTerminalCache $root; $attempted.Remove($name)
+                                [void]$profiles.Remove($name); $cache=Get-DeckTerminalCache $root; $stateRefreshAt=[DateTimeOffset]::MinValue
                             }
                         } catch { $notice=$_.Exception.Message }
                         finally { [Console]::CursorVisible=$false; Clear-Host; $lastFrame='' }
                     }
                 }
                 'M' { $mask = -not $mask }
-                'R' { if ($name -and -not $tasks.ContainsKey($name) -and -not $pending.Contains($name)) { $pending.Enqueue($name); $notice = "Queued $name." } }
-                'A' { foreach ($item in $names) { if (-not $tasks.ContainsKey($item) -and -not $pending.Contains($item)) { $pending.Enqueue($item) } }; $notice = 'All accounts queued (three checks at a time).' }
+                'R' {
+                    if($name -and $profiles[$name].PlanType -ne 'pool' -and (Test-Path -LiteralPath (Join-Path $accountRoot "$name/auth.json")) -and -not $tasks.ContainsKey($name) -and -not $pending.Contains($name)){$pending.Enqueue($name); $notice="Queued $name."}
+                    elseif($name){$notice="$name is not signed in or cannot be checked."}
+                }
+                'A' {
+                    $queued=0
+                    foreach($item in $names){
+                        if($profiles[$item].PlanType -eq 'pool' -or -not (Test-Path -LiteralPath (Join-Path $accountRoot "$item/auth.json"))){continue}
+                        if(-not $tasks.ContainsKey($item) -and -not $pending.Contains($item)){$pending.Enqueue($item);$queued++}
+                    }
+                    $notice=if($queued){"Queued $queued signed-in accounts (three checks at a time)."}else{'No additional signed-in accounts to queue.'}
+                }
                 'U' {
                     try { Request-DeckWarmup $SuiteRoot $name; $notice='Warm-up queued in background for '+$name+'. Success requires an assistant reply.' } catch { $notice=$_.Exception.Message }
                 }
@@ -301,8 +302,7 @@ function Show-DeckTerminal {
                                 if ($action -in @('L','N')) { $arguments += 'login' }
                                 & powershell.exe @arguments
                                 $notice = "$name returned (exit $LASTEXITCODE)."
-                                $profiles.Remove($name); $attempted.Remove($name)
-                                if (-not $pending.Contains($name)) { $pending.Enqueue($name) }
+                                [void]$profiles.Remove($name); $stateRefreshAt=[DateTimeOffset]::MinValue
                             }
                         } catch { $notice = $_.Exception.Message }
                         finally { [Console]::CursorVisible = $false; Clear-Host; $lastFrame = '' }
@@ -311,7 +311,7 @@ function Show-DeckTerminal {
             }
         } while ($true)
     } finally {
-        foreach ($task in $tasks.Values) { Stop-DeckTask $task; $task.Process.Dispose() }
+        foreach ($task in $tasks.Values) { Stop-DeckTask $task; Dispose-DeckTask $task }
         if ($interactive) { [Console]::ForegroundColor = $oldColor; [Console]::BackgroundColor = $oldBackground; [Console]::CursorVisible = $oldCursor; Clear-Host }
     }
 }
@@ -350,7 +350,7 @@ function Show-DeckPoolPicker([string]$SuiteRoot, [string]$Environment, [string[]
                     $task=Start-DeckTask (Get-DeckCheckCode $SuiteRoot $name) 'check' $name
                     Write-Host 'Checking usage (Esc cancels)...'
                     $deadline=[DateTimeOffset]::UtcNow.AddSeconds(90)
-                    while (-not $task.Process.HasExited) {
+                    while (-not (Test-DeckTaskReady $task)) {
                         if ([DateTimeOffset]::UtcNow -gt $deadline) { throw 'Usage check timed out.' }
                         if ([Console]::KeyAvailable -and [Console]::ReadKey($true).Key -eq 'Escape') { throw 'Check cancelled.' }
                         Start-Sleep -Milliseconds 100
@@ -360,10 +360,10 @@ function Show-DeckPoolPicker([string]$SuiteRoot, [string]$Environment, [string[]
                     if ($row.Count -ne 1) { throw 'No matching usage result.' }
                     $row[0] | Add-Member NoteProperty CheckedAt ([DateTimeOffset]::UtcNow.ToString('o')) -Force
                     $cache[$name]=$row[0]
-                    Write-DeckJson (Join-Path $SuiteRoot 'deck/terminal-cache.json') @(Get-DeckMapValues $cache)
+                    $cache=Save-DeckUsageCache (Join-Path $SuiteRoot 'deck') $cache 'terminal-cache.json'
                     $notice="$name refreshed."
                 } catch { $notice=$_.Exception.Message }
-                finally { if ($task) { Stop-DeckTask $task; $task.Process.Dispose() } }
+                finally { if ($task) { Stop-DeckTask $task; Dispose-DeckTask $task } }
             }
         }
     }

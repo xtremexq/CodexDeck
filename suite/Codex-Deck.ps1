@@ -25,6 +25,7 @@ if (-not $created -and -not $SmokeTest -and -not $Demo) {
 $script:settings = if($SmokeTest -or $Demo){Get-DeckDefaults}else{Get-DeckSettings $root}
 $script:cache = @{}; $script:nextCheck = @{}; $script:resets = @{}; $script:history = @{}
 $script:rowPools=@{}; $script:rowControls=@{}; $script:rowStyle=''; $script:expandedRows=@{}; $script:profiles=@{}; $script:profileStamps=@{}; $script:cacheVersion=0; $script:lastPicker=[DateTimeOffset]::MinValue
+$script:accountNames=@(); $script:pickerContentKeys=@{}; $script:usageCacheStamp=''
 $script:tasks = @{}; $script:batchAccounts=@(); $script:batchUntil=[DateTimeOffset]::MinValue; $script:task = $null
 $script:quit = $false; $script:allProfiles = $false; $script:accountFilter='all'; $script:lastWarmupScheduleCheck=[DateTimeOffset]::UtcNow; $script:scheduleRepairTask=$null; $script:initialScheduleRepairStarted=$false
 $script:sessions = @(); $script:notice = 'Ready'; $script:lastRender = ''
@@ -35,11 +36,9 @@ if(-not $SmokeTest -and -not $Demo){
     foreach($mode in @('Panel','Widget')){if($savedViews.$mode){$viewStates[$mode]=$savedViews.$mode}}
 }
 if (-not $SmokeTest -and -not $Demo) {
-    foreach ($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $root 'cache.json')))) {
-        if ($entry.Account -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') {
-            $cache[$entry.Account] = $entry
-            if($entry.CheckedAt){$nextCheck[$entry.Account]=Get-DeckNextCheck $settings $entry ([DateTimeOffset]$entry.CheckedAt)}
-        }
+    $script:cache=Get-DeckUsageCache $root
+    foreach ($entry in @($cache.Values)) {
+        if($entry.CheckedAt){$nextCheck[$entry.Account]=Get-DeckNextCheck $settings $entry ([DateTimeOffset]$entry.CheckedAt)}
     }
     foreach ($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $root 'warmup.json')))) {
         if ($entry.Account) { $history[$entry.Account]=$entry }
@@ -231,7 +230,7 @@ function Show-DeckDelete([string]$Name, [switch]$TestUI) {
             Move-DeckAccountToRecovery $suite $Name
             foreach($map in @($cache,$profiles,$profileStamps,$manualChecks,$nextCheck,$history,$expandedRows)){$map.Remove($Name)}
             $script:notice='Deleted '+$Name+' / saved in local recovery storage'; $script:lastRender=''
-            Update-DeckPicker; Render-Deck; $dialog.Close()
+            Update-DeckPicker -Force; Render-Deck; $dialog.Close()
         }catch{$errorText.Text=$_.Exception.Message}
     })
     if($TestUI){return $dialog}
@@ -429,14 +428,44 @@ function Get-DeckAccounts {
     @(Get-ChildItem -LiteralPath (Join-Path $suite 'accounts') -Directory -ErrorAction SilentlyContinue |
         Where-Object Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' | Sort-Object @{Expression={if($_.Name -eq 'pool'){-2}elseif(Test-Path -LiteralPath (Join-Path $_.FullName 'deck-entry.json')){-1}elseif($_.Name -in $pins){0}else{1}}},@{Expression={if($_.Name -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},Name | ForEach-Object Name)
 }
+function Get-DeckUsageCacheStamp {
+    $parts=foreach($name in 'cache.json','terminal-cache.json'){
+        $item=Get-Item -LiteralPath (Join-Path $root $name) -ErrorAction SilentlyContinue
+        if($item){$name+'/'+$item.LastWriteTimeUtc.Ticks+'/'+$item.Length}else{$name+'/missing'}
+    }
+    return $parts -join '|'
+}
+function Sync-DeckUsageCache {
+    if($SmokeTest -or $Demo){return}
+    $stamp=Get-DeckUsageCacheStamp
+    if($stamp -eq $usageCacheStamp){return}
+    $fresh=Get-DeckUsageCache $root; $changed=$false
+    foreach($name in @($fresh.Keys)){
+        $incoming=$fresh[$name]; $old=$cache[$name]
+        $incomingKey=ConvertTo-Json -Compress -Depth 20 -InputObject $incoming
+        $oldKey=if($old){ConvertTo-Json -Compress -Depth 20 -InputObject $old}else{''}
+        if($incomingKey -ne $oldKey){
+            $cache[$name]=$incoming; $changed=$true
+            if($incoming.CheckedAt){$nextCheck[$name]=Get-DeckNextCheck $settings $incoming ([DateTimeOffset]$incoming.CheckedAt)}
+        }
+    }
+    $script:usageCacheStamp=$stamp
+    if($changed){$script:cacheVersion++;$script:lastRender='';$script:lastPicker=[DateTimeOffset]::MinValue}
+}
+function Save-DeckDesktopUsageCache {
+    $script:cache=Save-DeckUsageCache $root $cache 'cache.json'
+    $script:usageCacheStamp=Get-DeckUsageCacheStamp
+}
 function Get-DeckPickerPoolEntry([string]$Name) {
     if(($SmokeTest -or $Demo) -and $script:testPoolEntries -and $script:testPoolEntries.ContainsKey($Name)){return [pscustomobject]$script:testPoolEntries[$Name]}
     return Get-DeckPoolEntry $suite $Name
 }
 function Set-DeckPickerNames($Names) {
     $names=@($Names)
+    $script:accountNames=$names
     if (($names -join ',') -eq (@($AccountPicker.Items | ForEach-Object Tag) -join ',')) {return}
     $selected=$AccountPicker.SelectedValue; $AccountPicker.Items.Clear()
+    $script:pickerContentKeys=@{}
     $AccountPicker.SelectedValuePath='Tag'
     foreach ($name in $names) { $item=[Windows.Controls.ComboBoxItem]::new(); $item.Tag=$name; $item.Content=$name; [void]$AccountPicker.Items.Add($item) }
     if ($selected -in $names) { $AccountPicker.SelectedValue=$selected }
@@ -445,9 +474,10 @@ function Set-DeckPickerNames($Names) {
         # environment the surprising default for a fresh Deck window.
         $AccountPicker.SelectedIndex=if($names.Count -gt 1 -and (Get-DeckPickerPoolEntry ([string]$names[0]))){1}else{0}
     }
+    $script:lastRender=''
 }
-function Update-DeckPicker {
-    if(([DateTimeOffset]::UtcNow-$lastPicker).TotalSeconds -lt 15){return}
+function Update-DeckPicker([switch]$Force) {
+    if(-not $Force -and ([DateTimeOffset]::UtcNow-$lastPicker).TotalSeconds -lt 15){return}
     $script:lastPicker=[DateTimeOffset]::UtcNow
     $names = @(Get-DeckAccounts)
     foreach($name in $names){
@@ -461,22 +491,36 @@ function Update-DeckPicker {
         $name=[string]$item.Tag
         $poolEntry=Get-DeckPickerPoolEntry $name
         if($poolEntry){
+            $poolError=$null
+            try{$members=if(($SmokeTest -or $Demo) -and $script:testPoolEntries){@($poolEntry.Accounts)}else{@(Resolve-DeckEntryPool $suite $poolEntry)}}catch{$members=@();$poolError=$_.Exception.Message}
+            $contentKey='pool/'+$name+'/'+$poolEntry.Mode+'/'+($members -join ',')+'/'+$poolError
+            if($pickerContentKeys[$name] -eq $contentKey){continue}
             $line=[Windows.Controls.TextBlock]::new();$line.FontSize=11;$line.TextWrapping='NoWrap';$line.TextTrimming='CharacterEllipsis'
             $title=[Windows.Documents.Run]::new($name+'  ');$title.Foreground='#69DEC0';$title.FontWeight='SemiBold';[void]$line.Inlines.Add($title)
-            try{
-                $members=if(($SmokeTest -or $Demo) -and $script:testPoolEntries){@($poolEntry.Accounts)}else{@(Resolve-DeckEntryPool $suite $poolEntry)}
+            if(-not $poolError){
                 $memberLabel=if($members.Count -eq 1){'1 quota account'}else{"$($members.Count) quota accounts"}
                 $summary=[Windows.Documents.Run]::new("Shared history / $memberLabel / $($poolEntry.Mode)");$summary.Foreground='#A9E8D5';[void]$line.Inlines.Add($summary)
                 $line.ToolTip='One Codex home and conversation history, routed through the pool accounts.'
-            }catch{
+            }else{
                 $summary=[Windows.Documents.Run]::new('Pool configuration needs attention');$summary.Foreground='#F17D8D';[void]$line.Inlines.Add($summary)
-                $line.ToolTip=$_.Exception.Message
+                $line.ToolTip=$poolError
             }
-            $item.Content=$line
+            $item.Content=$line; $pickerContentKeys[$name]=$contentKey
             continue
         }
-        if(-not $settings.AccountPickerUsage){$item.Content=$name; continue}
+        if(-not $settings.AccountPickerUsage){
+            $contentKey='plain/'+$name
+            if($pickerContentKeys[$name] -ne $contentKey){$item.Content=$name;$pickerContentKeys[$name]=$contentKey}
+            continue
+        }
         $row=$cache[$name]
+        $age='Never'
+        if($row.CheckedAt){
+            $seconds=[Math]::Max(0,([DateTimeOffset]::Now-[DateTimeOffset]$row.CheckedAt).TotalSeconds)
+            $age=if($seconds -ge 2592000){[Math]::Floor($seconds/2592000).ToString()+'mo'}elseif($seconds -ge 604800){[Math]::Floor($seconds/604800).ToString()+'w'}elseif($seconds -ge 86400){[Math]::Floor($seconds/86400).ToString()+'d'}elseif($seconds -ge 3600){[Math]::Floor($seconds/3600).ToString()+'h'}elseif($seconds -ge 60){[Math]::Floor($seconds/60).ToString()+'m'}else{[Math]::Floor($seconds).ToString()+'s'}
+        }
+        $contentKey='usage/'+$name+'/'+($name -in $pins)+'/'+$age+'/'+(ConvertTo-Json -Compress -Depth 10 -InputObject @($row.Windows))
+        if($pickerContentKeys[$name] -eq $contentKey){continue}
         $line=[Windows.Controls.TextBlock]::new(); $line.FontSize=11; $line.TextWrapping='NoWrap'; $line.TextTrimming='CharacterEllipsis'
         $title=[Windows.Documents.Run]::new($(if($name -in $pins){'★ '}else{''})+$name+'  '); $title.Foreground='#E4EBF5'; $title.FontWeight='SemiBold'; [void]$line.Inlines.Add($title)
         $usage=[Windows.Controls.TextBlock]::new(); $usage.FontSize=10
@@ -492,13 +536,8 @@ function Update-DeckPicker {
         if(-not $usage.Inlines.Count){$usage.Text='Usage unavailable'; $usage.Foreground='#929CA4'}
         $usage.ToolTip='Percentage remaining / next local reset. Windows are shown as reported by the account.'
         foreach($run in @($usage.Inlines)){ [void]$usage.Inlines.Remove($run); [void]$line.Inlines.Add($run) }
-        $age='Never'
-        if($row.CheckedAt){
-            $seconds=[Math]::Max(0,([DateTimeOffset]::Now-[DateTimeOffset]$row.CheckedAt).TotalSeconds)
-            $age=if($seconds -ge 2592000){[Math]::Floor($seconds/2592000).ToString()+'mo'}elseif($seconds -ge 604800){[Math]::Floor($seconds/604800).ToString()+'w'}elseif($seconds -ge 86400){[Math]::Floor($seconds/86400).ToString()+'d'}elseif($seconds -ge 3600){[Math]::Floor($seconds/3600).ToString()+'h'}elseif($seconds -ge 60){[Math]::Floor($seconds/60).ToString()+'m'}else{[Math]::Floor($seconds).ToString()+'s'}
-        }
         $ageRun=[Windows.Documents.Run]::new('  Last checked: '+$age); $ageRun.Foreground='#858B92'; $ageRun.FontSize=9; [void]$line.Inlines.Add($ageRun)
-        $item.Content=$line
+        $item.Content=$line; $pickerContentKeys[$name]=$contentKey
     }
 }
 function Select-DeckFolder([string]$InitialFolder, [switch]$TestUI) {
@@ -754,10 +793,11 @@ function Show-DeckSettings {
     $modelTimer.Add_Tick({
         $worker=$modelState.Task
         if(-not $worker){return}
-        if(([DateTimeOffset]::UtcNow-$worker.Started).TotalSeconds -gt 30){Stop-DeckTask $worker}
-        if(-not $worker.Process.HasExited){return}
+        $timeout=([DateTimeOffset]::UtcNow-$worker.Started).TotalSeconds -gt 30
+        if($timeout){Stop-DeckTask $worker}elseif(-not (Test-DeckTaskReady $worker)){return}
         $modelTimer.Stop()
         try{
+            if($timeout){throw 'Model list unavailable'}
             if($worker.Process.ExitCode -ne 0){throw 'Model list unavailable'}
             $decoded=$worker.Out.Result | ConvertFrom-Json
             $models=@(Get-DeckModelNames $decoded)
@@ -768,14 +808,14 @@ function Show-DeckSettings {
             $picker.SelectedItem=$selected; $picker.ToolTip='Models from Codex. Paid-plan warm-up uses low reasoning effort; Free and Go use their Codex-default model.'
             Write-DeckJson (Join-Path $root 'models.json') @{Models=$models;CheckedAt=[DateTimeOffset]::Now.ToString('o')}
         }catch{$controls.WarmupModel.ToolTip='Model list unavailable; showing saved choices. Paid-plan warm-up uses low reasoning effort; Free and Go use their Codex-default model.'}
-        finally{$worker.Process.Dispose(); $modelState.Task=$null}
+        finally{Dispose-DeckTask $worker; $modelState.Task=$null}
     })
     try{
         $modelAccount=[string]$AccountPicker.SelectedValue
         if(-not $modelAccount -or (Get-DeckPoolEntry $suite $modelAccount)){$modelAccount=@(Get-DeckAccounts | Where-Object { -not (Get-DeckPoolEntry $suite $_) -and (Test-Path -LiteralPath (Join-Path $suite "accounts/$_/auth.json")) })[0]}
         if($modelAccount){$modelState.Task=Start-DeckTask (Get-DeckModelsCode $suite $modelAccount) 'Models' $modelAccount; $modelTimer.Start()}
         [void]$dialog.ShowDialog()
-    }finally{$modelTimer.Stop(); if($modelState.Task){Stop-DeckTask $modelState.Task; $modelState.Task.Process.Dispose()}}
+    }finally{$modelTimer.Stop(); if($modelState.Task){Stop-DeckTask $modelState.Task; Dispose-DeckTask $modelState.Task}}
 }
 function New-DeckPanelDetails([string]$Name) {
     $row=$cache[$Name]; $profile=$profiles[$Name]; $connected=@($sessions | Where-Object Account -eq $Name)
@@ -824,7 +864,7 @@ function Test-DeckAccountFilter([string]$Name) {
 }
 function Get-DeckVisibleAccounts {
     $names=@($sessions | ForEach-Object Account | Select-Object -Unique)
-    if($allProfiles){$names=@(Get-DeckAccounts)}
+    if($allProfiles){$names=@($accountNames)}
     @($names | Where-Object {Test-DeckAccountFilter $_} | Sort-Object @{Expression={if($_ -in $pins){0}else{1}}},@{Expression={if($_ -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},{$_})
 }
 function Set-DeckAccountFilter([string]$Filter) {
@@ -937,8 +977,8 @@ function Invoke-DeckShowRequest {
     if($request.OpenSettings){Show-DeckSettings}
 }
 function Start-DeckScheduleRepair {
-    if($scheduleRepairTask -and -not $scheduleRepairTask.Process.HasExited){return}
-    if($scheduleRepairTask){$scheduleRepairTask.Process.Dispose(); $script:scheduleRepairTask=$null}
+    if($scheduleRepairTask -and -not (Test-DeckTaskReady $scheduleRepairTask)){return}
+    if($scheduleRepairTask){Dispose-DeckTask $scheduleRepairTask; $script:scheduleRepairTask=$null}
     $corePath=(Join-Path $suite 'Deck.Core.ps1').Replace("'","''")
     $suitePath=$suite.Replace("'","''")
     $rootPath=$root.Replace("'","''")
@@ -951,12 +991,12 @@ if(Repair-DeckWarmupSchedule '$suitePath' `$settings){[Console]::Out.Write('repa
     $script:scheduleRepairTask=Start-DeckTask $code 'Schedule repair' ''
 }
 function Complete-DeckScheduleRepair {
-    if(-not $scheduleRepairTask -or -not $scheduleRepairTask.Process.HasExited -or $scheduleRepairTask.Out.IsCompleted -eq $false -or $scheduleRepairTask.Err.IsCompleted -eq $false){return}
+    if(-not $scheduleRepairTask -or -not (Test-DeckTaskReady $scheduleRepairTask)){return}
     try {
         if($scheduleRepairTask.Process.ExitCode -ne 0){throw $scheduleRepairTask.Err.Result}
         if($scheduleRepairTask.Out.Result -eq 'repaired'){$script:notice='Repaired the automatic warm-up schedule'; $script:lastRender=''}
     } catch {$script:notice='Warm-up schedule repair failed: '+$_.Exception.Message; $script:lastRender=''}
-    finally {$scheduleRepairTask.Process.Dispose(); $script:scheduleRepairTask=$null}
+    finally {Dispose-DeckTask $scheduleRepairTask; $script:scheduleRepairTask=$null}
 }
 function Invoke-DeckTick {
     if($SmokeTest -or $Demo){Render-Deck; return}
@@ -970,12 +1010,12 @@ function Invoke-DeckTick {
     $warmStateSignal=Join-Path $root 'warmup-state-changed.json'
     if(Test-Path -LiteralPath $warmStateSignal){
         Remove-Item -LiteralPath $warmStateSignal -ErrorAction SilentlyContinue
-        foreach($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $root 'cache.json')))){if($entry.Account){$cache[$entry.Account]=$entry}}
         $script:history=@{}; foreach($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $root 'warmup.json')))){if($entry.Account){$history[$entry.Account]=$entry}}
         $savedResets=Read-DeckJson (Join-Path $root 'warmup-resets.json'); if($savedResets){foreach($property in $savedResets.PSObject.Properties){$resets[$property.Name]=[long]$property.Value}}
-        $script:cacheVersion++; $script:lastRender=''
+        $script:usageCacheStamp=''; $script:lastRender=''
     }
     Complete-DeckScheduleRepair
+    Sync-DeckUsageCache
     $script:sessions=@(Get-DeckSessions $root); Update-DeckPicker
     $now=[DateTimeOffset]::UtcNow; $unix=$now.ToUnixTimeSeconds()
     if(-not $initialScheduleRepairStarted -or ($settings.WarmupEnabled -and $settings.WarmupSchedulingEnabled -and ($now-$lastWarmupScheduleCheck).TotalMinutes -ge 5)){
@@ -987,7 +1027,7 @@ function Invoke-DeckTick {
     foreach($task in @($tasks.Values)){
         $timeout=($now-$task.Started).TotalSeconds -gt 120
         if($timeout){Stop-DeckTask $task}
-        if($timeout -or ($task.Process.HasExited -and $task.Out.IsCompleted -ne $false -and $task.Err.IsCompleted -ne $false)){
+        if($timeout -or (Test-DeckTaskReady $task)){
             $account=$task.Account; $success=(-not $timeout -and $task.Process.ExitCode -eq 0)
             if($task.Kind -eq 'Check'){
                 try{
@@ -1020,7 +1060,7 @@ function Invoke-DeckTick {
                 Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $history)
                 $manualChecks[$account]=$now; $nextCheck[$account]=$now; $script:notice="Warm-up $account : $($history[$account].Outcome)"
             }
-            $task.Process.Dispose(); $tasks.Remove($account); $script:lastRender=''
+            Dispose-DeckTask $task; $tasks.Remove($account); $script:lastRender=''
         }
     }
     if($tasks.Count -lt 8 -and ($settings.AutoCheck -or $manualChecks.Count)){
@@ -1044,7 +1084,7 @@ function Invoke-DeckTick {
 
         }
     }
-    if($cacheDirty){Write-DeckJson (Join-Path $root 'warmup-resets.json') $resets; Write-DeckJson (Join-Path $root 'cache.json') @(Get-DeckMapValues $cache); $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker}
+    if($cacheDirty){Write-DeckJson (Join-Path $root 'warmup-resets.json') $resets; Save-DeckDesktopUsageCache; $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker -Force}
     if($batchAccounts.Count -and -not @($batchAccounts | Where-Object { $tasks.ContainsKey($_) -or $manualChecks.ContainsKey($_) }).Count){
         $script:batchAccounts=@(); $script:batchUntil=$now.AddSeconds($settings.MinimumGapSeconds)
         $script:notice='List check complete'
@@ -1190,7 +1230,7 @@ Set-DeckMode $settings.ViewMode -Initial
 $window.Add_SizeChanged({if(-not $script:sizing){[void]$window.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Loaded,[Action]{Update-DeckWidgetHeight})}})
 $timer=[Windows.Threading.DispatcherTimer]::new(); $timer.Interval=[TimeSpan]::FromSeconds(2)
 $timer.Add_Tick({try{Invoke-DeckTick}catch{$script:notice='Companion error: '+$_.Exception.Message; $StatusLine.Text=$notice}})
-$showTimer=[Windows.Threading.DispatcherTimer]::new(); $showTimer.Interval=[TimeSpan]::FromMilliseconds(125)
+$showTimer=[Windows.Threading.DispatcherTimer]::new(); $showTimer.Interval=[TimeSpan]::FromMilliseconds(250)
 $showTimer.Add_Tick({try{Invoke-DeckShowRequest}catch{$script:notice='Open Deck failed: '+$_.Exception.Message; $StatusLine.Text=$notice}})
 try{
     if($SmokeTest -or $Demo){
@@ -1248,7 +1288,9 @@ try{
         if($allProfiles -eq $before){throw 'Summary did not switch account view.'}
         $SummaryButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         if($allProfiles -ne $before){throw 'Summary did not restore account view.'}
-        $script:testPickerNames=@('account1','account2'); $profiles.account2=[pscustomobject]@{PlanType='free';Email='free@example.com';Model='Codex default';Effort='default'}
+        $script:testPickerNames=@('account1','account2'); Update-DeckPicker -Force
+        if(($accountNames -join ',') -ne (@($AccountPicker.Items | ForEach-Object Tag) -join ',')){throw 'Main account snapshot and dropdown names diverged.'}
+        $profiles.account2=[pscustomobject]@{PlanType='free';Email='free@example.com';Model='Codex default';Effort='default'}
         $cache.account2=[pscustomobject]@{Account='account2';PlanType='free';Status='available';Windows=@()}
         $script:allProfiles=$true
         $filterMenu.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
@@ -1277,6 +1319,8 @@ try{
         if($AccountPicker.Items[0].Tag -ne 'pool' -or $AccountPicker.SelectedValue -ne 'account1'){throw 'Pool must be first while the second dropdown row remains the initial selection.'}
         $poolEntry=$AccountPicker.Items[0]
         if((($poolEntry.Content.Inlines|ForEach-Object Text)-join '') -notmatch 'Shared history / 2 quota accounts / Best'){throw 'Pool dropdown row does not explain pooled behavior.'}
+        $poolContent=$poolEntry.Content; Update-DeckPicker -Force
+        if(-not [object]::ReferenceEquals($poolContent,$poolEntry.Content)){throw 'Unchanged dropdown content was rebuilt.'}
         $pickerEntry=@($AccountPicker.Items | Where-Object Tag -eq 'account1')[0]
         if((($pickerEntry.Content.Inlines | ForEach-Object Text) -join '') -notmatch '5H 72%' -or $pickerEntry.Content.TextWrapping -ne 'NoWrap'){throw ('Picker: '+ [string]::Join('|',@($pickerEntry.Content.Inlines | ForEach-Object Text)))}
         $AccountPicker.SelectedValue='account1'
@@ -1286,7 +1330,7 @@ try{
         if($otherEntry){
             $otherName=[string]$otherEntry.Tag; $previousRecord=$cache[$otherName]
             $record=$cache.account1 | ConvertTo-Json -Depth 20 | ConvertFrom-Json; $record.Account=$otherName
-            $cache[$otherName]=$record
+            $cache[$otherName]=$record; Update-DeckPicker -Force
             Set-DeckMode 'Panel' -Initial; $window.Show(); $window.UpdateLayout(); $AccountPicker.ApplyTemplate() | Out-Null; $AccountPicker.IsDropDownOpen=$true
             [Windows.Forms.Application]::DoEvents()
             $popup=$AccountPicker.Template.FindName('PART_Popup',$AccountPicker); $popup.Child.UpdateLayout()
@@ -1599,6 +1643,6 @@ try{
     [IO.File]::AppendAllText((Join-Path $root 'errors.log'),([DateTimeOffset]::Now.ToString('o')+"`n"+$_.ToString()+"`n"+$_.ScriptStackTrace+"`n"))
     throw
 }finally{
-    $timer.Stop(); $showTimer.Stop(); if($scheduleRepairTask){Stop-DeckTask $scheduleRepairTask; $scheduleRepairTask.Process.Dispose()}; foreach($worker in @($tasks.Values)){Stop-DeckTask $worker; $worker.Process.Dispose()}; $tray.Dispose(); $deckIcon.Dispose()
+    $timer.Stop(); $showTimer.Stop(); if($scheduleRepairTask){Stop-DeckTask $scheduleRepairTask; Dispose-DeckTask $scheduleRepairTask}; foreach($worker in @($tasks.Values)){Stop-DeckTask $worker; Dispose-DeckTask $worker}; $tray.Dispose(); $deckIcon.Dispose()
     if($created){$mutex.ReleaseMutex()}; $mutex.Dispose()
 }

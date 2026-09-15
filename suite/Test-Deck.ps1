@@ -98,10 +98,20 @@ $failed=$false; try{Get-DeckWarmupCode $PSScriptRoot '../outside' 'gpt-5.6-luna'
 Assert $failed 'Account injection accepted'
 $failed=$false; try{Get-DeckWarmupCode $PSScriptRoot account5 "bad'; echo injected"}catch{$failed=$true}
 Assert $failed 'Model injection accepted'
-$task=Start-DeckTask "'synthetic worker output'" 'Test' 'account1'
+$task=Start-DeckTask "Start-Sleep -Milliseconds 200; 'synthetic worker output'" 'Test' 'account1'
 Assert ($task.Process.WaitForExit(10000)) 'Worker did not finish'
 Assert ($task.Out.Result.Trim() -eq 'synthetic worker output') 'Worker output lost'
-$task.Process.Dispose()
+Assert ($task.Job) 'Worker process tree was not assigned to a cleanup job'
+Dispose-DeckTask $task
+$treeCode='$child=Start-Process powershell.exe -ArgumentList ''-NoProfile'',''-Command'',''Start-Sleep -Seconds 30'' -PassThru; [Console]::Out.WriteLine($child.Id)'
+$treeTask=Start-DeckTask $treeCode 'Test' 'account1'
+Assert ($treeTask.Process.WaitForExit(10000)) 'Process-tree parent did not finish'
+$treeDeadline=[DateTimeOffset]::UtcNow.AddSeconds(5)
+while(-not $treeTask.Out.IsCompleted -and [DateTimeOffset]::UtcNow -lt $treeDeadline){Start-Sleep -Milliseconds 50}
+Assert ($treeTask.Out.IsCompleted) 'Process-tree output did not drain'
+$childPid=[int]$treeTask.Out.Result.Trim(); Dispose-DeckTask $treeTask; Start-Sleep -Milliseconds 200
+$childAlive=$false; try{$childProcess=Get-Process -Id $childPid -ErrorAction Stop;$childAlive=$true;$childProcess.Dispose()}catch{}
+Assert (-not $childAlive) 'Disposing a worker left its child process alive'
 $backgroundScript=Join-Path $fixture 'background worker.ps1'; $backgroundResult=Join-Path $fixture 'background-result.json'
 [IO.File]::WriteAllText($backgroundScript,'[IO.File]::WriteAllText($env:CODEX_DECK_BACKGROUND_TEST,($args | ConvertTo-Json -Compress)); exit 0',[Text.UTF8Encoding]::new($false))
 $oldBackgroundResult=$env:CODEX_DECK_BACKGROUND_TEST

@@ -334,8 +334,23 @@ function Invoke-CodexRateLimitRead {
     finally {
         try {
             if (-not $process.HasExited) {
-                $process.Kill()
-                $process.WaitForExit()
+                # codex.cmd is a wrapper around the native Codex/Node process.
+                # Kill the owned tree while the wrapper still identifies its
+                # children; killing only cmd.exe can strand app-server workers.
+                $killInfo = [System.Diagnostics.ProcessStartInfo]::new()
+                $killInfo.FileName = 'taskkill.exe'
+                $killInfo.Arguments = "/PID $($process.Id) /T /F"
+                $killInfo.UseShellExecute = $false
+                $killInfo.CreateNoWindow = $true
+                $killInfo.RedirectStandardOutput = $true
+                $killInfo.RedirectStandardError = $true
+                $killer = [System.Diagnostics.Process]::Start($killInfo)
+                try {
+                    if (-not $killer.WaitForExit(5000)) { $killer.Kill() }
+                }
+                finally { $killer.Dispose() }
+                if (-not $process.HasExited) { $process.Kill() }
+                [void]$process.WaitForExit(1000)
             }
         }
         catch {

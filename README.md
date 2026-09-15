@@ -92,7 +92,7 @@ The installer adds command wrappers to your user PATH and preserves existing acc
 | **Esc** | Clear the search, or quit when no search is active |
 | **Q** | Quit the dashboard |
 
-Cached usage appears first. Authenticated accounts with missing or more-than-five-minute-old results are checked automatically, with up to three checks running at once. The panel stays responsive while checks run. Opening it does not send a warm-up prompt.
+Cached usage appears immediately and opening the dashboard performs no account checks. Press **R** to refresh the selected signed-in account or **A** to queue all signed-in accounts, with up to three checks running at once. Checks stay in the background and do not block navigation. Opening the dashboard also does not send a warm-up prompt.
 
 **Bars show quota remaining.** Primary is the five-hour window, or another plan-specific window such as a free account's longer allowance. Weekly is shown separately when available. `?` means the value is unknown; it does not mean zero. Reset timestamps use your local time. **Reset passed** means the displayed value needs a fresh check.
 

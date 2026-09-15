@@ -28,9 +28,9 @@ function Invoke-DeckWorkerBatch($Accounts, [ValidateSet('Check','Warm-up')][stri
         foreach($account in @($active.Keys)){
             $task=$active[$account]; $timeout=([DateTimeOffset]::UtcNow-$task.Started).TotalSeconds -gt 120
             if($timeout){Stop-DeckTask $task}
-            if($task.Process.HasExited -and ($timeout -or ($task.Out.IsCompleted -ne $false -and $task.Err.IsCompleted -ne $false))){
+            if($timeout -or (Test-DeckTaskReady $task)){
                 $results[$account]=[pscustomobject]@{Success=(-not $timeout -and $task.Process.ExitCode -eq 0);Output=$(if($task.Out.IsCompleted){[string]$task.Out.Result}else{''});Error=$(if($timeout){'Timed out'}elseif($task.Err.IsCompleted){[string]$task.Err.Result}else{''})}
-                $task.Process.Dispose(); $active.Remove($account)
+                Dispose-DeckTask $task; $active.Remove($account)
             }
         }
         if($active.Count){Start-Sleep -Milliseconds 150}
@@ -43,9 +43,9 @@ function Read-DeckResetMap {
     return $map
 }
 function Save-DeckWorkerState($Cache,$Resets,$History,$Checked,$Warmed,[string]$Outcome) {
-    $latest=ConvertTo-DeckMap (Read-DeckJson (Join-Path $root 'cache.json'))
+    $latest=Get-DeckUsageCache $root
     foreach($account in @($Cache.Keys)){$latest[$account]=$Cache[$account]}
-    Write-DeckJson (Join-Path $root 'cache.json') @(Get-DeckMapValues $latest)
+    $latest=Save-DeckUsageCache $root $latest 'cache.json'
     Write-DeckJson (Join-Path $root 'warmup-resets.json') $Resets
     Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $History)
     $settings=Get-DeckSettings $root; $accounts=@(Get-DeckWarmupAccounts $SuiteRoot $settings $latest)
@@ -60,7 +60,7 @@ $mutex=[Threading.Mutex]::new($true,"Local\CodexDeckWarmup-$sid",[ref]$created)
 if(-not $created){$mutex.Dispose(); exit 0}
 try{
     $settings=Get-DeckSettings $root
-    $cache=ConvertTo-DeckMap (Read-DeckJson (Join-Path $root 'cache.json'))
+    $cache=Get-DeckUsageCache $root
     $history=ConvertTo-DeckMap (Read-DeckJson (Join-Path $root 'warmup.json'))
     $resets=Read-DeckResetMap
     $accounts=@(Get-DeckWarmupAccounts $SuiteRoot $settings $cache)

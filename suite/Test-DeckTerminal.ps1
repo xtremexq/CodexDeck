@@ -46,6 +46,11 @@ foreach($file in 'Deck.Core.ps1','Deck.AccountTools.ps1'){Copy-Item (Join-Path $
 Write-DeckJson (Join-Path $fixture 'deck/cache.json') @(@{Account='account1';CheckedAt='2026-01-01T00:00:00Z';Status='available'})
 Write-DeckJson (Join-Path $fixture 'deck/terminal-cache.json') @(@{Account='account1';CheckedAt='2026-01-02T00:00:00Z';Status='blocked'})
 Assert ((Get-DeckTerminalCache (Join-Path $fixture 'deck')).account1.Status -eq 'blocked') 'Newest cache not selected'
+Write-DeckJson (Join-Path $fixture 'deck/cache.json') @(@{Account='account1';CheckedAt='2026-01-02T12:00:00-03:00';Status='available'})
+Assert ((Get-DeckTerminalCache (Join-Path $fixture 'deck')).account1.Status -eq 'available') 'Cache timestamps with different offsets were compared as text'
+$terminalAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'Deck.Terminal.ps1'),[ref]$null,[ref]$null)
+$dashboard=$terminalAst.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-DeckTerminal'},$true).Extent.Text
+Assert ($dashboard -notmatch '\$attempted|TotalMinutes\s+-lt\s+5') 'Opening the terminal dashboard still schedules automatic usage checks'
 $snapshot = @(Show-DeckTerminal -SuiteRoot $fixture -AuthScript 'unused' -Snapshot)
 Assert (($snapshot -join "`n") -match 'CODEX / DECK') 'Snapshot did not render'
 'PASS: terminal quota, sanitization, cache merge, paging, masking, empty state and snapshot.'

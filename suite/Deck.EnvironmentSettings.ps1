@@ -108,18 +108,19 @@ $populateResources={
 $resourceTimer=[Windows.Threading.DispatcherTimer]::new(); $resourceTimer.Interval=[TimeSpan]::FromMilliseconds(150)
 $resourceTimer.Add_Tick({
     $task=$environmentState.Task; if(-not $task){return}
-    if(([DateTimeOffset]::UtcNow-$task.Started).TotalSeconds -gt 30){Stop-DeckTask $task}
-    if(-not $task.Process.HasExited){return}
+    $timeout=([DateTimeOffset]::UtcNow-$task.Started).TotalSeconds -gt 30
+    if($timeout){Stop-DeckTask $task}elseif(-not (Test-DeckTaskReady $task)){return}
     try{
+        if($timeout){throw 'Could not read resources for this environment.'}
         $output=$task.Out.GetAwaiter().GetResult()
         if($task.Process.ExitCode -ne 0){throw 'Could not read resources for this environment.'}
         $values=@($output | ConvertFrom-Json)
         $environmentState.Resources[$environmentState.Owner]=$values; & $populateResources $values
     }catch{$environmentStatus.Text=$_.Exception.Message}
-    finally{$task.Process.Dispose(); $environmentState.Task=$null; $resourceTimer.Stop()}
+    finally{Dispose-DeckTask $task; $environmentState.Task=$null; $resourceTimer.Stop()}
 }.GetNewClosure())
 $shareSourceBox.Add_SelectionChanged({
-    if($environmentState.Task){Stop-DeckTask $environmentState.Task; $environmentState.Task.Process.Dispose(); $environmentState.Task=$null}; $resourceTimer.Stop()
+    if($environmentState.Task){Stop-DeckTask $environmentState.Task; Dispose-DeckTask $environmentState.Task; $environmentState.Task=$null}; $resourceTimer.Stop()
     $shareResourceList.Items.Clear(); $shareRecipients.Children.Clear(); $recipientHeading.Text='Share with'
     $owner=[string]$shareSourceBox.SelectedItem; $environmentState.Owner=$owner
     if(-not $owner){return}
@@ -133,7 +134,7 @@ $shareSourceBox.Add_SelectionChanged({
     }catch{$environmentStatus.Text=$_.Exception.Message}
 }.GetNewClosure())
 $shareResourceList.Add_SelectionChanged({& $renderRecipients}.GetNewClosure())
-$dialog.Add_Closed({$resourceTimer.Stop(); if($environmentState.Task){Stop-DeckTask $environmentState.Task; $environmentState.Task.Process.Dispose(); $environmentState.Task=$null}}.GetNewClosure())
+$dialog.Add_Closed({$resourceTimer.Stop(); if($environmentState.Task){Stop-DeckTask $environmentState.Task; Dispose-DeckTask $environmentState.Task; $environmentState.Task=$null}}.GetNewClosure())
 $saveEnvironments={
     param([switch]$ValidateOnly)
     foreach($draft in $environmentState.Pools.Values){

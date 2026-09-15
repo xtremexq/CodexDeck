@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Made terminal-dashboard usage checks explicitly opt-in with **R**/**A**, kept bulk checks responsive, and prevented wrapper/app-server child processes from surviving completed or timed-out workers.
+- Kept desktop account rows and the launch dropdown on one merged live cache/account snapshot while eliminating repeated WPF control rebuilding and session-process handle churn.
+
 ## 1.5.0 - 2026-09-14
 
 - Replaced the paid-only warm-up checkbox with a multi-select account-type dropdown for all, Free, Go and Plus-or-higher plans, including plan-aware quota windows and account-default models for Free/Go warm-ups.

@@ -8,6 +8,8 @@ function Get-DeckSessions { [pscustomobject]@{Account='work-main'} }
 function Get-DeckAccounts { 'work-main'; 1..12 | ForEach-Object {"account$_"} }
 function Get-DeckVisibleAccounts { if($allProfiles){Get-DeckAccounts}else{Get-DeckSessions | ForEach-Object Account | Select-Object -Unique} }
 function Update-DeckPicker {}
+function Sync-DeckUsageCache {}
+function Save-DeckDesktopUsageCache {}
 function Render-Deck {}
 function Write-DeckJson {}
 function Complete-DeckScheduleRepair {}

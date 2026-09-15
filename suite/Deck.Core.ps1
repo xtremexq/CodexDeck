@@ -113,6 +113,30 @@ function ConvertTo-DeckMap($Value, [string]$KeyProperty = 'Account') {
     }
     return $map
 }
+function Get-DeckUsageCheckTicks($Record) {
+    try{return ([DateTimeOffset]$Record.CheckedAt).UtcDateTime.Ticks}catch{return [long]0}
+}
+function Get-DeckUsageCache([string]$Root) {
+    $cache=@{}
+    foreach($file in 'cache.json','terminal-cache.json'){
+        foreach($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $Root $file)))){
+            $old=$cache[$entry.Account]
+            if(-not $old -or (Get-DeckUsageCheckTicks $entry) -gt (Get-DeckUsageCheckTicks $old)){$cache[$entry.Account]=$entry}
+        }
+    }
+    return $cache
+}
+function Save-DeckUsageCache([string]$Root, $Records, [string]$FileName = 'cache.json') {
+    if($FileName -notin @('cache.json','terminal-cache.json')){throw 'Invalid usage cache file.'}
+    $latest=Get-DeckUsageCache $Root
+    foreach($entry in @(Get-DeckMapValues $Records)){
+        if(-not $entry -or $entry.Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){continue}
+        $old=$latest[$entry.Account]
+        if(-not $old -or (Get-DeckUsageCheckTicks $entry) -ge (Get-DeckUsageCheckTicks $old)){$latest[$entry.Account]=$entry}
+    }
+    Write-DeckJson (Join-Path $Root $FileName) @(Get-DeckMapValues $latest)
+    return $latest
+}
 function Write-DeckJson([string]$Path, $Value) {
     $dir = Split-Path -Parent $Path
     [void][IO.Directory]::CreateDirectory($dir)
@@ -165,8 +189,9 @@ function Get-DeckSettings([string]$Root) {
 function Register-DeckSession([string]$Root, [string]$Account, [string]$Folder) {
     if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') { throw 'Invalid session account.' }
     $proc = Get-Process -Id $PID
+    try{$startTicks=$proc.StartTime.ToUniversalTime().Ticks}finally{$proc.Dispose()}
     $path = Join-Path $Root ('sessions/' + [guid]::NewGuid().ToString('N') + '.json')
-    Write-DeckJson $path ([ordered]@{ Account=$Account; ProcessId=$PID; ProcessStartTicks=$proc.StartTime.ToUniversalTime().Ticks; StartedAt=[DateTimeOffset]::Now.ToString('o'); Folder=$Folder })
+    Write-DeckJson $path ([ordered]@{ Account=$Account; ProcessId=$PID; ProcessStartTicks=$startTicks; StartedAt=[DateTimeOffset]::Now.ToString('o'); Folder=$Folder })
     return $path
 }
 function Get-DeckSessions([string]$Root) {
@@ -178,7 +203,7 @@ function Get-DeckSessions([string]$Root) {
         if ($entry -and $entry.Account -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') {
             try {
                 $proc = Get-Process -Id $entry.ProcessId -ErrorAction Stop
-                $valid = $proc.StartTime.ToUniversalTime().Ticks -eq $entry.ProcessStartTicks
+                try{$valid = $proc.StartTime.ToUniversalTime().Ticks -eq $entry.ProcessStartTicks}finally{$proc.Dispose()}
             } catch { }
         }
         if ($valid) { $entry }
@@ -240,6 +265,65 @@ function Test-DeckWarmup($Settings, $Record, $PreviousReset, $History, [long]$No
     if ($History -and $Now - [long]$History.AttemptAt -lt 90) { return $false }
     return $true
 }
+if(-not ('DeckProcessJob' -as [type])){
+    Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
+public sealed class DeckProcessJob : IDisposable {
+    const UInt32 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+    IntPtr handle;
+
+    [StructLayout(LayoutKind.Sequential)] struct BasicLimits {
+        public Int64 PerProcessUserTimeLimit, PerJobUserTimeLimit;
+        public UInt32 LimitFlags;
+        public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize;
+        public UInt32 ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public UInt32 PriorityClass, SchedulingClass;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct IoCounters {
+        public UInt64 ReadOperationCount, WriteOperationCount, OtherOperationCount;
+        public UInt64 ReadTransferCount, WriteTransferCount, OtherTransferCount;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct ExtendedLimits {
+        public BasicLimits BasicLimitInformation;
+        public IoCounters IoInfo;
+        public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed;
+    }
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job, Int32 infoClass, IntPtr info, UInt32 length);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job, UInt32 exitCode);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr value);
+
+    public DeckProcessJob(Process process) {
+        handle=CreateJobObject(IntPtr.Zero, null);
+        if(handle==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        try {
+            var limits=new ExtendedLimits();
+            limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            int size=Marshal.SizeOf(typeof(ExtendedLimits));
+            IntPtr data=Marshal.AllocHGlobal(size);
+            try {
+                Marshal.StructureToPtr(limits,data,false);
+                if(!SetInformationJobObject(handle,9,data,(UInt32)size)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            } finally { Marshal.FreeHGlobal(data); }
+            if(!AssignProcessToJobObject(handle,process.Handle)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        } catch { Dispose(); throw; }
+    }
+    public void Terminate() { if(handle!=IntPtr.Zero) TerminateJobObject(handle,1); }
+    public void Dispose() {
+        IntPtr value=handle; handle=IntPtr.Zero;
+        if(value!=IntPtr.Zero) CloseHandle(value);
+        GC.SuppressFinalize(this);
+    }
+    ~DeckProcessJob(){Dispose();}
+}
+'@
+}
 function Start-DeckTask([string]$Code, [string]$Kind, [string]$Account) {
     $info = [Diagnostics.ProcessStartInfo]::new()
     $info.FileName = 'powershell.exe'
@@ -247,19 +331,39 @@ function Start-DeckTask([string]$Code, [string]$Kind, [string]$Account) {
     $info.UseShellExecute=$false; $info.CreateNoWindow=$true
     $info.RedirectStandardOutput=$true; $info.RedirectStandardError=$true
     $process = [Diagnostics.Process]::Start($info)
-    return @{ Process=$process; Out=$process.StandardOutput.ReadToEndAsync(); Err=$process.StandardError.ReadToEndAsync(); Kind=$Kind; Account=$Account; Started=[DateTimeOffset]::UtcNow }
+    $job=$null
+    try{$job=[DeckProcessJob]::new($process)}catch{}
+    return @{ Process=$process; Out=$process.StandardOutput.ReadToEndAsync(); Err=$process.StandardError.ReadToEndAsync(); Job=$job; Kind=$Kind; Account=$Account; Started=[DateTimeOffset]::UtcNow; ExitObservedAt=$null }
 }
 function Stop-DeckTask($Task) {
-    if ($Task -and -not $Task.Process.HasExited) {
-        # Kill only the process tree we spawned, never account terminals.
-        try{
-            $previousPreference=$ErrorActionPreference; $ErrorActionPreference='Continue'
-            & taskkill.exe /PID $Task.Process.Id /T /F 2>$null | Out-Null
-        }catch{}finally{$ErrorActionPreference=$previousPreference}
-        # taskkill can report a race when a child exits during traversal. Make a
-        # best-effort direct stop too, and never let cleanup strand a UI task.
-        try{if(-not $Task.Process.HasExited){$Task.Process.Kill(); [void]$Task.Process.WaitForExit(1000)}}catch{}
-    }
+    if(-not $Task){return}
+    # A job owns the full worker tree, including codex.cmd and its Node child.
+    # Native taskkill is only a silent fallback when Windows rejected job nesting.
+    if($Task.Job){try{$Task.Job.Terminate()}catch{}; return}
+    try{
+        if($Task.Process.HasExited){return}
+        $info=[Diagnostics.ProcessStartInfo]::new('taskkill.exe',('/PID {0} /T /F' -f $Task.Process.Id))
+        $info.UseShellExecute=$false; $info.CreateNoWindow=$true; $info.RedirectStandardOutput=$true; $info.RedirectStandardError=$true
+        $killer=[Diagnostics.Process]::Start($info)
+        try{[void]$killer.WaitForExit(3000)}finally{$killer.Dispose()}
+    }catch{}
+    try{if(-not $Task.Process.HasExited){$Task.Process.Kill(); [void]$Task.Process.WaitForExit(1000)}}catch{}
+}
+function Test-DeckTaskReady($Task, [int]$DrainGraceSeconds = 2) {
+    if(-not $Task){return $false}
+    try{if(-not $Task.Process.HasExited){return $false}}catch{return $true}
+    $outReady=(-not $Task.Out -or $Task.Out.IsCompleted -ne $false)
+    $errReady=(-not $Task.Err -or $Task.Err.IsCompleted -ne $false)
+    if($outReady -and $errReady){return $true}
+    $now=[DateTimeOffset]::UtcNow
+    if(-not $Task.ExitObservedAt){$Task.ExitObservedAt=$now; return $false}
+    if(($now-$Task.ExitObservedAt).TotalSeconds -ge $DrainGraceSeconds){Stop-DeckTask $Task}
+    return ((-not $Task.Out -or $Task.Out.IsCompleted -ne $false) -and (-not $Task.Err -or $Task.Err.IsCompleted -ne $false))
+}
+function Dispose-DeckTask($Task) {
+    if(-not $Task){return}
+    try{if($Task.Job){$Task.Job.Dispose()}}catch{}
+    try{$Task.Process.Dispose()}catch{}
 }
 function Get-DeckModelsCode([string]$SuiteRoot, [string]$Account) {
     if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') { throw 'Invalid account.' }
