@@ -639,10 +639,14 @@ function Show-DeckSettings {
         Appearance=@('ViewMode','Compact','AlwaysOnTop','CloseToTray','AutoStart','OpacityPercent','FontSize','DefaultFolder','AlwaysAskFolder')
         Details=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
+        Context=@('AutoCompactThresholdPercent','AutoCompactHandoffPrompt')
         'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupPlanTypes','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
     }
     $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
     $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupPlanTypes='Account types (select one or more)';WarmupAccounts='Specific accounts (optional with account types; select one or more)';WarmupModel='Paid-plan model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
+    $labels.AutoCompactThresholdPercent='Auto-compact context threshold (%)'
+    $labels.AutoCompactHandoffPrompt='Pre-compaction handoff request'
+    $descriptions.Context='Press C in the codex-auth dashboard to opt in. When the context reaches this percentage, Deck asks for a visible task-state handoff, compacts, then resumes. Account, pool and failover conversations are supported. Keep DECK_HANDOFF in the request so Deck can verify the handoff before compacting.'
     $panels=@{}; $controls=@{}
     foreach($group in $groups.Keys){
         $tab=[Windows.Controls.TabItem]::new(); $tab.Header=$group
@@ -737,6 +741,7 @@ function Show-DeckSettings {
                 $control.Resources['Membership']=$membership; $control.Resources['Members']=$members
             }elseif($key -eq 'FailoverMode'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('Ordered','Best')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]
             }elseif($key -eq 'ViewMode'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('Panel','Widget','Tray')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]}else{$control=[Windows.Controls.TextBox]::new(); $control.Text=[string]$settings[$key]}
+            if($key -eq 'AutoCompactHandoffPrompt'){$control.AcceptsReturn=$true; $control.TextWrapping='Wrap'; $control.VerticalScrollBarVisibility='Auto'; $control.MinHeight=148; $control.ToolTip='Edit the message sent before compaction. Keep DECK_HANDOFF so Deck can recognize the handoff.'}
             $control.Margin='0,0,10,16'; $control.MinHeight=34
         }
         $controls[$key]=$control; [void]$panel.Children.Add($control)
@@ -771,6 +776,8 @@ function Show-DeckSettings {
             }
             if ($updated.WarmupModel -notmatch '^gpt-[a-zA-Z0-9.-]+$') { throw 'Enter a model ID, e.g. gpt-5.6-luna.' }
             if ($updated.ViewMode -notin @('Panel','Widget','Tray')) { throw 'View Mode must be Panel, Widget, or Tray.' }
+            if ($updated.AutoCompactThresholdPercent -lt 30 -or $updated.AutoCompactThresholdPercent -gt 90) { throw 'Auto-compact threshold must be 30-90%.' }
+            if ([string]::IsNullOrWhiteSpace($updated.AutoCompactHandoffPrompt) -or $updated.AutoCompactHandoffPrompt.Length -gt 4000 -or -not $updated.AutoCompactHandoffPrompt.Contains('DECK_HANDOFF')) { throw 'The handoff request must be at most 4000 characters and include DECK_HANDOFF.' }
             foreach ($name in @($updated.WarmupAccounts -split '[,;\s]+' | Where-Object { $_ })) {
                 if ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -notin @(Get-DeckAccounts)) { throw "Unknown warm-up account: $name" }
             }
@@ -779,7 +786,9 @@ function Show-DeckSettings {
             if($updated.WarmupTimedEnabled -and -not $updated.WarmupTimes){throw 'Enter at least one daily time.'}
             if($tabs.SelectedItem -eq $environmentTab -or $environmentState.Pools.Count){& $rememberPool}
             & $saveEnvironments -ValidateOnly
+            & $saveDeckSkills -ValidateOnly
             & $saveEnvironments
+            & $saveDeckSkills
             Write-DeckJson (Join-Path $root 'settings.json') $updated
             if(-not $SmokeTest){Sync-DeckWarmupStartup $suite $updated; if($updated.WarmupEnabled){Start-DeckWarmupScheduler $suite}}
             Set-DeckSavedSettings (Get-DeckSettings $root)
@@ -787,7 +796,7 @@ function Show-DeckSettings {
         } catch { $settingsError.Text='Settings were not saved: '+$_.Exception.Message; $settingsError.BringIntoView(); $save.Content='Save settings' }
         finally {$save.IsEnabled=$true}
     }.GetNewClosure())
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState}}}
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState}}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -1251,6 +1260,7 @@ try{
         $failoverMembership.SelectedIndex=3
         $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
         if ($headers -notcontains 'Environments') { throw 'Environment sharing Settings tab missing.' }
+        if ($headers -notcontains 'Skills' -or -not $settingsTest.Skills.State.Controls.ContainsKey('debug-swarm') -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked) { throw 'Globally enabled Deck skills Settings tab missing or invalid.' }
         $environmentUI=$settingsTest.Environment
         if($environmentUI.Name.Text -ne 'pool' -or $environmentUI.Name.SelectedItem -ne 'pool'){throw 'Environment picker did not select its default pool.'}
         [void]$environmentUI.Name.ApplyTemplate(); $environmentEditor=$environmentUI.Name.Template.FindName('PART_EditableTextBox',$environmentUI.Name)
@@ -1526,7 +1536,8 @@ try{
         Write-DeckJson (Join-Path $settingsFixture 'accounts/account1/auth.json') @{}
         Write-DeckJson (Join-Path $settingsFixture 'accounts/account2/auth.json') @{}
         Set-DeckPoolEntry $settingsFixture pool @('*') Ordered | Out-Null
-        foreach($file in @('Deck.EnvironmentSettings.ps1','Deck.SettingsExtras.ps1','Deck.Terminal.ps1','Deck.Failover.ps1')){Copy-Item -LiteralPath (Join-Path $suite $file) -Destination $settingsFixture}
+        foreach($file in @('Deck.EnvironmentSettings.ps1','Deck.SkillSettings.ps1','Deck.BundledSkills.ps1','Deck.SettingsExtras.ps1','Deck.Terminal.ps1','Deck.Failover.ps1')){Copy-Item -LiteralPath (Join-Path $suite $file) -Destination $settingsFixture}
+        Copy-Item -LiteralPath (Join-Path $suite 'skills') -Destination (Join-Path $settingsFixture 'skills') -Recurse
         try{
             $script:suite=$settingsFixture;$script:root=Join-Path $settingsFixture 'deck'
             $draftUI=Show-DeckSettings -TestUI
@@ -1541,16 +1552,25 @@ try{
             $draftFailover.Resources['Membership'].SelectedIndex=3
             [void]$draftFailover.Resources['Members'].SelectedItems.Add('account2')
             $draftUI.Controls.AutoCheck.IsChecked=$true
+            $draftUI.Controls.AutoCompactThresholdPercent.Text='72'
+            $draftUI.Controls.AutoCompactHandoffPrompt.Text="Write a concise DECK_HANDOFF with verified progress and the next action.`nInclude the relevant files and tests."
             $draftScope=$draftUI.Controls.WarmupPlanTypes.Resources['ScopeMenu']
             $draftScope.Items[1].IsChecked=$true; $draftScope.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
             $draftScope.Items[3].IsChecked=$true; $draftScope.Items[3].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+            $draftUI.Skills.Target.SelectedItem='account2'
+            $deckSkillCheck=$draftUI.Skills.State.Controls['debug-swarm']; $deckSkillCheck.IsChecked=$false
+            $deckSkillCheck.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             $draftUI.Tabs.SelectedItem=@($draftUI.Tabs.Items | Where-Object Header -eq 'Appearance')[0]
             $draftUI.Save.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             if($draftUI.Error.Text){throw $draftUI.Error.Text}
             $savedSettings=Read-DeckJson (Join-Path $root 'settings.json')
             if((Get-DeckPoolEntry $settingsFixture pool).Accounts[0] -ne '*free' -or -not $savedSettings.MaskEmail){throw 'Save settings did not persist environment and another tab together.'}
             if(-not $savedSettings.FailoverEnabled -or $savedSettings.FailoverMode -ne 'Best' -or $savedSettings.FailoverAccounts -ne 'account2' -or -not $savedSettings.AutoCheck){throw 'Save settings did not persist failover and general controls.'}
+            if($savedSettings.AutoCompactThresholdPercent -ne 72){throw 'Save settings did not persist the auto-compact threshold.'}
+            if($savedSettings.AutoCompactHandoffPrompt -notmatch 'concise DECK_HANDOFF'){throw 'Save settings did not persist the multiline handoff request.'}
             if($savedSettings.WarmupPlanTypes -ne 'free,paid'){throw 'Save settings did not persist multiple warm-up account types.'}
+            $savedSkill=@(Get-DeckBundledSkills $settingsFixture | Where-Object Name -eq 'debug-swarm')[0]
+            if((Get-DeckBundledSkillStatus $settingsFixture account2 $savedSkill).Desired){throw 'Save settings did not persist the per-account Deck skill override.'}
             if(-not $settings.FailoverEnabled -or $settings.FailoverAccounts -ne 'account2' -or -not $settings.MaskEmail -or $settings.WarmupPlanTypes -ne 'free,paid'){throw 'Saved settings did not update the live Deck state.'}
             $reopenedUI=Show-DeckSettings -TestUI
             try{
@@ -1559,6 +1579,8 @@ try{
                     $actual=if($settings[$key] -is [bool]){[bool]$control.IsChecked}elseif($key -eq 'WarmupPlanTypes'){ConvertTo-DeckWarmupPlanTypes (@($control.Resources['ScopeMenu'].Items | Where-Object IsChecked | ForEach-Object {[string]$_.Tag}) -join ',')}elseif($key -eq 'WarmupAccounts'){@($control.SelectedItems) -join ','}elseif($key -eq 'FailoverAccounts'){$membership=$control.Resources['Membership']; if($membership.SelectedIndex -eq 3){@($control.Resources['Members'].SelectedItems) -join ','}else{@('*','*free','*paid')[$membership.SelectedIndex]}}elseif($key -in @('WarmupModel','ViewMode','FailoverMode')){[string]$control.SelectedItem}elseif($settings[$key] -is [int]){[int]$control.Text}else{$control.Text.Trim()}
                     if($actual -ne $settings[$key]){throw "Reopened setting does not match saved value: $key"}
                 }
+                $reopenedUI.Skills.Target.SelectedItem='account2'
+                if($reopenedUI.Skills.State.Controls['debug-swarm'].IsChecked){throw 'Reopened Deck skill setting lost its disabled override.'}
             }finally{$reopenedUI.Dialog.Close()}
             if(-not @((Get-DeckSharing $settingsFixture account1).Bindings).Count){throw 'Save settings did not persist pending resource sharing.'}
             $rulesUI=Show-DeckGlobalRules $settingsFixture -TestUI

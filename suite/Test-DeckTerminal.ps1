@@ -26,9 +26,12 @@ Assert (($frame.Text -join "`n") -match '> account40') 'Selection not paged into
 Assert (($frame.Text -join "`n") -match 'E memories') 'Per-account memories shortcut missing'
 Assert (($frame.Text -join "`n") -match 'I instructions') 'Per-account instructions shortcut missing'
 Assert (($frame.Text -join "`n") -match 'K skills') 'Per-account skills shortcut missing'
+Assert (($frame.Text -join "`n") -match 'C compact \[ \] 70%') 'Auto-compact shortcut or default threshold missing'
 Assert (($frame.Text -join "`n") -notmatch 'person@example.com') 'Email not masked by default'
 Assert ($frame.Count -le 24) 'Frame overflows terminal height'
 $empty = @(Get-DeckTerminalFrame @() @{} @{} @() @{} 0 60 25 '' 'Ready')
+$compactFrame = @(Get-DeckTerminalFrame $names @{} $profiles @() @{} 0 100 25 '' 'Ready' $true $null @{} $true 72)
+Assert (($compactFrame.Text -join "`n") -match 'C compact \[x\] 72%') 'Auto-compact selected state or configured threshold missing'
 Assert (($empty.Text -join "`n") -match 'No matching accounts') 'Missing empty state'
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('deck-terminal-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'deck'))
@@ -51,6 +54,8 @@ Assert ((Get-DeckTerminalCache (Join-Path $fixture 'deck')).account1.Status -eq 
 $terminalAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'Deck.Terminal.ps1'),[ref]$null,[ref]$null)
 $dashboard=$terminalAst.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-DeckTerminal'},$true).Extent.Text
 Assert ($dashboard -notmatch '\$attempted|TotalMinutes\s+-lt\s+5') 'Opening the terminal dashboard still schedules automatic usage checks'
+Assert ($dashboard -match 'Auto-compact enabled for account and pool launches') 'Dashboard does not advertise pool auto-compact support'
+Assert ($dashboard -notmatch 'Auto-compact needs an individual account') 'Dashboard still blocks pool auto-compact launches'
 $snapshot = @(Show-DeckTerminal -SuiteRoot $fixture -AuthScript 'unused' -Snapshot)
 Assert (($snapshot -join "`n") -match 'CODEX / DECK') 'Snapshot did not render'
 'PASS: terminal quota, sanitization, cache merge, paging, masking, empty state and snapshot.'

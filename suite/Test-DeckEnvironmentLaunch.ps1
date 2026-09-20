@@ -2,7 +2,8 @@
 $ErrorActionPreference='Stop'
 $fixture=Join-Path ([IO.Path]::GetTempPath()) ('deck-env-launch-'+[guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($fixture)
-foreach ($file in @('Deck.Core.ps1','Deck.AccountTools.ps1','Deck.Environments.ps1','Deck.Terminal.ps1','Deck.Failover.ps1','Deck.Failover.cjs')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $fixture }
+foreach ($file in @('Deck.Core.ps1','Deck.AccountTools.ps1','Deck.Environments.ps1','Deck.BundledSkills.ps1','Deck.Terminal.ps1','Deck.Failover.ps1','Deck.Failover.cjs')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $fixture }
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'skills') -Destination (Join-Path $fixture 'skills') -Recurse
 . (Join-Path $fixture 'Deck.Environments.ps1')
 foreach ($name in @('account1','account2')) {
     $dir=Join-Path $fixture "accounts/$name"; [void][IO.Directory]::CreateDirectory($dir)
@@ -19,7 +20,7 @@ $launcher=[regex]::Replace($launcher,'(?m)^\$defaultConfigPath =.*$', [Text.Regu
 [IO.File]::WriteAllText((Join-Path $fixture 'codex-auth.ps1'),$launcher,[Text.UTF8Encoding]::new($true))
 [IO.File]::WriteAllText((Join-Path $fixture 'default.toml'),'model = "must-not-inherit"')
 $harness=@'
-param([string]$Name,[string]$Member,[string]$Action,[string]$Inherit)
+param([string]$Name,[string]$Member,[string]$Action,[string]$Inherit,[switch]$Direct)
 function global:codex {
     $active=$null
     if ($env:CODEX_DECK_SESSION_URL) {
@@ -33,6 +34,7 @@ $arguments=@{Account=$Name}
 if ($Member) { $arguments.UseAccount=$Member }
 if ($Inherit) { $arguments.InheritFrom=$Inherit }
 if ($Action) { $arguments.CodexArgs=@($Action) }
+if ($Direct) { $arguments.Direct=$true }
 & (Join-Path $PSScriptRoot 'codex-auth.ps1') @arguments
 exit $LASTEXITCODE
 '@
@@ -46,9 +48,14 @@ foreach ($member in @('','account1','account2')) {
     if ($record.Active -ne $expectedMember) { throw 'Requested/default quota member was not selected.' }
     if ($record.Environment -ne (Join-Path $fixture 'accounts/pool') -or $record.HasAuth -or -not ($record.Arguments -join ' ').Contains('requires_openai_auth=false')) { throw 'Pool did not retain its independent environment/authentication.' }
 }
+$output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -Name account1 -Action hello -Direct
+if ($LASTEXITCODE -ne 0) { throw 'Direct account launch failed.' }
+$record=($output | Where-Object { $_ -like '{"Environment":*' }) | ConvertFrom-Json
+if ($record.Environment -ne (Join-Path $fixture 'accounts/account1') -or -not $record.HasAuth -or $record.Active -or ($record.Arguments -join ' ').Contains('openai_base_url')) { throw 'Direct account launch unexpectedly used Deck routing.' }
 $output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -Name newaccount -Action login
 if ($LASTEXITCODE -ne 0) { throw 'New isolated account failed.' }
-foreach ($file in @('config.toml','skills','AGENTS.md','auth.json')) { if (Test-Path -LiteralPath (Join-Path $fixture "accounts/newaccount/$file")) { throw 'New account inherited resources or credentials.' } }
+foreach ($file in @('config.toml','AGENTS.md','auth.json')) { if (Test-Path -LiteralPath (Join-Path $fixture "accounts/newaccount/$file")) { throw 'New account inherited private resources or credentials.' } }
+if (-not (Test-Path -LiteralPath (Join-Path $fixture 'accounts/newaccount/skills/debug-swarm/SKILL.md') -PathType Leaf)) { throw 'New account did not receive the globally enabled Deck skill.' }
 if (-not (Test-Path -LiteralPath (Join-Path $fixture 'accounts/newaccount') -PathType Container)) { throw 'New account was not created.' }
 $instructions=Join-Path $fixture 'accounts/AGENTS.shared.md'
 [IO.File]::WriteAllText($instructions,'legacy shared instructions')

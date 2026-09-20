@@ -51,7 +51,7 @@ function Get-DeckTerminalHealth($Record) {
     if ($Record.Status -ne 'available') { return 'Unavailable' }
     return 'Ready'
 }
-function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}) {
+function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 70) {
     $lines = [Collections.Generic.List[object]]::new()
     function Add-Line([string]$Text, [string]$Color = 'Gray', [string]$Background = 'Black') {
         $lines.Add(@{ Text = (ConvertTo-DeckTerminalText $Text ([Math]::Max(1,$Width - 1))); Color = $Color; Background = $Background })
@@ -101,7 +101,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     }
     Add-Line '  WARMUP   U run now  T daily times  W select account  P pause/resume' 'DarkMagenta'
     Add-Line ('  ' + $Notice) 'Yellow'
-    Add-Line '  NAVIGATE Up/Down select  Enter launch  / search  B best  Q quit' 'Gray'
+    Add-Line ('  NAVIGATE Enter launch  / search  B best  Q quit  C compact [{0}] {1}%' -f $(if($AutoCompact){'x'}else{' '}),$CompactThreshold) 'Gray'
     Add-Line '  MANAGE   R refresh  A all  H history  F2 rename  L login  N new' 'DarkGray'
     Add-Line '  DISPLAY  D desktop  S settings  G global  I instructions  E memories  K skills  M mask' 'DarkGray'
     return $lines.ToArray()
@@ -130,7 +130,7 @@ function Show-DeckTerminal {
     $cache = Get-DeckTerminalCache $root
     $profiles = @{}; $tasks = @{}; $pending = [Collections.Generic.Queue[string]]::new()
     $names=@(); $sessions=@(); $warmHistory=@{}; $stateRefreshAt=[DateTimeOffset]::MinValue
-    $selected = 0; $filter = ''; $notice = 'Ready. Cached usage is shown; press R or A for fresh checks.'; $mask = $true
+    $selected = 0; $filter = ''; $notice = 'Ready. Cached usage is shown; press R or A for fresh checks.'; $mask = $true; $autoCompact = $false
     $interactive = -not $Snapshot -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
     if (-not $interactive) { $notice = 'Cached snapshot. Run codex-auth in a terminal for live checks and actions.' }
     elseif($warmSettings.WarmupEnabled -and $warmSettings.WarmupSchedulingEnabled){
@@ -185,7 +185,7 @@ function Show-DeckTerminal {
             $selected = [Math]::Max(0,[Math]::Min($selected,$visible.Count - 1))
             $width = 110; $height = [Math]::Max(25,$visible.Count + 18)
             if ($interactive) { $width = [Console]::WindowWidth; $height = [Console]::WindowHeight }
-            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory)
+            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory $autoCompact $warmSettings.AutoCompactThresholdPercent)
             if (-not $interactive) { $frame | ForEach-Object { Write-Output $_.Text }; return }
             $signature = "$width/$height/" + (($frame | ForEach-Object { $_.Text + $_.Color + $_.Background }) -join "`n")
             if ($signature -ne $lastFrame) {
@@ -242,6 +242,7 @@ function Show-DeckTerminal {
                     }
                 }
                 'M' { $mask = -not $mask }
+                'C' { $autoCompact = -not $autoCompact; $notice = if($autoCompact){'Auto-compact enabled for account and pool launches.'}else{'Auto-compact disabled.'} }
                 'R' {
                     if($name -and $profiles[$name].PlanType -ne 'pool' -and (Test-Path -LiteralPath (Join-Path $accountRoot "$name/auth.json")) -and -not $tasks.ContainsKey($name) -and -not $pending.Contains($name)){$pending.Enqueue($name); $notice="Queued $name."}
                     elseif($name){$notice="$name is not signed in or cannot be checked."}
@@ -299,6 +300,7 @@ function Show-DeckTerminal {
                             if ($name) {
                                 [void][IO.Directory]::CreateDirectory($accountRoot)
                                 $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$AuthScript,$name)
+                                if ($action -eq 'Enter' -and $autoCompact) { $arguments += '-AutoCompact' }
                                 if ($action -in @('L','N')) { $arguments += 'login' }
                                 & powershell.exe @arguments
                                 $notice = "$name returned (exit $LASTEXITCODE)."

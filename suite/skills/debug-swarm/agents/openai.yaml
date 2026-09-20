@@ -1,0 +1,7 @@
+interface:
+  display_name: "Debug Swarm"
+  short_description: "Parallel evidence-first debugging workers"
+  default_prompt: "Use $debug-swarm to investigate this problem with independent Codex workers."
+
+policy:
+  allow_implicit_invocation: false

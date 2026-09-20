@@ -30,7 +30,7 @@ function readConfig(executable, prefix, args, cwd, codexHome) {
       let message;try{message=JSON.parse(line);}catch{return;}
       if(message.id!==1 && message.id!==2)return;
       if(message.error)return finish(Error('Codex rejected configuration lookup. Check account configuration.'));
-      if(message.id===1){send({method:'initialized'});send({id:2,method:'config/read',params:{includeLayers:false,cwd}});}
+      if(message.id===1){send({method:'notifications/initialized'});send({id:2,method:'config/read',params:{includeLayers:false,cwd}});}
       else finish(null,message.result.config);
     });
     send({id:1,method:'initialize',params:{clientInfo:{name:'codex_deck_rules',version:'1.0.0'},capabilities:{experimentalApi:true}}});

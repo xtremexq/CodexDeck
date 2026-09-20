@@ -15,7 +15,7 @@ A terminal dashboard and desktop companion for multiple Codex CLI accounts on Wi
 
 ## Your accounts, together
 
-New accounts remain isolated by default. The first-listed **pool** environment can use your selected accounts' quotas while keeping one Codex home. Open **Settings > Environments** to configure membership and explicitly share skills, memory files, instructions or individual MCP definitions between selected entries. See [environments and selective sharing](docs/ENVIRONMENTS.md) for commands and limits.
+New accounts remain isolated by default. The first-listed **pool** environment can use your selected accounts' quotas while keeping one Codex home. Open **Settings > Environments** to configure membership and explicitly share skills, memory files, instructions or individual MCP definitions between selected entries. **Settings > Skills** manages Deck-provided workflows that are globally available to accounts and pools without merging their private skill folders. See [environments, Deck skills and selective sharing](docs/ENVIRONMENTS.md) for details.
 
 Run **`codex-auth`** to see your local accounts and their cached usage immediately. Check fresh limits in the background, find the profile you need, and launch Codex from the same terminal. Keep the floating desktop widget nearby when you want usage visible while you work.
 
@@ -24,7 +24,7 @@ Run **`codex-auth`** to see your local accounts and their cached usage immediate
 | Search and navigate accounts with the keyboard | Switch between a control panel and floating widget |
 | See quota bars, plans, reset times and attached sessions | Keep usage nearby with tray access and optional always-on-top |
 | Refresh one account or queue every account | Run manual checks or enable automatic polling |
-| Launch Codex, log in, or create a profile | Choose a launch folder and customize visible details |
+| Launch Codex, log in, or create a profile | Choose a launch folder and enable Deck skills per account or pool |
 | Print a cached snapshot for scripts | Configure optional, quota-consuming warm-up requests |
 
 ## Less account juggling. More time to build.
@@ -78,6 +78,7 @@ The installer adds command wrappers to your user PATH and preserves existing acc
 | **↑ / ↓** | Select an account |
 | **Page Up / Page Down**, **Home / End** | Navigate a longer list |
 | **Enter** | Launch Codex; return to the dashboard when it exits |
+| **C** | Toggle auto-compaction for individual account launches |
 | **R** | Refresh the selected account |
 | **A** | Queue fresh checks for every account |
 | **/** | Search account names |
@@ -100,6 +101,8 @@ The selected account's details show its model, reasoning effort, last check and 
 
 For a non-interactive view, use **`codex-auth status`**. It prints cached data without network requests. Redirecting the bare command's input or output also selects snapshot mode.
 
+Auto-compaction is opt-in. Press **C** before entering an account or pool, or run `codex-auth account16 -AutoCompact` or `codex-auth pool -AutoCompact` directly. Set its context threshold and edit the multiline handoff request in **Settings → Context** (default 70%; allowed range 30–90%). Keep `DECK_HANDOFF` in the request so Deck can verify the reply before compacting. Interactive launches use the normal Codex TUI; a local observer watches its app-server session. When the reported context reaches the threshold, Deck requests a visible task-state handoff, compacts the thread, and sends that handoff back quoted with “Please go on.” Account and pool routing, manual switching, and configured quota failover work in this mode. A one-shot `exec` command still uses Deck's supervised worker because it has no interactive TUI: `codex-auth account18 -AutoCompact -Failover Off -CodexArgs @('exec','-m','gpt-5.6-luna','-s','read-only','Investigate…')`. It accepts a prompt plus model, effort/config, sandbox, approval and working-directory options and exits with a completion status; `-Direct` keeps an exact account without routing. Codex's own compaction may still occur first if its configured limit is lower.
+
 ## Desktop companion
 
 <p align="center"><img src="docs/desktop-preview.png" width="476" alt="Codex Deck desktop control panel with an account and expanded usage details"></p>
@@ -110,7 +113,7 @@ Run **`codex-deck`**, or press **D** in the terminal dashboard.
 - Click the **online / terminals** bar to switch between connected accounts and all profiles, in either view. Use the adjacent plan filter to show all, Free, or Plus and higher accounts.
 - Click the status bar below the list to check every visible account.
 - Switch between the **panel** and **widget**, then expand account rows for more detail.
-- **Settings** controls appearance, visible fields, email masking, automatic checks and warm-up.
+- **Settings** controls appearance, visible fields, Deck skills, email masking, automatic checks and warm-up.
 - The panel appears in the taskbar; the widget and Settings stay out of it. Use **Minimize** to minimize the panel.
 - Closing the window normally hides it to the tray. **Quit** stops the Deck UI and ordinary live checks without closing your Codex terminals; explicitly enabled background warm-up continues invisibly through the clearly named **CodexDeck Warmup Scheduling** Windows task.
 

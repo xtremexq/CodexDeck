@@ -34,8 +34,14 @@ async function main() {
     assert.equal(await result.text(),'data: success\n\n'); assert.deepEqual(seen.map(r=>r.account),['a','b']); assert.deepEqual(reports,['b']);
     assert.equal(seen[1].auth,'Bearer synthetic-b'); assert.equal(seen[1].headers.cookie,undefined); assert.equal(seen[1].headers['x-account-id'],undefined); assert.equal(seen[0].body,seen[1].body);
     let state=await (await fetch(url+'/_deck/account')).json(); assert.equal(state.failover.active,'b'); assert.deepEqual(state.failover.unavailable,['a']);
-    assert.equal((await select(url,'a')).status,409,'Quota-rejected accounts must stay unavailable for the session');
-    await (await send(url)).text(); assert.equal(seen.at(-1).account,'b');
+    behavior=(req,res)=>{res.writeHead(200,{'content-type':'text/event-stream'});res.end('data: quota reset\n\n');};
+    state=await (await select(url,'a')).json();
+    assert.equal(state.failover.active,'a','Manual retry after quota reset must select the previously rejected account');
+    assert.deepEqual(state.failover.unavailable,[],'Retry must clear the stale quota rejection');
+    state=await (await select(url,'a')).json(); assert.equal(state.failover.active,'a','Selecting the already-active account must be idempotent');
+    await (await send(url)).text(); assert.equal(seen.at(-1).account,'a','The next request must probe the manually selected account');
+    behavior=(req,res)=> { if(req.headers['chatgpt-account-id']==='a') {res.writeHead(429);res.end(quota);} else {res.writeHead(200,{'content-type':'text/event-stream'});res.end('data: success\n\n');} };
+    await (await send(url)).text(); assert.equal(seen.at(-1).account,'b','Still-exhausted accounts must be rejected anew and rotate safely');
     assert.equal((await send(url,{previous_response_id:'created-on-b'})).status,200);
     assert.equal(seen.at(-1).account,'b','The active account must be able to use its own response history after switching');
     url=await start({environment:'pool',environmentPool:['a','b','c']});

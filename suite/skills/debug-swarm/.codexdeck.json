@@ -1,0 +1,7 @@
+{
+  "Version": 1,
+  "Name": "debug-swarm",
+  "DisplayName": "Debug Swarm",
+  "Description": "User-requested parallel debugging with independent Codex terminal workers.",
+  "DefaultEnabled": true
+}

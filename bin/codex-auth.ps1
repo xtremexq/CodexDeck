@@ -19,6 +19,8 @@ param(
     [ValidateSet('Off','Ordered','Best')]
     [string]$Failover = 'Off',
     [string[]]$FailoverAccounts,
+    [switch]$Direct,
+    [switch]$AutoCompact,
 
     [Alias('Delete')]
     [switch]$Del,
@@ -592,6 +594,7 @@ function Show-Usage {
     Write-Host "  codex-auth old -RenameTo new  Rename an inactive account"
     Write-Host "  codex-auth -Failover Ordered -FailoverAccounts account1,account2"
     Write-Host "  codex-auth -Failover Best -FailoverAccounts account1,account2"
+    Write-Host "  codex-auth account15 -Direct -CodexArgs @('exec',...)  Launch without Deck's local routing proxy"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  codex-auth account1"
@@ -669,7 +672,8 @@ function ConvertTo-DeckWindowsArgument([AllowEmptyString()][string]$Value) {
 
 function Invoke-DeckCodex([string[]]$Arguments) {
     $resolved = Get-Command codex -ErrorAction Stop | Select-Object -First 1
-    if ($resolved.CommandType -ne 'ExternalScript' -or -not (Test-Path -LiteralPath $resolved.Source -PathType Leaf)) {
+    $nativeExecutable = $resolved.CommandType -eq 'Application' -and [IO.Path]::GetExtension($resolved.Source) -eq '.exe'
+    if (($resolved.CommandType -ne 'ExternalScript' -and -not $nativeExecutable) -or -not (Test-Path -LiteralPath $resolved.Source -PathType Leaf)) {
         # Nonstandard installations retain the ordinary PowerShell resolution
         # path. This also keeps function-based test harnesses supported. The
         # Windows npm launcher normally takes the isolated path below.
@@ -763,13 +767,23 @@ public static class CodexDeckNativeProcess {
 }
 '@
     }
-    # Codex and its local-command descendants get their own console process
-    # group. This prevents a control event in that tree from cancelling the
-    # outer dashboard PowerShell that is synchronously waiting for the session.
-    $powerShell = (Get-Command powershell.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-    $commandParts = @($powerShell,'-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$launcher.Source) + @($Arguments)
+    # Launch the official npm entry directly. Passing a TOML -c value through
+    # codex.ps1 would make Windows PowerShell parse its quotes a second time.
+    # Keep a separate console process group so Ctrl+C in Codex cannot cancel
+    # the dashboard PowerShell waiting for this session.
+    $codexEntry = if ($nativeExecutable) { '' } else { Join-Path (Split-Path -Parent $launcher.Source) 'node_modules/@openai/codex/bin/codex.js' }
+    if ($nativeExecutable) {
+        $executable = $launcher.Source
+        $commandParts = @($executable) + @($Arguments)
+    } elseif (Test-Path -LiteralPath $codexEntry -PathType Leaf) {
+        $executable = (Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+        $commandParts = @($executable,$codexEntry) + @($Arguments)
+    } else {
+        $executable = (Get-Command powershell.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+        $commandParts = @($executable,'-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$launcher.Source) + @($Arguments)
+    }
     $commandLine = ($commandParts | ForEach-Object { ConvertTo-DeckWindowsArgument ([string]$_) }) -join ' '
-    $global:LASTEXITCODE = [CodexDeckNativeProcess]::Run($powerShell, $commandLine)
+    $global:LASTEXITCODE = [CodexDeckNativeProcess]::Run($executable, $commandLine)
 }
 
 function Write-DeckSessionExit([string]$DeckRoot, [string]$Environment, [int]$ExitCode, $StartedAt, [bool]$ProxyExitedEarly, $ProxyExitCode, [string]$ActiveAccount) {
@@ -799,6 +813,9 @@ $runtimeRoot = Split-Path -Parent $accountsRoot
 $environmentModule = Join-Path $runtimeRoot 'Deck.Environments.ps1'
 if (-not (Test-Path -LiteralPath $environmentModule)) { $environmentModule = Join-Path $PSScriptRoot '../suite/Deck.Environments.ps1' }
 . $environmentModule
+$bundledSkillsModule = Join-Path $runtimeRoot 'Deck.BundledSkills.ps1'
+if (-not (Test-Path -LiteralPath $bundledSkillsModule)) { $bundledSkillsModule = Join-Path $PSScriptRoot '../suite/Deck.BundledSkills.ps1' }
+if (Test-Path -LiteralPath $bundledSkillsModule) { . $bundledSkillsModule }
 if ($Pool -or $Account -in @('share','unshare','sharing')) {
     if ($Best -or $History -or $RenameTo -or $Del -or $NewAccount -or $CodexArgs -or $InheritFrom -or $UseAccount -or $PSBoundParameters.ContainsKey('Failover')) { throw 'Do not combine environment management with launch actions.' }
     . (Join-Path $runtimeRoot 'Deck.Core.ps1')
@@ -821,6 +838,9 @@ if ($PoolAccounts -or $Source -or $Targets -or $Resources) { throw 'Use -Pool to
 $poolEntry = $null
 $failoverChoice = $null
 if (-not $History -and $Account -and $Account -notin @('help','--help','-h','list','--list','-l','status','dashboard')) { $poolEntry = Get-DeckPoolEntry $runtimeRoot (Normalize-AccountName $Account) }
+if ($Direct -and (-not $Account -or $poolEntry -or $Failover -ne 'Off' -or $Best -or $History -or $RenameTo -or $Del -or $NewAccount)) { throw '-Direct requires one existing account and cannot be combined with rotation or account management.' }
+if ($AutoCompact -and (-not $Account -or $Best -or $History -or $RenameTo -or $Del -or $NewAccount)) { throw '-AutoCompact requires an account or pool conversation and cannot be combined with account management.' }
+if ($AutoCompact -and $CodexArgs -and $CodexArgs[0] -in @('login','logout','mcp','mcp-server','completion','features','debug','app-server','cloud','apply','sandbox','doctor','update','--help','-h','--version','-V')) { throw '-AutoCompact supports conversations only, not administrative commands.' }
 if ($UseAccount -and -not $poolEntry) { throw '-UseAccount requires a pooled entry.' }
 if ($poolEntry -and ($Best -or $NewAccount -or $InheritFrom -or $FailoverAccounts)) { throw 'Use -UseAccount to select a member of this pooled entry.' }
 if ($Failover -ne 'Off' -and -not $poolEntry) {
@@ -891,7 +911,7 @@ if ($accountName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $accountName -mat
     throw 'Account names must start with a letter and contain at most 40 letters, numbers, underscores or hyphens.'
 }
 $accountDir = Join-Path $accountsRoot $accountName
-if (-not $poolEntry -and (Test-Path -LiteralPath (Join-Path $accountDir 'auth.json')) -and $Failover -eq 'Off' -and -not $PSBoundParameters.ContainsKey('Failover')) {
+if (-not $Direct -and -not $poolEntry -and (Test-Path -LiteralPath (Join-Path $accountDir 'auth.json')) -and $Failover -eq 'Off' -and -not $PSBoundParameters.ContainsKey('Failover')) {
     $runtimeRoot = Split-Path -Parent $accountsRoot
     $failoverModule = Join-Path $runtimeRoot 'Deck.Failover.ps1'
     if (Test-Path -LiteralPath $failoverModule) {
@@ -920,6 +940,9 @@ if ($bootstrapResult.Created) {
 
 Ensure-AccountInstructions -AccountDir $accountDir
 Ensure-FreeAccountDefaults -AccountDir $accountDir
+if(Get-Command Sync-DeckBundledSkills -ErrorAction SilentlyContinue){
+    foreach($warning in @(Sync-DeckBundledSkills $runtimeRoot $accountName)){if($warning){Write-Warning $warning}}
+}
 $commandsModule = Join-Path $runtimeRoot 'Deck.Commands.ps1'
 if (Test-Path -LiteralPath $commandsModule) {
     . $commandsModule
@@ -952,7 +975,7 @@ if ($poolConversation) {
 }
 $routeMode = if ($Failover -eq 'Off') { 'Ordered' } else { $Failover }
 $automaticFailover = $Failover -ne 'Off'
-if ($codexConversation -and -not $poolEntry -and -not $failoverChoice -and (Test-Path -LiteralPath (Join-Path $accountDir 'auth.json') -PathType Leaf)) {
+if ($codexConversation -and -not $Direct -and -not $poolEntry -and -not $failoverChoice -and (Test-Path -LiteralPath (Join-Path $accountDir 'auth.json') -PathType Leaf)) {
     . (Join-Path $runtimeRoot 'Deck.Failover.ps1')
     # Ordinary sessions keep their own CODEX_HOME/history, but route through a
     # manual-only set so !account can switch to any other signed-in profile.
@@ -962,6 +985,7 @@ $useRoutingProxy = $codexConversation -and $failoverChoice -and @($failoverChoic
 $originalCodexHome = $env:CODEX_HOME
 $originalDeckSessionUrl = $env:CODEX_DECK_SESSION_URL
 $env:CODEX_HOME = $accountDir
+if ($Direct) { Remove-Item Env:CODEX_DECK_SESSION_URL -ErrorAction SilentlyContinue }
 $deckSession = $null
 try {
     $suiteRoot = Split-Path -Parent $accountsRoot
@@ -978,7 +1002,89 @@ $failoverSessions = @()
 $codexExitCode = -1
 $codexStartedAt = [DateTimeOffset]::Now
 try {
-    if ($useRoutingProxy) {
+    if ($AutoCompact) {
+        $clientPath = Join-Path $runtimeRoot 'Deck.AutoCompact.cjs'
+        if (-not (Test-Path -LiteralPath $clientPath -PathType Leaf)) { throw 'Deck.AutoCompact.cjs is missing. Reinstall Codex Deck.' }
+        $codexCommand = Get-Command codex -ErrorAction Stop | Select-Object -First 1
+        $codexExecutable = $codexCommand.Source
+        $codexEntry = ''
+        if ([IO.Path]::GetExtension($codexExecutable) -ne '.exe') {
+            $codexEntry = Join-Path (Split-Path -Parent $codexExecutable) 'node_modules/@openai/codex/bin/codex.js'
+            if (-not (Test-Path -LiteralPath $codexEntry -PathType Leaf)) { throw 'Auto-compact requires the native Codex executable or official npm installation on PATH.' }
+            $codexExecutable = (Get-Command node.exe -ErrorAction Stop).Source
+        }
+        $compactSettings = Get-DeckSettings (Join-Path $runtimeRoot 'deck')
+        $threshold = $compactSettings.AutoCompactThresholdPercent
+        $handoffEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$compactSettings.AutoCompactHandoffPrompt))
+        $clientArgs = @($clientPath,'--codex-exe',$codexExecutable,'--threshold',[string]$threshold,'--cwd',(Get-Location).Path,'--handoff-base64',$handoffEncoded)
+        if ($codexEntry) { $clientArgs += @('--codex-entry',$codexEntry) }
+        if ($CodexArgs) {
+            $launchJson = ConvertTo-Json -InputObject ([object[]]@($CodexArgs)) -Compress -Depth 10
+            $clientArgs += @('--launch-base64',[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($launchJson)))
+        }
+        if ($useRoutingProxy) {
+            $environmentMembers = if ($poolConversation) { @($members) } else { @() }
+            $failoverProxy = Start-DeckFailover -SuiteRoot $suiteRoot -Pool $failoverChoice.Pool -Mode $routeMode -Account $failoverChoice.Account -Environment $accountName -EnvironmentPool $environmentMembers -Automatic:$automaticFailover
+            if ($automaticFailover -or $poolConversation) {
+                foreach ($poolAccount in $failoverChoice.Pool) {
+                    $failoverSessions += Register-DeckSession (Join-Path $suiteRoot 'deck') $poolAccount (Get-Location).Path
+                }
+            }
+            $env:CODEX_DECK_SESSION_URL = $failoverProxy.BaseUrl
+        }
+        $postConfigArgs = @($globalRuleArgs)
+        if ($failoverProxy) { $postConfigArgs += @(Get-DeckFailoverArguments $failoverProxy.BaseUrl -NoAccountAuth) }
+        if ($postConfigArgs.Count) {
+            $postConfigJson = ConvertTo-Json -InputObject ([object[]]$postConfigArgs) -Compress -Depth 10
+            $clientArgs += @('--post-config-base64',[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($postConfigJson)))
+        }
+        if ($CodexArgs -and $CodexArgs[0] -in @('exec','e')) {
+            # A one-shot exec has no interactive TUI. Keep its existing worker path.
+            $clientArgs += @('--') + @($sharedArgs)
+            & node.exe @clientArgs
+            $codexExitCode = $LASTEXITCODE
+        } else {
+            $sidecarPath = Join-Path $runtimeRoot 'Deck.AutoCompact.Sidecar.cjs'
+            if (-not (Test-Path -LiteralPath $sidecarPath -PathType Leaf)) { throw 'Deck.AutoCompact.Sidecar.cjs is missing. Reinstall Codex Deck.' }
+            $serverConfigJson = ConvertTo-Json -InputObject ([object[]](@($sharedArgs) + @($postConfigArgs))) -Compress -Depth 10
+            $serverConfigEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($serverConfigJson))
+            $sidecarArgs = @($sidecarPath,'--codex-exe',$codexExecutable,'--threshold',[string]$threshold,'--cwd',(Get-Location).Path,'--handoff-base64',$handoffEncoded,'--server-config-base64',$serverConfigEncoded)
+            if ($codexEntry) { $sidecarArgs += @('--codex-entry',$codexEntry) }
+            $nodeExecutable = (Get-Command node.exe -ErrorAction Stop).Source
+            $startInfo = [Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $nodeExecutable
+            $startInfo.Arguments = ($sidecarArgs | ForEach-Object { ConvertTo-DeckWindowsArgument ([string]$_) }) -join ' '
+            $startInfo.UseShellExecute = $false
+            $startInfo.RedirectStandardInput = $true
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            $startInfo.CreateNoWindow = $true
+            $startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+            $observer = [Diagnostics.Process]::Start($startInfo)
+            try {
+                $ready = $observer.StandardOutput.ReadLine()
+                if ($ready -notmatch '^READY (ws://127\.0\.0\.1:\d+)$') {
+                    $detail = if ($ready) { $ready } else { $observer.StandardError.ReadToEnd() }
+                    throw "Could not start Deck auto-compact observer: $detail"
+                }
+                $remoteUrl = $Matches[1]
+                $launchArgs = @($sharedArgs) + @($CodexArgs) + @($globalRuleArgs)
+                if ($failoverProxy) { $launchArgs += @(Get-DeckFailoverArguments $failoverProxy.BaseUrl -NoAccountAuth:([bool]$poolEntry)) }
+                $launchArgs += @('--remote',$remoteUrl)
+                Invoke-DeckCodex $launchArgs
+                $codexExitCode = $LASTEXITCODE
+            } finally {
+                try { $observer.StandardInput.Close() } catch {}
+                if (-not $observer.WaitForExit(3000)) { $observer.Kill(); [void]$observer.WaitForExit(3000) }
+                $observerLog = $observer.StandardError.ReadToEnd().Trim()
+                if ($observerLog) {
+                    if ($observer.ExitCode -ne 0) { Write-Warning $observerLog }
+                    else { Write-Host $observerLog }
+                }
+                $observer.Dispose()
+            }
+        }
+    } elseif ($useRoutingProxy) {
         $environmentMembers = if ($poolConversation) { @($members) } else { @() }
         $failoverProxy = Start-DeckFailover -SuiteRoot $suiteRoot -Pool $failoverChoice.Pool -Mode $routeMode -Account $failoverChoice.Account -Environment $accountName -EnvironmentPool $environmentMembers -Automatic:$automaticFailover
         if ($automaticFailover -or $poolConversation) {
@@ -988,11 +1094,10 @@ try {
         }
         $env:CODEX_DECK_SESSION_URL = $failoverProxy.BaseUrl
         $launchArgs = @($sharedArgs) + @($CodexArgs) + @($globalRuleArgs) + @(Get-DeckFailoverArguments $failoverProxy.BaseUrl -NoAccountAuth:([bool]$poolEntry))
-        $launchArgs=@(ConvertTo-DeckCodexArguments $launchArgs)
         Invoke-DeckCodex $launchArgs
         $codexExitCode = $LASTEXITCODE
     } else {
-        $launchArgs=@(ConvertTo-DeckCodexArguments (@($sharedArgs)+@($CodexArgs)+@($globalRuleArgs)))
+        $launchArgs=@($sharedArgs)+@($CodexArgs)+@($globalRuleArgs)
         Invoke-DeckCodex $launchArgs
         $codexExitCode = $LASTEXITCODE
     }

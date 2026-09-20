@@ -30,6 +30,21 @@ try {
 } finally { $env:PATH=$oldPath; $env:CODEX_DECK_TEST_ARGUMENTS=$oldResult }
 $isolatedArguments=Get-Content -LiteralPath $mockResult -Raw | ConvertFrom-Json
 if($isolatedExit -ne 23 -or ($isolatedArguments -join '|') -ne 'two words|model_provider="openai"|C:\path with space\'){throw ('Isolated Codex launch lost arguments or exit status: exit={0}; args={1}' -f $isolatedExit,($isolatedArguments -join '|'))}
+$nodeCapture=Join-Path $fixture 'codex-node-arguments.json'
+$nodeDirectory=Join-Path $fixture 'node_modules/@openai/codex/bin'
+[void][IO.Directory]::CreateDirectory($nodeDirectory)
+$nodeScript=Join-Path $nodeDirectory 'codex.js'
+[IO.File]::WriteAllText($nodeScript,'require("node:fs").writeFileSync(process.env.CODEX_DECK_TEST_ARGUMENTS,JSON.stringify(process.argv.slice(2)));process.exit(23);',[Text.UTF8Encoding]::new($false))
+$oldPath=$env:PATH; $oldResult=$env:CODEX_DECK_TEST_ARGUMENTS
+try {
+    $env:PATH=$fixture+';'+$oldPath
+    $env:CODEX_DECK_TEST_ARGUMENTS=$nodeCapture
+    $config='developer_instructions="Global Rules (Codex Deck): keep going."'
+    Invoke-DeckCodex @('-c',$config,'--remote','ws://127.0.0.1:12345')
+    $isolatedExit=$LASTEXITCODE
+} finally { $env:PATH=$oldPath; $env:CODEX_DECK_TEST_ARGUMENTS=$oldResult }
+$nodeArguments=Get-Content -LiteralPath $nodeCapture -Raw | ConvertFrom-Json
+if($isolatedExit -ne 23 -or ($nodeArguments -join '|') -ne ('-c|'+$config+'|--remote|ws://127.0.0.1:12345')){throw ('Codex native arguments were split or changed: exit={0}; args={1}' -f $isolatedExit,($nodeArguments -join '|'))}
 $global:LASTEXITCODE=0
 Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $accountsRoot 'account1/marker.ps1')
 foreach ($name in @('..', '../outside', 'C:\Windows', 'missing')) {

@@ -120,8 +120,12 @@ async function createProxy(config, dependencies = {}) {
         const body = JSON.parse((await collect(req, 4096)).toString('utf8'));
         const selected = pool.find(name => name.toLowerCase() === String(body.account || '').toLowerCase());
         if (!selected) return reply(res, 400, 'Choose an account from this session.');
-        if (excluded.has(selected)) return reply(res, 409, 'That account was already rejected for quota in this session.');
         try { getCredentials(selected); } catch { return reply(res, 409, 'That account no longer has usable file-based login credentials.'); }
+        // A quota rejection describes one request, not the account forever.
+        // Manual selection is an explicit request to retry it (commonly after
+        // its usage window reset). The next model request is the fresh probe;
+        // another quota 429 will simply exclude it again.
+        excluded.delete(selected);
         if (selected !== current) { current = selected; report(current); }
         return replyJson(res, status());
       } catch { return reply(res, 400, 'Expected a small JSON account request.'); }

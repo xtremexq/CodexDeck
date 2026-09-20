@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added opt-in auto-compaction for account and pool terminals, with configurable context threshold, editable handoff request, HTTP-only failover routing and controller regression coverage. Interactive sessions keep the native Codex TUI while a local observer performs Deck's handoff, compaction and replay; one-shot exec retains its supervised worker.
+- Allowed manually retrying a quota-rejected account in a running session after its usage resets; a fresh request verifies eligibility and rejected accounts rotate away again.
+- Added globally available, centrally maintained Deck skills with per-account/pool controls, safe user-skill collision handling, launch-time synchronization, and the bundled `debug-swarm` workflow for independent Codex terminal investigations.
 - Made terminal-dashboard usage checks explicitly opt-in with **R**/**A**, kept bulk checks responsive, and prevented wrapper/app-server child processes from surviving completed or timed-out workers.
 - Kept desktop account rows and the launch dropdown on one merged live cache/account snapshot while eliminating repeated WPF control rebuilding and session-process handle churn.
 

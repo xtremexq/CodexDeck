@@ -1,6 +1,6 @@
 # Isolated accounts and pooled environments
 
-New accounts start with independent Codex homes. No configuration, skills, instructions or memory is automatically inherited. Existing account files are preserved; legacy Deck-managed instruction hardlinks are detached on that account's next launch, preserving their contents. This is configuration isolation, not an operating-system security sandbox: Codex still runs as your Windows user.
+New accounts start with independent Codex homes. No private configuration, user-owned skills, instructions or memory is automatically inherited. Deck-provided skills are the exception: enabled catalog skills are linked into each account or pool without merging its private skill folder. Existing account files are preserved; legacy Deck-managed instruction hardlinks are detached on that account's next launch, preserving their contents. This is configuration isolation, not an operating-system security sandbox: Codex still runs as your Windows user.
 
 ## One environment, several quota accounts
 
@@ -48,6 +48,20 @@ codex-auth unshare -Targets account1 -Resources memories
 
 To opt into a one-time bootstrap when creating an account, use `codex-auth account3 -InheritFrom account1` (or `default`). This copies supported configuration resources, never credentials; subsequent edits are independent.
 
+## Deck skills
+
+Open **Settings > Skills** to manage reusable workflows shipped with Codex Deck. Catalog skills are enabled globally by default, including for future accounts and pools on their first launch. You can disable or re-enable each skill independently for an account or pool; the change takes effect in new Codex sessions.
+
+Deck stores one maintained copy under `.codex-loop/skills` and exposes enabled skills through verified junctions in each environment's `skills` folder. Updates therefore reach every enabled environment without copying the skill into each account. If an environment already has a user-owned skill with the same name, Deck reports the collision and leaves it untouched. Environments that share their whole `skills` directory continue to manage skills through that sharing source.
+
+The initial `debug-swarm` skill coordinates independent Codex terminal workers for parallel, evidence-first debugging. Invoke it in a new conversation with a request such as:
+
+```text
+Use $debug-swarm to debug the provider failures with subagents.
+```
+
+In this workflow, “subagents” means separate Codex CLI workers launched through `codex-auth`; nested worker delegation is disabled. The coordinating conversation retains the worker/session mapping and applies fixes only when authorized.
+
 ## Global Rules
 
 Choose **Configs > Global Rules**, press **G** in the terminal dashboard, or run `codex-auth -GlobalRules`. Save plain text instructions; leave the editor blank to disable them. Rules are stored in `deck/global-rules.md`, and saving keeps a backup of the previous text.
@@ -64,6 +78,6 @@ This uses [Codex's developer instructions setting](https://learn.chatgpt.com/doc
 
 ## Backups and removal
 
-Encrypted configuration backups include pooled-entry membership metadata. They do not include shared directories, sharing bindings, or private-resource backups. Back up those resources separately and reapply sharing explicitly after restore. An exported instruction copy is restored as private instructions.
+Encrypted configuration backups include pooled-entry membership metadata and per-environment Deck-skill overrides. They do not include shared directories, sharing bindings, catalog skill contents, or private-resource backups. Back up user-owned resources separately and reapply sharing explicitly after restore. An exported instruction copy is restored as private instructions.
 
 Rename/delete is blocked while an entry participates in sharing or is explicitly named in another pool. Unshare and update membership first. Unsharing preserves the owner's files and restores the recipient's pre-sharing copy; edits made while a directory was shared remain with the owner.

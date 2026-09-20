@@ -11,6 +11,7 @@ if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Memories.ps1')){. (Join
 if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.AccountResources.ps1')){. (Join-Path $PSScriptRoot 'Deck.AccountResources.ps1')}
 if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Storage.ps1')){. (Join-Path $PSScriptRoot 'Deck.Storage.ps1')}
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Environments.ps1')) { . (Join-Path $PSScriptRoot 'Deck.Environments.ps1') }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.BundledSkills.ps1')) { . (Join-Path $PSScriptRoot 'Deck.BundledSkills.ps1') }
 # Codex Deck - local state and scheduling. No credentials are written to Deck state.
 function Get-DeckDueAccounts($Automatic, $Manual, $NextCheck, [DateTimeOffset]$Now) {
     $manualDue=@($Manual.Keys | Where-Object { $Manual[$_] -le $Now } | Sort-Object { $Manual[$_] })
@@ -36,6 +37,8 @@ function Get-DeckDefaults {
         WarmupResetEnabled=$true; WarmupTimedEnabled=$false; WarmupTimes=''
         WarmupStartAtLogin=$true
         FailoverEnabled=$false; FailoverMode='Ordered'; FailoverAccounts=''
+        AutoCompactThresholdPercent=70
+        AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information.'
     }
 }
 function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
@@ -181,6 +184,10 @@ function Get-DeckSettings([string]$Root) {
     $settings.OpacityPercent = [Math]::Min(100, [Math]::Max(50, $settings.OpacityPercent))
     $settings.WidgetWidth = [Math]::Min(600, [Math]::Max(238, $settings.WidgetWidth))
     $settings.WidgetHeight = [Math]::Min(800, [Math]::Max(0, $settings.WidgetHeight))
+    $settings.AutoCompactThresholdPercent = [Math]::Min(90, [Math]::Max(30, $settings.AutoCompactThresholdPercent))
+    if ([string]::IsNullOrWhiteSpace($settings.AutoCompactHandoffPrompt) -or $settings.AutoCompactHandoffPrompt.Length -gt 4000 -or -not $settings.AutoCompactHandoffPrompt.Contains('DECK_HANDOFF')) {
+        $settings.AutoCompactHandoffPrompt=(Get-DeckDefaults).AutoCompactHandoffPrompt
+    }
     if ($settings.FailoverMode -notin @('Ordered','Best')) { $settings.FailoverMode='Ordered' }
     if ($settings.ViewMode -notin @('Panel','Widget','Tray')) { $settings.ViewMode='Widget' }
     $settings.WarmupPlanTypes=ConvertTo-DeckWarmupPlanTypes $settings.WarmupPlanTypes

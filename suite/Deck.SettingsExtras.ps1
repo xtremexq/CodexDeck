@@ -1,5 +1,6 @@
 ﻿# Dot-sourced inside Show-DeckSettings so modal handlers share its lifetime.
 . (Join-Path $suite 'Deck.EnvironmentSettings.ps1')
+. (Join-Path $suite 'Deck.SkillSettings.ps1')
 $backupTab=[Windows.Controls.TabItem]::new(); $backupTab.Header='Backup'
 $backupPanel=[Windows.Controls.StackPanel]::new(); $backupPanel.Margin='2,0,12,0'
 $backupScroll=[Windows.Controls.ScrollViewer]::new(); $backupScroll.VerticalScrollBarVisibility='Auto'; $backupScroll.HorizontalScrollBarVisibility='Disabled'; $backupScroll.Content=$backupPanel; $backupTab.Content=$backupScroll; [void]$tabs.Items.Add($backupTab)
