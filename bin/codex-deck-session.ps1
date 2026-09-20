@@ -1,11 +1,14 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('account','pool','usage')]
+    [ValidateSet('account','pool','usage','delay','schedule')]
     [string]$Command = 'account',
 
     [Parameter(Position = 1)]
     [string]$Selection,
+
+    [Parameter(Position = 2, ValueFromRemainingArguments = $true)]
+    [string[]]$MessageParts,
 
     [string]$UseAccount,
     [switch]$Json
@@ -84,6 +87,35 @@ function Write-DeckSessionStatus([object]$Status) {
 
 $requested = if ($UseAccount) { $UseAccount } else { $Selection }
 $status = Invoke-DeckSessionAccount
+
+if($Command -in @('delay','schedule')){
+    if($UseAccount -or $Json){throw "$Command does not accept account-selection or JSON options."}
+    $message=(@($MessageParts) -join ' ')
+    if([string]::IsNullOrWhiteSpace($Selection) -or [string]::IsNullOrWhiteSpace($message)){throw "Usage: !$Command <duration> <message>"}
+    if(-not $env:CODEX_HOME){throw 'Codex did not expose the owning CODEX_HOME to this local command.'}
+    $accountDir=Get-Item -LiteralPath $env:CODEX_HOME -ErrorAction Stop
+    if(-not $accountDir.PSIsContainer -or $accountDir.Parent.Name -ne 'accounts'){throw 'This command must run inside a managed codex-auth conversation.'}
+    $owner=$accountDir.Name
+    if([string]$status.environment.name -ne $owner){throw 'The live session owner does not match CODEX_HOME.'}
+    $suiteRoot=$accountDir.Parent.Parent.FullName
+    $module=Join-Path $suiteRoot 'Deck.ScheduledMessages.ps1'
+    if(-not (Test-Path -LiteralPath $module -PathType Leaf)){$module=Join-Path $PSScriptRoot '../suite/Deck.ScheduledMessages.ps1'}
+    if(-not (Test-Path -LiteralPath $module -PathType Leaf)){throw 'Scheduled-message support is not installed. Reinstall Codex Deck.'}
+    . $module
+    $duration=ConvertFrom-DeckMessageDuration $Selection
+    $threadId=[string]$env:CODEX_THREAD_ID
+    if($Command -eq 'delay'){
+        $result=Start-DeckDelayedMessage $suiteRoot $owner $accountDir.FullName (Get-Location).Path $threadId $message $duration
+        Write-Output ("Delayed message set for {0}. It will be queued into this live conversation." -f $result.DueAt.ToString('g'))
+    }else{
+        $authScript=Join-Path $PSScriptRoot 'codex-auth.ps1'
+        $result=Register-DeckScheduledMessage $suiteRoot $owner $accountDir.FullName (Get-Location).Path $threadId $message $duration $authScript
+        Write-Output ("Scheduled message set for {0}. Windows task: {1}" -f $result.DueAt.ToString('g'),$result.TaskName)
+    }
+    exit 0
+}
+
+if($MessageParts){throw "$Command accepts at most one selection."}
 
 if ($Command -eq 'usage') {
     if ($requested) { throw 'Usage does not accept an account selection; switch with !account or !pool first.' }

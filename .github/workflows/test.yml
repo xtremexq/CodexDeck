@@ -19,6 +19,7 @@ jobs:
           ./suite/Test-Deck.ps1
           ./suite/Test-DeckCommands.ps1
           ./suite/Test-DeckScheduler.ps1
+          ./suite/Test-DeckScheduledMessages.ps1
           ./suite/Test-DeckBackup.ps1
           ./suite/Test-DeckAccountTools.ps1
           ./suite/Test-DeckStorage.ps1
@@ -45,7 +46,7 @@ jobs:
           if (!(Test-Path "$destination/.codex-loop/Deck.AutoCompact.cjs")) { throw 'Missing installed auto-compact client' }
           if (!(Test-Path "$destination/.codex-loop/Deck.AutoCompact.Sidecar.cjs")) { throw 'Missing installed native auto-compact sidecar' }
           if (!(Test-Path "$destination/.codex-loop/accounts/pool/skills/debug-swarm/SKILL.md")) { throw 'Missing globally enabled Deck skill' }
-          foreach ($name in 'account','pool','usage','check','deck') {
+          foreach ($name in 'account','pool','usage','delay','schedule','check','deck') {
             if (!(Test-Path "$destination/.local/bin/$name.cmd")) { throw "Missing installed local shell command: $name" }
             if ($name -ne 'deck' -and (Test-Path "$destination/.codex-loop/accounts/pool/skills/$name/.codexdeck-managed")) { throw "Legacy AI-backed command skill remains: $name" }
           }

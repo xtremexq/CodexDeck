@@ -20,7 +20,7 @@ $launcher=[regex]::Replace($launcher,'(?m)^\$defaultConfigPath =.*$', [Text.Regu
 [IO.File]::WriteAllText((Join-Path $fixture 'codex-auth.ps1'),$launcher,[Text.UTF8Encoding]::new($true))
 [IO.File]::WriteAllText((Join-Path $fixture 'default.toml'),'model = "must-not-inherit"')
 $harness=@'
-param([string]$Name,[string]$Member,[string]$Action,[string]$Inherit,[switch]$Direct)
+param([string]$Name,[string]$Member,[string]$Action,[string]$Inherit,[switch]$Direct,[switch]$Resume,[string]$ResumeId,[string]$ResumePrompt)
 function global:codex {
     $active=$null
     if ($env:CODEX_DECK_SESSION_URL) {
@@ -35,6 +35,11 @@ if ($Member) { $arguments.UseAccount=$Member }
 if ($Inherit) { $arguments.InheritFrom=$Inherit }
 if ($Action) { $arguments.CodexArgs=@($Action) }
 if ($Direct) { $arguments.Direct=$true }
+if ($Resume) {
+    $arguments.Resume=$true
+    if ($ResumeId) { $arguments.CodexArgs=@($ResumeId) }
+    if ($PSBoundParameters.ContainsKey('ResumePrompt')) { $arguments.ResumePrompt=$ResumePrompt }
+}
 & (Join-Path $PSScriptRoot 'codex-auth.ps1') @arguments
 exit $LASTEXITCODE
 '@
@@ -52,6 +57,19 @@ $output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -
 if ($LASTEXITCODE -ne 0) { throw 'Direct account launch failed.' }
 $record=($output | Where-Object { $_ -like '{"Environment":*' }) | ConvertFrom-Json
 if ($record.Environment -ne (Join-Path $fixture 'accounts/account1') -or -not $record.HasAuth -or $record.Active -or ($record.Arguments -join ' ').Contains('openai_base_url')) { throw 'Direct account launch unexpectedly used Deck routing.' }
+$output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -Name account1 -Resume -Direct
+if ($LASTEXITCODE -ne 0) { throw 'Account resume picker launch failed.' }
+$record=($output | Where-Object { $_ -like '{"Environment":*' }) | ConvertFrom-Json
+if (($record.Arguments -join '|') -notmatch 'resume\|--all') { throw 'Resume without an ID did not open the account-wide picker.' }
+$resumeId=[guid]::NewGuid().ToString();$resumePrompt='continue this Ω'
+$output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -Name account1 -Resume -ResumeId $resumeId -ResumePrompt $resumePrompt -Direct
+if ($LASTEXITCODE -ne 0) { throw 'Direct conversation resume launch failed.' }
+$record=($output | Where-Object { $_ -like '{"Environment":*' }) | ConvertFrom-Json
+if (($record.Arguments -join '|') -notmatch ('resume\|'+[regex]::Escape($resumeId)+'\|'+[regex]::Escape($resumePrompt))) { throw "Resume ID or initial prompt was changed: $($record.Arguments | ConvertTo-Json -Compress)" }
+$ErrorActionPreference='Continue'
+$output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -Name missing -Resume -ResumeId $resumeId -Direct 2>&1
+$ErrorActionPreference='Stop'
+if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath (Join-Path $fixture 'accounts/missing'))) { throw 'Resume created or accepted a missing account.' }
 $output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -Name newaccount -Action login
 if ($LASTEXITCODE -ne 0) { throw 'New isolated account failed.' }
 foreach ($file in @('config.toml','AGENTS.md','auth.json')) { if (Test-Path -LiteralPath (Join-Path $fixture "accounts/newaccount/$file")) { throw 'New account inherited private resources or credentials.' } }

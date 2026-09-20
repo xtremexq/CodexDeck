@@ -14,6 +14,16 @@ Press **H** in the dashboard or run `codex-auth -History`. Search with `/`, page
 
 The browser combines session metadata from the managed accounts' `sessions` directories. It reads only the first metadata line (up to 1 MiB), skips malformed files and filesystem links, and does not index conversation contents. Archived sessions and sessions outside managed accounts are not included. The original working directory must still exist to resume.
 
+From a normal PowerShell terminal, `codex-auth account2 -Resume` opens Codex's conversation picker for account2. `codex-auth account2 -Resume <conversation-id>` opens that conversation directly. The picker includes conversations from other folders in the same account; an ID still belongs to that account's local history.
+
+## Timed local messages
+
+Inside a normal `codex-auth account2` conversation, enter `!delay 15m go on`. A hidden timer waits 15 minutes and queues `go on` into that same live conversation. The existing terminal stays open and usable; the message requires the conversation to still be running when the timer fires.
+
+Enter `!schedule 6h go on` to save a one-time Windows task. At the due time, it opens a visible PowerShell terminal in the original working folder, runs `codex-auth account2 -Resume <conversation-id>`, and submits the saved message as the first prompt. Deck uses the account that owns the conversation even if `!account` has changed the active quota route. The task removes itself on execution. If Windows cannot run it immediately, Task Scheduler starts it when the user next signs in; the task expires after seven days. The account and working folder must still exist.
+
+Both commands accept durations made from whole-number `s`, `m`, `h`, or `d` units, including `600s`, `600m`, `6h`, and `1h30m` (maximum 365 days). Put the message after the duration, quoting it if it contains shell-sensitive characters. Deck stores the pending message in the local `.codex-loop/deck` directory until delivery and removes its job file after use.
+
 ## Rename
 
 Press **F2** in the dashboard or run `codex-auth old -RenameTo new`. Pause automatic warm-up and quit the desktop companion first, finish dashboard refreshes, and close connected terminals for that account. The account folder, warm-up selection, pins and cached account records are migrated together, with rollback if writing state fails. Case-only renames are not supported. Avoid simultaneous maintenance in another dashboard.

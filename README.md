@@ -136,6 +136,8 @@ codex-auth                       # Interactive terminal dashboard
 codex-auth status                # Cached snapshot; no network
 codex-auth list                  # List local profiles
 codex-auth account1              # Launch an account
+codex-auth account1 -Resume      # Pick a conversation from this account
+codex-auth account1 -Resume 00000000-0000-4000-8000-000000000001 # Resume one conversation by ID
 codex-auth 2                     # Shorthand for account2
 codex-auth work-main             # Use a named profile
 codex-auth account1 login        # Sign in to that profile
@@ -149,13 +151,14 @@ codex-check -NoColor             # Plain-text usage report
 ```
 
 Inside any signed-in `codex-auth` conversation, use Codex's local shell
-prefix: `!account`, `!pool`, `!usage`, `!check`, or `!deck`. These commands run locally
+prefix: `!account`, `!pool`, `!usage`, `!delay`, `!schedule`, `!check`, or `!deck`. These commands run locally
 and do not submit a prompt or consume a model turn. Account first lets you choose
 the session's selectable accounts or, in a named environment, its current pool
 by printing numbered lists. Pool prints the current-pool list directly. Switch with a second local
 command such as `!pool 2` or `!pool account7`. Usage checks
 only the account currently routing the session; Check runs the complete local
 `codex-check` report, and Deck opens the desktop companion.
+Use `!delay 15m go on` to queue `go on` into the same live conversation after 15 minutes. The terminal stays open and usable while its hidden timer waits. Use `!schedule 6h go on` to create a one-time Windows task that opens a new visible PowerShell terminal, resumes this conversation under its owning account, and submits `go on`. The task removes itself when it runs. Durations accept whole-number seconds, minutes, hours, or days (`600s`, `10m`, `6h`, `1d`); quoted messages can include spaces. Scheduling requires a signed-in Windows session at delivery time. The original working folder and account must still exist.
 Codex does not expose a third-party bare-slash extension point, so these commands
 use `!` and cannot appear as `/account` entries in the built-in command menu.
 Ordinary launches use a manual-only loopback route so `!account` works even when

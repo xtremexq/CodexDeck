@@ -14,6 +14,9 @@ param(
     [string[]]$Resources,
     [switch]$Best,
     [switch]$History,
+    [switch]$Resume,
+    [string]$ResumePrompt,
+    [string]$ResumePromptEnvironment,
     [switch]$GlobalRules,
     [string]$RenameTo,
     [ValidateSet('Off','Ordered','Best')]
@@ -590,6 +593,8 @@ function Show-Usage {
     Write-Host "  codex-auth sharing   Show explicit sharing"
     Write-Host "  codex-auth new-name -InheritFrom account1   Explicit one-time copy"
     Write-Host "  codex-auth -History [filter]   Browse/resume local sessions"
+    Write-Host "  codex-auth account1 -Resume   Open this account's conversation list"
+    Write-Host "  codex-auth account1 -Resume <conversation-id>   Resume one conversation"
     Write-Host "  codex-auth -GlobalRules       Edit rules for every account and pool"
     Write-Host "  codex-auth old -RenameTo new  Rename an inactive account"
     Write-Host "  codex-auth -Failover Ordered -FailoverAccounts account1,account2"
@@ -816,6 +821,26 @@ if (-not (Test-Path -LiteralPath $environmentModule)) { $environmentModule = Joi
 $bundledSkillsModule = Join-Path $runtimeRoot 'Deck.BundledSkills.ps1'
 if (-not (Test-Path -LiteralPath $bundledSkillsModule)) { $bundledSkillsModule = Join-Path $PSScriptRoot '../suite/Deck.BundledSkills.ps1' }
 if (Test-Path -LiteralPath $bundledSkillsModule) { . $bundledSkillsModule }
+if($ResumePromptEnvironment){
+    if(-not $Resume -or $ResumePromptEnvironment -notmatch '^CODEX_DECK_SCHEDULED_PROMPT_[A-F0-9]{32}$'){throw 'Invalid scheduled resume prompt source.'}
+    if($PSBoundParameters.ContainsKey('ResumePrompt')){throw 'Choose one resume prompt source.'}
+    $ResumePrompt=[Environment]::GetEnvironmentVariable($ResumePromptEnvironment,'Process')
+    [Environment]::SetEnvironmentVariable($ResumePromptEnvironment,$null,'Process')
+    if($null -eq $ResumePrompt){throw 'The scheduled resume prompt is unavailable.'}
+}
+if($PSBoundParameters.ContainsKey('ResumePrompt') -and -not $Resume){throw '-ResumePrompt requires -Resume.'}
+if($Resume){
+    if(-not $Account -or $Best -or $History -or $RenameTo -or $Del -or $NewAccount -or $Pool){throw '-Resume requires one existing account or pool and cannot be combined with account management.'}
+    if($CodexArgs -and $CodexArgs.Count -gt 1){throw '-Resume accepts at most one conversation ID.'}
+    if($PSBoundParameters.ContainsKey('ResumePrompt') -and -not $CodexArgs){throw '-ResumePrompt requires a conversation ID.'}
+    $resumeArguments=@('resume')
+    if($CodexArgs){
+        if([string]::IsNullOrWhiteSpace([string]$CodexArgs[0])){throw 'Conversation ID cannot be empty.'}
+        $resumeArguments += [string]$CodexArgs[0]
+        if($PSBoundParameters.ContainsKey('ResumePrompt') -or $ResumePromptEnvironment){$resumeArguments += [string]$ResumePrompt}
+    }else{$resumeArguments += '--all'}
+    $CodexArgs=$resumeArguments
+}
 if ($Pool -or $Account -in @('share','unshare','sharing')) {
     if ($Best -or $History -or $RenameTo -or $Del -or $NewAccount -or $CodexArgs -or $InheritFrom -or $UseAccount -or $PSBoundParameters.ContainsKey('Failover')) { throw 'Do not combine environment management with launch actions.' }
     . (Join-Path $runtimeRoot 'Deck.Core.ps1')
@@ -911,6 +936,7 @@ if ($accountName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $accountName -mat
     throw 'Account names must start with a letter and contain at most 40 letters, numbers, underscores or hyphens.'
 }
 $accountDir = Join-Path $accountsRoot $accountName
+if($Resume -and -not (Test-Path -LiteralPath $accountDir -PathType Container)){throw "Cannot resume from missing account '$accountName'."}
 if (-not $Direct -and -not $poolEntry -and (Test-Path -LiteralPath (Join-Path $accountDir 'auth.json')) -and $Failover -eq 'Off' -and -not $PSBoundParameters.ContainsKey('Failover')) {
     $runtimeRoot = Split-Path -Parent $accountsRoot
     $failoverModule = Join-Path $runtimeRoot 'Deck.Failover.ps1'
