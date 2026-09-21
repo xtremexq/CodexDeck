@@ -72,8 +72,26 @@ class ThreadObserver {
   constructor(rpc, threshold, handoffRequest, report=()=>{}) {
     this.rpc=rpc; this.threshold=threshold; this.handoffRequest=handoffRequest; this.report=report;
     this.controllers=new Map(); this.pending=new Set(); this.subscribed=new Set(); this.serial=new Map();
+    this.targetThreadId=null; this.selection=Promise.resolve();
   }
   async attach(threadId) {
+    if(!threadId) return;
+    if(this.targetThreadId!==threadId) {
+      const previous=this.targetThreadId;
+      this.targetThreadId=threadId;
+      if(previous) {
+        this.controllers.delete(previous); this.subscribed.delete(previous); this.serial.delete(previous);
+      }
+      if(!this.controllers.has(threadId)) {
+        const controller=new AutoCompactController(this.rpc,this.threshold,this.report,this.handoffRequest);
+        controller.threadId=threadId;
+        this.controllers.set(threadId,controller);
+      }
+      if(previous) {
+        try { await this.rpc('thread/unsubscribe',{threadId:previous}); } catch {}
+        if(this.targetThreadId!==threadId) return;
+      }
+    }
     if(!this.controllers.has(threadId)) {
       const controller=new AutoCompactController(this.rpc,this.threshold,this.report,this.handoffRequest);
       controller.threadId=threadId;
@@ -83,24 +101,32 @@ class ThreadObserver {
     this.pending.add(threadId);
     try {
       await this.rpc('thread/resume',{threadId,excludeTurns:true});
-      this.subscribed.add(threadId);
+      if(this.targetThreadId===threadId) this.subscribed.add(threadId);
+      else {
+        try { await this.rpc('thread/unsubscribe',{threadId}); } catch {}
+      }
     } catch {
       // A newly started thread may be visible in memory before its rollout exists.
-      // Discovery retries until this observer connection can subscribe to it.
+      // Retry until this observer connection can subscribe to the active TUI thread.
     } finally { this.pending.delete(threadId); }
   }
-  async discover() {
-    let cursor;
-    do {
-      const result=await this.rpc('thread/loaded/list',cursor?{cursor}:{});
-      for(const threadId of result.data || []) await this.attach(threadId);
-      cursor=result.nextCursor;
-    } while(cursor);
+  async retry() {
+    if(this.targetThreadId) await this.attach(this.targetThreadId);
   }
   onNotification(message) {
     const event=message.params || {};
-    if(message.method==='thread/started' && event.thread?.id) { this.attach(event.thread.id); return; }
-    if(message.method==='thread/closed') { this.controllers.delete(event.threadId); this.subscribed.delete(event.threadId); this.serial.delete(event.threadId); return; }
+    if(message.method==='thread/started' && event.thread?.id) {
+      // The native TUI emits this for the conversation it starts or resumes. Child
+      // threads belong to subagents and must never replace the observed conversation.
+      if(event.thread.parentThreadId || this.pending.has(event.thread.id)) return;
+      this.selection=this.attach(event.thread.id).catch(error=>this.report(`Thread selection failed: ${error.message}`));
+      return;
+    }
+    if(message.method==='thread/closed') {
+      this.controllers.delete(event.threadId); this.subscribed.delete(event.threadId); this.serial.delete(event.threadId);
+      if(this.targetThreadId===event.threadId) this.targetThreadId=null;
+      return;
+    }
     const controller=this.controllers.get(event.threadId);
     if(!controller) return;
     if(message.method==='turn/started') {
@@ -151,9 +177,9 @@ async function main() {
     if(!socket) throw Error('Codex app-server did not become ready.');
     let observer;
     const client=new RpcClient(socket,message=>observer?.onNotification(message));
-    // This app-server hosts the native Codex TUI. Keep its persisted threads in CLI history;
-    // the observer connection must not classify the shared session as an editor client.
-    await client.call('initialize',{clientInfo:{name:'codex-tui',version:'1.0.0'},capabilities:{experimentalApi:true}});
+    // The observer only joins a thread after the native TUI starts or resumes it. Give
+    // it a distinct identity so it cannot be mistaken for another interactive TUI.
+    await client.call('initialize',{clientInfo:{name:'codex_deck_auto_compact_observer',version:'1.0.0'},capabilities:{experimentalApi:true}});
     client.send({method:'initialized'});
     let reportedBytes=0;
     const report=message=>{
@@ -163,14 +189,13 @@ async function main() {
       process.stderr.write(line);
     };
     observer=new ThreadObserver((method,params)=>client.call(method,params),options.threshold,options.handoffRequest,report);
-    await observer.discover();
-    let discovering=false;
+    let retrying=false;
     poll=setInterval(async()=>{
-      if(discovering) return;
-      discovering=true;
-      try { await observer.discover(); }
-      catch(error) { report(`Thread discovery failed: ${error.message}`); }
-      finally { discovering=false; }
+      if(retrying) return;
+      retrying=true;
+      try { await observer.retry(); }
+      catch(error) { report(`Thread subscription retry failed: ${error.message}`); }
+      finally { retrying=false; }
     },500);
     process.stdout.write(`READY ${url}\n`);
   } catch(error) { process.stdout.write(`ERROR ${error.message}\n`); process.exitCode=1; stop(); }

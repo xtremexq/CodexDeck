@@ -93,17 +93,25 @@ async function main() {
   let persisted=false;
   const observer=new ThreadObserver(async(method,params)=>{
     nativeCalls.push({method,params});
-    if(method==='thread/loaded/list') return {data:['native-thread'],nextCursor:null};
     if(method==='thread/resume') { if(!persisted) throw Error('no rollout found for thread id native-thread'); return {thread:{id:'native-thread'}}; }
     if(method==='turn/start') return {turn:{id:'replay-turn'}};
     return {};
   },70,custom);
-  await observer.discover();
-  assert.equal(observer.controllers.size,1,'a discovered native thread must be tracked immediately');
+  observer.onNotification({method:'thread/started',params:{thread:{id:'child-thread',parentThreadId:'native-thread'}}});
+  await observer.selection;
+  assert.equal(observer.controllers.size,0,'subagent threads must not replace the active native conversation');
+  observer.onNotification({method:'thread/started',params:{thread:{id:'native-thread',parentThreadId:null}}});
+  await observer.selection;
+  assert.equal(observer.controllers.size,1,'the native TUI thread must be tracked immediately');
   assert.equal(observer.subscribed.size,0,'an empty native thread must retry its observer subscription');
   persisted=true;
-  await observer.discover();
+  await observer.retry();
   assert.equal(observer.subscribed.has('native-thread'),true,'the observer must subscribe so it receives native TUI usage events');
+  assert.equal(nativeCalls.some(call=>call.method==='thread/loaded/list'),false,'the observer must never scan and resume unrelated history threads');
+  observer.pending.add('observer-resume-thread');
+  observer.onNotification({method:'thread/started',params:{thread:{id:'observer-resume-thread',parentThreadId:null}}});
+  observer.pending.delete('observer-resume-thread');
+  assert.equal(observer.targetThreadId,'native-thread','the observer must ignore thread events caused by its own resume call');
   observer.onNotification({method:'turn/started',params:{threadId:'native-thread',turn:{id:'native-turn'}}});
   observer.onNotification({method:'thread/tokenUsage/updated',params:{threadId:'native-thread',turnId:'native-turn',tokenUsage:{last:{totalTokens:70},modelContextWindow:100}}});
   await observer.serial.get('native-thread');
@@ -120,6 +128,11 @@ async function main() {
   observer.onNotification({method:'turn/completed',params:{threadId:'native-thread',turn:{id:'compact-turn',status:'completed'}}});
   await observer.serial.get('native-thread');
   assert.equal(nativeCalls.at(-1).params.input[0].text,replayPrompt(`${HANDOFF}: native state`));
+  observer.onNotification({method:'thread/started',params:{thread:{id:'next-thread',parentThreadId:null}}});
+  await observer.selection;
+  assert.equal(observer.targetThreadId,'next-thread','a TUI history switch must select the newly resumed conversation');
+  assert.deepEqual([...observer.controllers.keys()],['next-thread'],'only the active TUI conversation may remain observed');
+  assert.ok(nativeCalls.some(call=>call.method==='thread/unsubscribe' && call.params.threadId==='native-thread'),'switching history must unsubscribe the previous conversation');
   console.log('Deck auto-compact controller tests passed');
 }
 
