@@ -11,6 +11,7 @@ async function main() {
   assert.equal(quotaRejected(429,quota),true);
   for (const [status,body,expected] of [[401,quota,false],[500,quota,false],[429,'{"error":{"type":"rate_limit_exceeded"}}',true],[429,'invalid',false]]) assert.equal(quotaRejected(status,body),expected);
   let behavior, seen = [], reports = [];
+  let clock = Date.now();
   const upstream = http.createServer(async (req,res) => {
     const parts=[]; for await (const part of req) parts.push(part);
     seen.push({account:req.headers['chatgpt-account-id'],auth:req.headers.authorization,body:Buffer.concat(parts).toString(),headers:req.headers,url:req.url,method:req.method});
@@ -23,10 +24,11 @@ async function main() {
     const p=await createProxy({pool:['a','b','c'],mode:'Ordered',...extra}, {
       upstream:`http://127.0.0.1:${upstream.address().port}`,
       credentials:name=>({token:'synthetic-'+name,id:name}), rows:()=>({a:row(30),b:row(80),c:row(60)}),
-      report:name=>reports.push(name), ...deps
+      report:name=>reports.push(name), now:()=>clock, ...deps
     }); proxies.push(p.server); return p.baseUrl;
   }
   const send=(url,body={},headers={})=>fetch(url+'/responses',{method:'POST',body:JSON.stringify(body),headers:{'content-type':'application/json',...headers}});
+  const compact=(url,body={})=>fetch(url+'/responses/compact',{method:'POST',body:JSON.stringify(body)});
   const select=(url,account,headers={})=>fetch(url+'/_deck/account',{method:'POST',body:JSON.stringify({account}),headers:{'content-type':'application/json',...headers}});
   try {
     behavior=(req,res)=> { if(req.headers['chatgpt-account-id']==='a') {res.writeHead(429);res.end(quota);} else {res.writeHead(200,{'content-type':'text/event-stream'});res.end('data: success\n\n');} };
@@ -55,14 +57,24 @@ async function main() {
     result=await fetch(url+'/extensions/web/run?format=json',{method:'POST',body:'opaque',headers:{'content-type':'application/octet-stream','x-codex-feature':'web',cookie:'private',authorization:'Bearer wrong'}});
     assert.equal(result.status,200);assert.equal((await result.json()).ok,true);assert.equal(result.headers.get('x-request-id'),'aux-test');assert.equal(seen[0].account,'b');
     state=await (await fetch(url+'/_deck/account')).json();assert.equal(state.failover.automatic,false);assert.equal(state.failover.lastRequestRoute,'/extensions/web/run');
-    behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
+    const resetsAt=Math.ceil((clock+5000)/1000);
+    behavior=(_req,res)=>{res.writeHead(429);res.end(JSON.stringify({error:{type:'usage_limit_reached',resets_at:resetsAt}}));};
     result=await send(url);assert.equal(result.status,429);assert.deepEqual(seen.map(r=>r.account),['b','b'],'Manual-only routing must not automatically replay a rejected request');
+    assert.equal((await compact(url)).status,429);assert.equal(seen.length,2,'A compact retry before reset must remain locally bounded');
+    clock+=7000;
+    behavior=(_req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end('{"output":[]}');};
+    assert.equal((await compact(url)).status,200);assert.equal(seen.length,3,'The same open session must probe upstream after the quota reset');
+    state=await (await fetch(url+'/_deck/account')).json();assert.deepEqual(state.failover.unavailable,[],'Reset accounts must leave the unavailable set');
     behavior=(req,res)=> { if(req.headers['chatgpt-account-id']==='a') {res.writeHead(429);res.end(quota);} else {res.writeHead(200,{'content-type':'text/event-stream'});res.end('data: success\n\n');} };
     url=await start(); result=await send(url,{input:[{encrypted_content:'portable-history'}]});
     assert.equal(result.status,200); assert.deepEqual(seen.map(r=>r.account),['a','b'],'Encrypted stateless history must rotate after quota rejection');
     behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
     url=await start(); assert.equal((await send(url)).status,429); assert.deepEqual(seen.map(r=>r.account),['a','b','c']);
     await send(url); assert.equal(seen.length,3,'Exhausted pool must not loop');
+    clock+=61000;
+    behavior=(_req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end('{"output":[]}');};
+    assert.equal((await compact(url)).status,200); assert.equal(seen.length,4,'An open automatic-failover session must probe again after the bounded no-metadata retry interval');
+    state=await (await fetch(url+'/_deck/account')).json(); assert.deepEqual(state.failover.unavailable,[],'Successful reset probes must clear automatic failover exclusions');
     for (const [status,body] of [[401,quota],[500,quota]]) {
       behavior=(_req,res)=>{res.writeHead(status);res.end(body);}; url=await start();
       assert.equal((await send(url)).status,status); assert.equal(seen.length,1);
@@ -97,7 +109,6 @@ async function main() {
     assert.equal(result.status,200);await result.text();assert.equal(seen.at(-1).body,'decoded payload!');
     behavior=(req,res)=>{assert.equal(req.url,'/responses/compact');res.writeHead(200,{'content-type':'application/json'});res.end('{"output":[]}');};
     url=await start();
-    const compact=(base,body={})=>fetch(base+'/responses/compact',{method:'POST',body:JSON.stringify(body)});
     assert.equal((await compact(url)).status,200); assert.equal(seen[0].account,'a');
     behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
     url=await start(); assert.equal((await compact(url)).status,429); assert.equal(seen.length,3,'Full-context compaction can try the configured pool');

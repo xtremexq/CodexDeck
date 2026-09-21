@@ -73,7 +73,7 @@ function Resolve-DeckEntryPool([string]$SuiteRoot, $Entry) {
 }
 function Set-DeckPoolEntry([string]$SuiteRoot, [string]$Name, [string[]]$Members, [string]$Mode = 'Ordered', [switch]$ValidateOnly) {
     Assert-DeckEntryName $Name
-    if ($Name -in @('help','list','status','dashboard','share','unshare','sharing')) { throw 'That name is reserved for a command.' }
+    if ($Name -in @('help','list','status','dashboard','resume','share','unshare','sharing')) { throw 'That name is reserved for a command.' }
     if ($Mode -notin @('Ordered','Best')) { throw 'Choose Ordered or Best.' }
     $entry = [pscustomobject]@{Version=1; Kind='pool'; Accounts=@($Members); Mode=$Mode}
     # Validate selected membership now. Wildcard membership can start empty and is resolved at launch.

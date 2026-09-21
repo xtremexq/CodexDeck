@@ -26,12 +26,12 @@ Assert (($frame.Text -join "`n") -match '> account40') 'Selection not paged into
 Assert (($frame.Text -join "`n") -match 'E memories') 'Per-account memories shortcut missing'
 Assert (($frame.Text -join "`n") -match 'I instructions') 'Per-account instructions shortcut missing'
 Assert (($frame.Text -join "`n") -match 'K skills') 'Per-account skills shortcut missing'
-Assert (($frame.Text -join "`n") -match 'C compact \[ \] 70%') 'Auto-compact shortcut or default threshold missing'
+Assert (($frame.Text -join "`n") -match 'C compact \[ \] Native 70%') 'Native auto-compact shortcut or default threshold missing'
 Assert (($frame.Text -join "`n") -notmatch 'person@example.com') 'Email not masked by default'
 Assert ($frame.Count -le 24) 'Frame overflows terminal height'
 $empty = @(Get-DeckTerminalFrame @() @{} @{} @() @{} 0 60 25 '' 'Ready')
 $compactFrame = @(Get-DeckTerminalFrame $names @{} $profiles @() @{} 0 100 25 '' 'Ready' $true $null @{} $true 72)
-Assert (($compactFrame.Text -join "`n") -match 'C compact \[x\] 72%') 'Auto-compact selected state or configured threshold missing'
+Assert (($compactFrame.Text -join "`n") -match 'C compact \[x\] Native 72%') 'Auto-compact selected state or configured threshold missing'
 Assert (($empty.Text -join "`n") -match 'No matching accounts') 'Missing empty state'
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('deck-terminal-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'deck'))

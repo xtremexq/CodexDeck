@@ -37,7 +37,7 @@ function Get-DeckDefaults {
         WarmupResetEnabled=$true; WarmupTimedEnabled=$false; WarmupTimes=''
         WarmupStartAtLogin=$true
         FailoverEnabled=$false; FailoverMode='Ordered'; FailoverAccounts=''
-        AutoCompactThresholdPercent=70
+        AutoCompactMode='Native'; AutoCompactThresholdPercent=70
         AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information.'
     }
 }
@@ -185,6 +185,7 @@ function Get-DeckSettings([string]$Root) {
     $settings.WidgetWidth = [Math]::Min(600, [Math]::Max(238, $settings.WidgetWidth))
     $settings.WidgetHeight = [Math]::Min(800, [Math]::Max(0, $settings.WidgetHeight))
     $settings.AutoCompactThresholdPercent = [Math]::Min(90, [Math]::Max(30, $settings.AutoCompactThresholdPercent))
+    if ($settings.AutoCompactMode -notin @('Native','Custom')) { $settings.AutoCompactMode='Native' }
     if ([string]::IsNullOrWhiteSpace($settings.AutoCompactHandoffPrompt) -or $settings.AutoCompactHandoffPrompt.Length -gt 4000 -or -not $settings.AutoCompactHandoffPrompt.Contains('DECK_HANDOFF')) {
         $settings.AutoCompactHandoffPrompt=(Get-DeckDefaults).AutoCompactHandoffPrompt
     }

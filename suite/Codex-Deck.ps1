@@ -639,14 +639,15 @@ function Show-DeckSettings {
         Appearance=@('ViewMode','Compact','AlwaysOnTop','CloseToTray','AutoStart','OpacityPercent','FontSize','DefaultFolder','AlwaysAskFolder')
         Details=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
-        Context=@('AutoCompactThresholdPercent','AutoCompactHandoffPrompt')
+        Context=@('AutoCompactMode','AutoCompactThresholdPercent','AutoCompactHandoffPrompt')
         'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupPlanTypes','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
     }
     $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
     $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupPlanTypes='Account types (select one or more)';WarmupAccounts='Specific accounts (optional with account types; select one or more)';WarmupModel='Paid-plan model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
+    $labels.AutoCompactMode='Auto-compact implementation'
     $labels.AutoCompactThresholdPercent='Auto-compact when context remaining (%)'
     $labels.AutoCompactHandoffPrompt='Pre-compaction handoff request'
-    $descriptions.Context='Press C in the codex-auth dashboard to opt in. This percentage is free context remaining: 70% means Deck triggers at 30% used. Deck asks for a visible task-state handoff, compacts, then resumes. Account, pool and failover conversations are supported. Keep DECK_HANDOFF in the request so Deck can verify the handoff before compacting.'
+    $descriptions.Context='Press C in the codex-auth dashboard to opt in. Native uses Codex automatic compaction and is the default. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 70% means compaction starts at 30% used. Account, pool and failover conversations are supported.'
     $panels=@{}; $controls=@{}
     foreach($group in $groups.Keys){
         $tab=[Windows.Controls.TabItem]::new(); $tab.Header=$group
@@ -669,6 +670,7 @@ function Show-DeckSettings {
         $sectionTitle=New-DeckText $section '#A9E8D5' 14; $sectionTitle.Margin='0,0,0,14'; [void]$sectionPanel.Children.Add($sectionTitle)
         [void]$detailWrap.Children.Add($card); foreach($field in $detailSections[$section]){$detailPanels[$field]=$sectionPanel}
     }
+    $fieldLabels=@{}
     foreach ($key in @(@($groups.Values | ForEach-Object { $_ }) + @($settings.Keys) | Select-Object -Unique)) {
         if ($key -in @('Width','Height','WidgetWidth','WidgetHeight','WidgetAutoHeight')) { continue }
         $group=@($groups.Keys | Where-Object { $key -in $groups[$_] })[0]
@@ -691,7 +693,7 @@ function Show-DeckSettings {
             $control=[Windows.Controls.CheckBox]::new(); $control.Content=$caption; $control.IsChecked=$settings[$key]
             $control.Foreground='#EAF0FA'; $control.Margin='0,0,0,14'; $control.MinHeight=24
         } else {
-            $label=New-DeckText $caption '#A2ADB5'; $label.Margin='0,2,0,6'; [void]$panel.Children.Add($label)
+            $label=New-DeckText $caption '#A2ADB5'; $label.Margin='0,2,0,6'; [void]$panel.Children.Add($label); $fieldLabels[$key]=$label
             if($key -eq 'WarmupPlanTypes'){
                 $control=[Windows.Controls.Button]::new(); $control.HorizontalContentAlignment='Left'
                 $scopeMenu=[Windows.Controls.ContextMenu]::new()
@@ -739,6 +741,7 @@ function Show-DeckSettings {
                 $membership.Add_SelectionChanged({$members.Visibility=if($membership.SelectedIndex -eq 3){'Visible'}else{'Collapsed'}}.GetNewClosure())
                 [void]$control.Children.Add($membership); [void]$control.Children.Add($members)
                 $control.Resources['Membership']=$membership; $control.Resources['Members']=$members
+            }elseif($key -eq 'AutoCompactMode'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('Native','Custom')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]; $control.ToolTip='Native uses Codex compaction. Custom uses Deck''s handoff, compact and replay workflow.'
             }elseif($key -eq 'FailoverMode'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('Ordered','Best')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]
             }elseif($key -eq 'ViewMode'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('Panel','Widget','Tray')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]}else{$control=[Windows.Controls.TextBox]::new(); $control.Text=[string]$settings[$key]}
             if($key -eq 'AutoCompactHandoffPrompt'){$control.AcceptsReturn=$true; $control.TextWrapping='Wrap'; $control.VerticalScrollBarVisibility='Auto'; $control.MinHeight=148; $control.ToolTip='Edit the message sent before compaction. Keep DECK_HANDOFF so Deck can recognize the handoff.'}
@@ -746,6 +749,13 @@ function Show-DeckSettings {
         }
         $controls[$key]=$control; [void]$panel.Children.Add($control)
     }
+    $updateCompactModeVisibility={
+        $visibility=if([string]$controls.AutoCompactMode.SelectedItem -eq 'Custom'){'Visible'}else{'Collapsed'}
+        $controls.AutoCompactHandoffPrompt.Visibility=$visibility
+        $fieldLabels.AutoCompactHandoffPrompt.Visibility=$visibility
+    }.GetNewClosure()
+    $controls.AutoCompactMode.Add_SelectionChanged({& $updateCompactModeVisibility}.GetNewClosure())
+    & $updateCompactModeVisibility
     . (Join-Path $suite 'Deck.SettingsExtras.ps1')
     $settingsError=New-DeckText '' '#F17D8D'; $settingsError.Margin='0,10,0,0'; $settingsError.FontWeight='SemiBold'; [Windows.Controls.DockPanel]::SetDock($settingsError,'Bottom'); $dock.Children.Insert(0,$settingsError)
     $save.Add_Click({
@@ -763,7 +773,7 @@ function Show-DeckSettings {
                     if($membership.SelectedIndex -notin 0..3){throw 'Choose failover quota accounts.'}
                     $updated[$key]=if($membership.SelectedIndex -eq 3){@($members.SelectedItems | ForEach-Object {[string]$_}) -join ','}else{@('*','*free','*paid')[$membership.SelectedIndex]}
                 }
-                elseif ($key -in @('WarmupModel','ViewMode','FailoverMode')) { $updated[$key]=[string]$controls[$key].SelectedItem }
+                elseif ($key -in @('WarmupModel','ViewMode','FailoverMode','AutoCompactMode')) { $updated[$key]=[string]$controls[$key].SelectedItem }
                 elseif ($settings[$key] -is [int]) { $updated[$key]=[int]$controls[$key].Text }
                 else { $updated[$key]=$controls[$key].Text.Trim() }
             }
@@ -776,8 +786,9 @@ function Show-DeckSettings {
             }
             if ($updated.WarmupModel -notmatch '^gpt-[a-zA-Z0-9.-]+$') { throw 'Enter a model ID, e.g. gpt-5.6-luna.' }
             if ($updated.ViewMode -notin @('Panel','Widget','Tray')) { throw 'View Mode must be Panel, Widget, or Tray.' }
+            if ($updated.AutoCompactMode -notin @('Native','Custom')) { throw 'Choose Native or Custom auto-compaction.' }
             if ($updated.AutoCompactThresholdPercent -lt 30 -or $updated.AutoCompactThresholdPercent -gt 90) { throw 'Auto-compact remaining-context threshold must be 30-90%.' }
-            if ([string]::IsNullOrWhiteSpace($updated.AutoCompactHandoffPrompt) -or $updated.AutoCompactHandoffPrompt.Length -gt 4000 -or -not $updated.AutoCompactHandoffPrompt.Contains('DECK_HANDOFF')) { throw 'The handoff request must be at most 4000 characters and include DECK_HANDOFF.' }
+            if ($updated.AutoCompactMode -eq 'Custom' -and ([string]::IsNullOrWhiteSpace($updated.AutoCompactHandoffPrompt) -or $updated.AutoCompactHandoffPrompt.Length -gt 4000 -or -not $updated.AutoCompactHandoffPrompt.Contains('DECK_HANDOFF'))) { throw 'The handoff request must be at most 4000 characters and include DECK_HANDOFF.' }
             foreach ($name in @($updated.WarmupAccounts -split '[,;\s]+' | Where-Object { $_ })) {
                 if ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -notin @(Get-DeckAccounts)) { throw "Unknown warm-up account: $name" }
             }
@@ -1552,6 +1563,9 @@ try{
             $draftFailover.Resources['Membership'].SelectedIndex=3
             [void]$draftFailover.Resources['Members'].SelectedItems.Add('account2')
             $draftUI.Controls.AutoCheck.IsChecked=$true
+            if($draftUI.Controls.AutoCompactMode.SelectedItem -ne 'Native' -or $draftUI.Controls.AutoCompactHandoffPrompt.Visibility -ne 'Collapsed'){throw 'Native auto-compact is not the default or custom controls are visible.'}
+            $draftUI.Controls.AutoCompactMode.SelectedItem='Custom'
+            if($draftUI.Controls.AutoCompactHandoffPrompt.Visibility -ne 'Visible'){throw 'Custom auto-compact controls did not appear.'}
             $draftUI.Controls.AutoCompactThresholdPercent.Text='72'
             $draftUI.Controls.AutoCompactHandoffPrompt.Text="Write a concise DECK_HANDOFF with verified progress and the next action.`nInclude the relevant files and tests."
             $draftScope=$draftUI.Controls.WarmupPlanTypes.Resources['ScopeMenu']
@@ -1566,7 +1580,7 @@ try{
             $savedSettings=Read-DeckJson (Join-Path $root 'settings.json')
             if((Get-DeckPoolEntry $settingsFixture pool).Accounts[0] -ne '*free' -or -not $savedSettings.MaskEmail){throw 'Save settings did not persist environment and another tab together.'}
             if(-not $savedSettings.FailoverEnabled -or $savedSettings.FailoverMode -ne 'Best' -or $savedSettings.FailoverAccounts -ne 'account2' -or -not $savedSettings.AutoCheck){throw 'Save settings did not persist failover and general controls.'}
-            if($savedSettings.AutoCompactThresholdPercent -ne 72){throw 'Save settings did not persist the auto-compact threshold.'}
+            if($savedSettings.AutoCompactMode -ne 'Custom' -or $savedSettings.AutoCompactThresholdPercent -ne 72){throw 'Save settings did not persist the auto-compact implementation and threshold.'}
             if($savedSettings.AutoCompactHandoffPrompt -notmatch 'concise DECK_HANDOFF'){throw 'Save settings did not persist the multiline handoff request.'}
             if($savedSettings.WarmupPlanTypes -ne 'free,paid'){throw 'Save settings did not persist multiple warm-up account types.'}
             $savedSkill=@(Get-DeckBundledSkills $settingsFixture | Where-Object Name -eq 'debug-swarm')[0]
@@ -1576,7 +1590,7 @@ try{
             try{
                 foreach($key in @($settings.Keys | Where-Object {$reopenedUI.Controls.ContainsKey($_)})){
                     $control=$reopenedUI.Controls[$key]
-                    $actual=if($settings[$key] -is [bool]){[bool]$control.IsChecked}elseif($key -eq 'WarmupPlanTypes'){ConvertTo-DeckWarmupPlanTypes (@($control.Resources['ScopeMenu'].Items | Where-Object IsChecked | ForEach-Object {[string]$_.Tag}) -join ',')}elseif($key -eq 'WarmupAccounts'){@($control.SelectedItems) -join ','}elseif($key -eq 'FailoverAccounts'){$membership=$control.Resources['Membership']; if($membership.SelectedIndex -eq 3){@($control.Resources['Members'].SelectedItems) -join ','}else{@('*','*free','*paid')[$membership.SelectedIndex]}}elseif($key -in @('WarmupModel','ViewMode','FailoverMode')){[string]$control.SelectedItem}elseif($settings[$key] -is [int]){[int]$control.Text}else{$control.Text.Trim()}
+                    $actual=if($settings[$key] -is [bool]){[bool]$control.IsChecked}elseif($key -eq 'WarmupPlanTypes'){ConvertTo-DeckWarmupPlanTypes (@($control.Resources['ScopeMenu'].Items | Where-Object IsChecked | ForEach-Object {[string]$_.Tag}) -join ',')}elseif($key -eq 'WarmupAccounts'){@($control.SelectedItems) -join ','}elseif($key -eq 'FailoverAccounts'){$membership=$control.Resources['Membership']; if($membership.SelectedIndex -eq 3){@($control.Resources['Members'].SelectedItems) -join ','}else{@('*','*free','*paid')[$membership.SelectedIndex]}}elseif($key -in @('WarmupModel','ViewMode','FailoverMode','AutoCompactMode')){[string]$control.SelectedItem}elseif($settings[$key] -is [int]){[int]$control.Text}else{$control.Text.Trim()}
                     if($actual -ne $settings[$key]){throw "Reopened setting does not match saved value: $key"}
                 }
                 $reopenedUI.Skills.Target.SelectedItem='account2'

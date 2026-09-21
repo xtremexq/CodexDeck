@@ -7,12 +7,24 @@ if ($errors.Count) { throw ($errors -join '; ') }
 $sourceText=[IO.File]::ReadAllText($sourcePath)
 $checkAllParameter=$ast.ParamBlock.Parameters | Where-Object {$_.Name.VariablePath.UserPath -eq 'CheckAll'} | Select-Object -First 1
 if(-not $checkAllParameter -or $checkAllParameter.Extent.Text -notmatch "Alias\('a'\)" -or $sourceText -notmatch 'Show-DeckTerminal[^\r\n]+-CheckAll:\$CheckAll'){throw 'codex-auth -a is not wired to the dashboard all-check action'}
-$invalidCheckAll=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sourcePath -a status 2>&1
-if($LASTEXITCODE -eq 0 -or ($invalidCheckAll -join "`n") -notmatch 'only works with the plain codex-auth dashboard command'){throw 'codex-auth -a accepted a non-plain command'}
-foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Normalize-AccountName','Ensure-FreeAccountDefaults','Read-TextFile','Write-TextFile','Normalize-Newlines','ConvertTo-DeckWindowsArgument','Invoke-DeckCodex','Write-DeckSessionExit') {
+$savedErrorPreference=$ErrorActionPreference
+try {
+    $ErrorActionPreference='Continue'
+    $invalidCheckAll=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sourcePath -a status 2>&1
+    $invalidCheckAllExit=$LASTEXITCODE
+} finally { $ErrorActionPreference=$savedErrorPreference }
+if($invalidCheckAllExit -eq 0 -or ($invalidCheckAll -join "`n") -notmatch 'only works with the plain codex-auth dashboard command'){throw 'codex-auth -a accepted a non-plain command'}
+foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Get-AccountDirectories','Find-DeckConversationOwner','Normalize-AccountName','Ensure-FreeAccountDefaults','Read-TextFile','Write-TextFile','Normalize-Newlines','ConvertTo-DeckWindowsArgument','Invoke-DeckCodex','Write-DeckSessionExit','Get-DeckSessionRoutingArguments','ConvertFrom-DeckTomlScalar','Get-DeckTomlTopLevelValue','Get-DeckCodexArgumentSetting','Get-DeckNativeAutoCompactConfiguration') {
     $definition=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $true)
     . ([scriptblock]::Create($definition.Extent.Text))
 }
+. (Join-Path $PSScriptRoot 'Deck.Failover.ps1')
+. (Join-Path $PSScriptRoot 'Deck.Environments.ps1')
+$syntheticProxy=@{BaseUrl='http://127.0.0.1:12345/capability'}
+$ordinaryRoute=@(Get-DeckSessionRoutingArguments $syntheticProxy $false)
+$pooledRoute=@(Get-DeckSessionRoutingArguments $syntheticProxy $true)
+if($ordinaryRoute -notcontains 'model_provider="openai"' -or $ordinaryRoute -contains 'model_provider="deck_failover"'){throw 'Ordinary auto-compact routing would open a different conversation history'}
+if($pooledRoute -notcontains 'model_provider="deck_failover"' -or $pooledRoute -contains 'model_provider="openai"'){throw 'Pooled auto-compact routing lost its login-less provider'}
 if ((ConvertTo-DeckWindowsArgument '') -ne '""' -or
     (ConvertTo-DeckWindowsArgument 'plain') -ne 'plain' -or
     (ConvertTo-DeckWindowsArgument 'two words') -ne '"two words"' -or
@@ -23,6 +35,22 @@ if ((ConvertTo-DeckWindowsArgument '') -ne '""' -or
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('codex-auth-test-' + [guid]::NewGuid().ToString('N'))
 $accountsRoot = Join-Path $fixture 'accounts'
 New-Item -ItemType Directory -Path (Join-Path $accountsRoot 'account1') -Force | Out-Null
+$conversationId=[guid]::NewGuid().ToString('D')
+$conversationDirectory=Join-Path $accountsRoot 'account1/sessions/2026/09/21'
+[void][IO.Directory]::CreateDirectory($conversationDirectory)
+[IO.File]::WriteAllText((Join-Path $conversationDirectory "rollout-2026-09-21T00-00-00-$conversationId.jsonl"),'{}')
+$nativeModel='test-native-model'
+[IO.File]::WriteAllText((Join-Path $accountsRoot 'account1/config.toml'),("model = `"{0}`"" -f $nativeModel))
+[IO.File]::WriteAllText((Join-Path $accountsRoot 'account1/models_cache.json'),(@{models=@(@{slug=$nativeModel;context_window=200000;effective_context_window_percent=90;visibility='list';priority=1})}|ConvertTo-Json -Depth 5))
+$nativeCompact=Get-DeckNativeAutoCompactConfiguration (Join-Path $accountsRoot 'account1') @() 70
+if($nativeCompact.TokenLimit -ne 54000 -or $nativeCompact.EffectiveContextWindow -ne 180000 -or $nativeCompact.Arguments -notcontains 'model_auto_compact_token_limit=54000' -or $nativeCompact.Arguments -notcontains 'model_auto_compact_token_limit_scope="total"'){throw 'Native auto-compact did not translate 70% free into 30% of the effective model context'}
+$nativeOverride=Get-DeckNativeAutoCompactConfiguration (Join-Path $accountsRoot 'account1') @('-c','model_context_window=100000') 70
+if($nativeOverride.TokenLimit -ne 27000){throw 'Native auto-compact ignored the per-launch context-window override'}
+$conversation=Find-DeckConversationOwner $conversationId
+if($conversation.Account -ne 'account1' -or $conversation.Id -ne $conversationId){throw 'Conversation lookup did not return its owning account'}
+$missingConversationRejected=$false
+try{Find-DeckConversationOwner ([guid]::NewGuid().ToString('D')) | Out-Null}catch{$missingConversationRejected=$true}
+if(-not $missingConversationRejected){throw 'Conversation lookup accepted an unknown ID'}
 $mockLauncher=Join-Path $fixture 'codex.ps1'
 $mockResult=Join-Path $fixture 'codex-arguments.json'
 [IO.File]::WriteAllText($mockLauncher, '[IO.File]::WriteAllText($env:CODEX_DECK_TEST_ARGUMENTS,($args | ConvertTo-Json -Compress)); exit 23', [Text.UTF8Encoding]::new($false))
@@ -88,4 +116,4 @@ $started=[DateTimeOffset]::Now.AddMinutes(-1)
 Write-DeckSessionExit (Join-Path $fixture 'deck') 'account2' 17 $started $true 9 'account7'
 $exitRecord=(Get-Content -LiteralPath (Join-Path $fixture 'deck/session-exits.jsonl') -Raw | ConvertFrom-Json)
 if($exitRecord.Environment -ne 'account2' -or $exitRecord.ActiveAccount -ne 'account7' -or $exitRecord.ExitCode -ne 17 -or -not $exitRecord.ProxyExitedEarly -or $exitRecord.ProxyExitCode -ne 9){throw 'Session exit diagnostics incomplete'}
-Write-Output "PASS: removal, recovery, traversal, quoting, exit diagnostics, missing targets, and plan-aware new-account defaults. Fixture: $fixture"
+Write-Output "PASS: conversation ownership, removal, recovery, traversal, quoting, routing identity, exit diagnostics, missing targets, and plan-aware new-account defaults. Fixture: $fixture"

@@ -66,6 +66,14 @@ $output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -
 if ($LASTEXITCODE -ne 0) { throw 'Direct conversation resume launch failed.' }
 $record=($output | Where-Object { $_ -like '{"Environment":*' }) | ConvertFrom-Json
 if (($record.Arguments -join '|') -notmatch ('resume\|'+[regex]::Escape($resumeId)+'\|'+[regex]::Escape($resumePrompt))) { throw "Resume ID or initial prompt was changed: $($record.Arguments | ConvertTo-Json -Compress)" }
+$locatedResumeId=[guid]::NewGuid().ToString('D')
+$locatedResumeDirectory=Join-Path $fixture 'accounts/account2/sessions/2026/09/21'
+[void][IO.Directory]::CreateDirectory($locatedResumeDirectory)
+[IO.File]::WriteAllText((Join-Path $locatedResumeDirectory "rollout-2026-09-21T00-00-00-$locatedResumeId.jsonl"),'{}')
+$output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -Name resume -Action $locatedResumeId
+if ($LASTEXITCODE -ne 0) { throw 'Conversation owner lookup launch failed.' }
+$record=($output | Where-Object { $_ -like '{"Environment":*' }) | ConvertFrom-Json
+if ($record.Environment -ne (Join-Path $fixture 'accounts/account2') -or ($record.Arguments -join '|') -notmatch ('resume\|'+[regex]::Escape($locatedResumeId))) { throw 'Conversation owner lookup did not resume through its owning codex-auth environment.' }
 $ErrorActionPreference='Continue'
 $output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -Name missing -Resume -ResumeId $resumeId -Direct 2>&1
 $ErrorActionPreference='Stop'
@@ -87,4 +95,4 @@ if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath (Join-Path $fixture 'account
 $output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -Name pool -Action mcp
 if ($LASTEXITCODE -ne 0 -or ($output -join ' ').Contains('model_provider')) { throw 'Pooled MCP administration incorrectly started rotation.' }
 if (@(Get-ChildItem -LiteralPath (Join-Path $fixture 'deck/sessions') -File -ErrorAction SilentlyContinue).Count) { throw 'Launch left connected session markers.' }
-'PASS: real launcher keeps one pooled home across chosen members, needs no owner login, supports administration, and creates isolated accounts.'
+'PASS: real launcher locates conversation owners, keeps one pooled home across chosen members, needs no owner login, supports administration, and creates isolated accounts.'

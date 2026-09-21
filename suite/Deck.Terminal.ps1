@@ -51,7 +51,7 @@ function Get-DeckTerminalHealth($Record) {
     if ($Record.Status -ne 'available') { return 'Unavailable' }
     return 'Ready'
 }
-function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 70, [bool]$CompactAdjusting = $false) {
+function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 70, [bool]$CompactAdjusting = $false, [string]$CompactMode = 'Native') {
     $lines = [Collections.Generic.List[object]]::new()
     function Add-Line([string]$Text, [string]$Color = 'Gray', [string]$Background = 'Black') {
         $lines.Add(@{ Text = (ConvertTo-DeckTerminalText $Text ([Math]::Max(1,$Width - 1))); Color = $Color; Background = $Background })
@@ -102,9 +102,9 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     Add-Line '  WARMUP   U run now  T daily times  W select account  P pause/resume' 'DarkMagenta'
     Add-Line ('  ' + $Notice) 'Yellow'
     if($CompactAdjusting){
-        Add-Line ('  AUTO-COMPACT FREE CONTEXT  [{0}%]   Up/Down 5%   Enter save   Esc cancel' -f $CompactThreshold) 'White' 'DarkBlue'
+        Add-Line ('  AUTO-COMPACT {0} / FREE CONTEXT  [{1}%]   Up/Down 5%   Enter save   Esc cancel' -f $CompactMode.ToUpperInvariant(),$CompactThreshold) 'White' 'DarkBlue'
     }else{
-        Add-Line ('  NAVIGATE Enter launch  / search  B best  Q quit  C compact [{0}] {1}% free (hold C to adjust)' -f $(if($AutoCompact){'x'}else{' '}),$CompactThreshold) 'Gray'
+        Add-Line ('  NAVIGATE Enter launch  / search  B best  Q quit  C compact [{0}] {1} {2}% free (hold C to adjust)' -f $(if($AutoCompact){'x'}else{' '}),$CompactMode,$CompactThreshold) 'Gray'
     }
     Add-Line '  MANAGE   R refresh  A all  H history  F2 rename  L login  N new' 'DarkGray'
     Add-Line '  DISPLAY  D desktop  S settings  G global  I instructions  E memories  K skills  M mask' 'DarkGray'
@@ -225,7 +225,7 @@ function Show-DeckTerminal {
             $width = 110; $height = [Math]::Max(25,$visible.Count + 18)
             if ($interactive) { $width = [Console]::WindowWidth; $height = [Console]::WindowHeight }
             $compactThreshold=if($compactAdjusting){$compactDraft}else{[int]$warmSettings.AutoCompactThresholdPercent}
-            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory $autoCompact $compactThreshold $compactAdjusting)
+            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory $autoCompact $compactThreshold $compactAdjusting $warmSettings.AutoCompactMode)
             if (-not $interactive) { $frame | ForEach-Object { Write-Output $_.Text }; return }
             $signature = "$width/$height/" + (($frame | ForEach-Object { $_.Text + $_.Color + $_.Background }) -join "`n")
             if ($signature -ne $lastFrame) {
@@ -305,7 +305,7 @@ function Show-DeckTerminal {
                         $notice='Adjust the free-context threshold in 5% steps, then press Enter to save.'
                     }else{
                         $autoCompact = -not $autoCompact
-                        $notice = if($autoCompact){'Auto-compact enabled for account and pool launches.'}else{'Auto-compact disabled.'}
+                        $notice = if($autoCompact){'Auto-compact enabled for account and pool launches ('+$warmSettings.AutoCompactMode+').'}else{'Auto-compact disabled.'}
                     }
                 }
                 'R' {

@@ -95,6 +95,28 @@ function Get-AccountDirectories {
     return @(Get-DeckEntryNames (Split-Path -Parent $accountsRoot) | ForEach-Object { Get-Item -LiteralPath (Join-Path $accountsRoot $_) })
 }
 
+function Find-DeckConversationOwner {
+    param([string]$ConversationId)
+
+    $parsedId = [guid]::Empty
+    if (-not [guid]::TryParseExact($ConversationId, 'D', [ref]$parsedId)) {
+        throw 'Resume requires one conversation ID in UUID form.'
+    }
+    $canonicalId = $parsedId.ToString('D')
+    $matches = @(foreach ($directory in Get-AccountDirectories) {
+        $sessions = Join-Path $directory.FullName 'sessions'
+        if (-not (Test-Path -LiteralPath $sessions -PathType Container)) { continue }
+        if (Get-ChildItem -LiteralPath $sessions -Filter ("rollout-*-$canonicalId.jsonl") -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1) {
+            [pscustomobject]@{ Account=$directory.Name; Id=$canonicalId }
+        }
+    })
+    if (-not $matches.Count) { throw "Conversation '$canonicalId' was not found in any codex-auth account or pool." }
+    if ($matches.Count -gt 1) {
+        throw ("Conversation '$canonicalId' exists in multiple codex-auth histories: {0}. Resume it with an explicit account." -f (($matches.Account | Sort-Object) -join ', '))
+    }
+    return $matches[0]
+}
+
 function Normalize-AccountName {
     param([string]$Name)
 
@@ -584,7 +606,7 @@ function Initialize-AccountDirectory {
 }
 
 function Show-Usage {
-    Write-Host "Usage: codex-auth [dashboard|status|accountN|N|list] [codex args...]"
+    Write-Host "Usage: codex-auth [dashboard|status|resume|accountN|N|list] [codex args...]"
     Write-Host "  codex-auth          Interactive account dashboard"
     Write-Host "  codex-auth -a       Open the dashboard and queue checks for every signed-in account"
     Write-Host "  codex-auth status   Cached dashboard snapshot (no network)"
@@ -598,12 +620,13 @@ function Show-Usage {
     Write-Host "  codex-auth -History [filter]   Browse/resume local sessions"
     Write-Host "  codex-auth account1 -Resume   Open this account's conversation list"
     Write-Host "  codex-auth account1 -Resume <conversation-id>   Resume one conversation"
+    Write-Host "  codex-auth resume <conversation-id>   Find its account and resume through Deck"
     Write-Host "  codex-auth -GlobalRules       Edit rules for every account and pool"
     Write-Host "  codex-auth old -RenameTo new  Rename an inactive account"
     Write-Host "  codex-auth -Failover Ordered -FailoverAccounts account1,account2"
     Write-Host "  codex-auth -Failover Best -FailoverAccounts account1,account2"
     Write-Host "  codex-auth account15 -Direct -CodexArgs @('exec',...)  Launch without Deck's local routing proxy"
-    Write-Host "  codex-auth account1 -AutoCompact 50%   Launch with a one-time 50% remaining-context threshold"
+    Write-Host "  codex-auth account1 -AutoCompact 50%   Use the selected Native/Custom mode at 50% context remaining"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  codex-auth account1"
@@ -818,6 +841,99 @@ function Write-DeckSessionExit([string]$DeckRoot, [string]$Environment, [int]$Ex
     }
 }
 
+function Get-DeckSessionRoutingArguments($Proxy, [bool]$Pooled) {
+    if (-not $Proxy) { return @() }
+    # The hosted app-server and its native TUI must use the same provider identity.
+    # Ordinary accounts stay on "openai" so Codex reads their normal resume index;
+    # only login-less pooled environments use the custom deck_failover provider.
+    @(Get-DeckFailoverArguments $Proxy.BaseUrl -NoAccountAuth:$Pooled)
+}
+
+function ConvertFrom-DeckTomlScalar([AllowNull()][string]$Value) {
+    if ($null -eq $Value) { return $null }
+    $trimmed=$Value.Trim()
+    if ($trimmed.Length -ge 2 -and (($trimmed[0] -eq '"' -and $trimmed[$trimmed.Length-1] -eq '"') -or ($trimmed[0] -eq "'" -and $trimmed[$trimmed.Length-1] -eq "'"))) {
+        return $trimmed.Substring(1,$trimmed.Length-2)
+    }
+    return $trimmed
+}
+
+function Get-DeckTomlTopLevelValue([string]$Path, [string]$Name) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    $pattern='^\s*'+[regex]::Escape($Name)+'\s*=\s*(.+?)\s*(?:#.*)?$'
+    foreach($line in [IO.File]::ReadAllLines($Path)){
+        if($line -match '^\s*\['){break}
+        if($line -match $pattern){return ConvertFrom-DeckTomlScalar $Matches[1]}
+    }
+    return $null
+}
+
+function Get-DeckCodexArgumentSetting([string[]]$Arguments, [string]$Name) {
+    $value=$null
+    for($index=0;$index -lt @($Arguments).Count;$index++){
+        $argument=[string]$Arguments[$index]
+        if($Name -eq 'model'){
+            if($argument -in @('-m','--model') -and $index+1 -lt $Arguments.Count){$value=[string]$Arguments[++$index];continue}
+            if($argument -match '^--model=(.+)$'){$value=$Matches[1];continue}
+        }
+        if($argument -in @('-c','--config') -and $index+1 -lt $Arguments.Count){
+            $override=[string]$Arguments[++$index]
+            if($override -match ('^\s*'+[regex]::Escape($Name)+'\s*=\s*(.+?)\s*$')){$value=ConvertFrom-DeckTomlScalar $Matches[1]}
+            continue
+        }
+        if($argument -match '^--config=(.+)$'){
+            $override=$Matches[1]
+            if($override -match ('^\s*'+[regex]::Escape($Name)+'\s*=\s*(.+?)\s*$')){$value=ConvertFrom-DeckTomlScalar $Matches[1]}
+        }
+    }
+    return $value
+}
+
+function Get-DeckNativeAutoCompactConfiguration([string]$AccountDirectory, [string[]]$Arguments, [int]$FreePercent) {
+    if($FreePercent -lt 30 -or $FreePercent -gt 90){throw 'Auto-compact remaining-context threshold must be 30-90%.'}
+    $configPath=Join-Path $AccountDirectory 'config.toml'
+    $model=Get-DeckCodexArgumentSetting $Arguments 'model'
+    if(-not $model){$model=Get-DeckTomlTopLevelValue $configPath 'model'}
+    $windowOverride=Get-DeckCodexArgumentSetting $Arguments 'model_context_window'
+    if(-not $windowOverride){$windowOverride=Get-DeckTomlTopLevelValue $configPath 'model_context_window'}
+
+    $cachePaths=[Collections.Generic.List[string]]::new()
+    foreach($candidate in @((Join-Path $AccountDirectory 'models_cache.json'),(Join-Path $HOME '.codex/models_cache.json'))){
+        if($candidate -and -not $cachePaths.Contains($candidate)){$cachePaths.Add($candidate)}
+    }
+    if(Test-Path -LiteralPath $accountsRoot -PathType Container){
+        foreach($directory in Get-AccountDirectories){
+            $candidate=Join-Path $directory.FullName 'models_cache.json'
+            if(-not $cachePaths.Contains($candidate)){$cachePaths.Add($candidate)}
+        }
+    }
+    $metadata=$null
+    foreach($cachePath in $cachePaths){
+        if(-not (Test-Path -LiteralPath $cachePath -PathType Leaf)){continue}
+        try{$models=@(([IO.File]::ReadAllText($cachePath)|ConvertFrom-Json).models)}catch{continue}
+        if(-not $model){
+            $default=@($models | Where-Object visibility -eq 'list' | Sort-Object priority | Select-Object -First 1)
+            if($default.Count){$model=[string]$default[0].slug}
+        }
+        $metadata=@($models | Where-Object slug -eq $model | Select-Object -First 1)
+        if($metadata.Count){$metadata=$metadata[0];break}
+        $metadata=$null
+    }
+    $contextWindow=0L
+    if($windowOverride){
+        if(-not [long]::TryParse([string]$windowOverride,[ref]$contextWindow) -or $contextWindow -le 0){throw "Invalid model_context_window for native auto-compact: $windowOverride"}
+    }elseif($metadata -and $metadata.context_window){$contextWindow=[long]$metadata.context_window}
+    if($contextWindow -le 0){throw "Cannot determine the context window for model '$model'. Launch it once to refresh models_cache.json, or set model_context_window."}
+    $effectivePercent=if($metadata -and $metadata.effective_context_window_percent){[int]$metadata.effective_context_window_percent}else{100}
+    $effectiveWindow=[long][Math]::Floor($contextWindow*($effectivePercent/100.0))
+    $tokenLimit=[long][Math]::Floor($effectiveWindow*((100-$FreePercent)/100.0))
+    if($tokenLimit -le 0){throw 'Native auto-compact token threshold resolved to zero.'}
+    return [pscustomobject]@{
+        Mode='Native'; Model=$model; ContextWindow=$contextWindow; EffectiveContextWindow=$effectiveWindow; TokenLimit=$tokenLimit; FreePercent=$FreePercent
+        Arguments=@('-c',("model_auto_compact_token_limit={0}" -f $tokenLimit),'-c','model_auto_compact_token_limit_scope="total"')
+    }
+}
+
 $runtimeRoot = Split-Path -Parent $accountsRoot
 $environmentModule = Join-Path $runtimeRoot 'Deck.Environments.ps1'
 if (-not (Test-Path -LiteralPath $environmentModule)) { $environmentModule = Join-Path $PSScriptRoot '../suite/Deck.Environments.ps1' }
@@ -833,6 +949,14 @@ if($AutoCompact -and $CodexArgs -and [string]$CodexArgs[0] -match '^([0-9]+)%$')
     $autoCompactThresholdOverride=[int]$Matches[1]
     if($autoCompactThresholdOverride -lt 30 -or $autoCompactThresholdOverride -gt 90){throw 'Auto-compact remaining-context threshold must be 30-90%.'}
     $CodexArgs=if($CodexArgs.Count -gt 1){@($CodexArgs[1..($CodexArgs.Count-1)])}else{@()}
+}
+if($Account -ieq 'resume'){
+    if($Resume -or -not $CodexArgs -or $CodexArgs.Count -ne 1){throw 'Use codex-auth resume <conversation-id>.'}
+    $conversation=Find-DeckConversationOwner ([string]$CodexArgs[0])
+    $Account=$conversation.Account
+    $CodexArgs=@($conversation.Id)
+    $Resume=$true
+    Write-Host ("Conversation {0} found in {1}." -f $conversation.Id,$conversation.Account)
 }
 if($ResumePromptEnvironment){
     if(-not $Resume -or $ResumePromptEnvironment -notmatch '^CODEX_DECK_SCHEDULED_PROMPT_[A-F0-9]{32}$'){throw 'Invalid scheduled resume prompt source.'}
@@ -1040,8 +1164,22 @@ $failoverProxy = $null
 $failoverSessions = @()
 $codexExitCode = -1
 $codexStartedAt = [DateTimeOffset]::Now
+$deckCustomAutoCompact=$false
+$nativeAutoCompactArgs=@()
+$compactSettings=$null
+$threshold=$null
+if($AutoCompact){
+    $compactSettings=Get-DeckSettings (Join-Path $runtimeRoot 'deck')
+    $threshold=if($null -ne $autoCompactThresholdOverride){$autoCompactThresholdOverride}else{$compactSettings.AutoCompactThresholdPercent}
+    $deckCustomAutoCompact=$compactSettings.AutoCompactMode -eq 'Custom'
+    if(-not $deckCustomAutoCompact){
+        $nativeCompact=Get-DeckNativeAutoCompactConfiguration $accountDir $CodexArgs $threshold
+        $nativeAutoCompactArgs=@($nativeCompact.Arguments)
+        Write-Host ("Codex native auto-compact ON at {0}% free ({1}% used): {2} tokens for {3}." -f $threshold,(100-$threshold),$nativeCompact.TokenLimit,$nativeCompact.Model)
+    }
+}
 try {
-    if ($AutoCompact) {
+    if ($deckCustomAutoCompact) {
         $clientPath = Join-Path $runtimeRoot 'Deck.AutoCompact.cjs'
         if (-not (Test-Path -LiteralPath $clientPath -PathType Leaf)) { throw 'Deck.AutoCompact.cjs is missing. Reinstall Codex Deck.' }
         $codexCommand = Get-Command codex -ErrorAction Stop | Select-Object -First 1
@@ -1052,8 +1190,6 @@ try {
             if (-not (Test-Path -LiteralPath $codexEntry -PathType Leaf)) { throw 'Auto-compact requires the native Codex executable or official npm installation on PATH.' }
             $codexExecutable = (Get-Command node.exe -ErrorAction Stop).Source
         }
-        $compactSettings = Get-DeckSettings (Join-Path $runtimeRoot 'deck')
-        $threshold = if($null -ne $autoCompactThresholdOverride){$autoCompactThresholdOverride}else{$compactSettings.AutoCompactThresholdPercent}
         $handoffEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$compactSettings.AutoCompactHandoffPrompt))
         $clientArgs = @($clientPath,'--codex-exe',$codexExecutable,'--threshold',[string]$threshold,'--cwd',(Get-Location).Path,'--handoff-base64',$handoffEncoded)
         if ($codexEntry) { $clientArgs += @('--codex-entry',$codexEntry) }
@@ -1072,7 +1208,7 @@ try {
             $env:CODEX_DECK_SESSION_URL = $failoverProxy.BaseUrl
         }
         $postConfigArgs = @($globalRuleArgs)
-        if ($failoverProxy) { $postConfigArgs += @(Get-DeckFailoverArguments $failoverProxy.BaseUrl -NoAccountAuth) }
+        if ($failoverProxy) { $postConfigArgs += @(Get-DeckSessionRoutingArguments $failoverProxy ([bool]$poolEntry)) }
         if ($postConfigArgs.Count) {
             $postConfigJson = ConvertTo-Json -InputObject ([object[]]$postConfigArgs) -Compress -Depth 10
             $clientArgs += @('--post-config-base64',[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($postConfigJson)))
@@ -1108,7 +1244,7 @@ try {
                 }
                 $remoteUrl = $Matches[1]
                 $launchArgs = @($sharedArgs) + @($CodexArgs) + @($globalRuleArgs)
-                if ($failoverProxy) { $launchArgs += @(Get-DeckFailoverArguments $failoverProxy.BaseUrl -NoAccountAuth:([bool]$poolEntry)) }
+                if ($failoverProxy) { $launchArgs += @(Get-DeckSessionRoutingArguments $failoverProxy ([bool]$poolEntry)) }
                 $launchArgs += @('--remote',$remoteUrl)
                 Invoke-DeckCodex $launchArgs
                 $codexExitCode = $LASTEXITCODE
@@ -1132,11 +1268,11 @@ try {
             }
         }
         $env:CODEX_DECK_SESSION_URL = $failoverProxy.BaseUrl
-        $launchArgs = @($sharedArgs) + @($CodexArgs) + @($globalRuleArgs) + @(Get-DeckFailoverArguments $failoverProxy.BaseUrl -NoAccountAuth:([bool]$poolEntry))
+        $launchArgs = @($sharedArgs) + @($nativeAutoCompactArgs) + @($CodexArgs) + @($globalRuleArgs) + @(Get-DeckSessionRoutingArguments $failoverProxy ([bool]$poolEntry))
         Invoke-DeckCodex $launchArgs
         $codexExitCode = $LASTEXITCODE
     } else {
-        $launchArgs=@($sharedArgs)+@($CodexArgs)+@($globalRuleArgs)
+        $launchArgs=@($sharedArgs)+@($nativeAutoCompactArgs)+@($CodexArgs)+@($globalRuleArgs)
         Invoke-DeckCodex $launchArgs
         $codexExitCode = $LASTEXITCODE
     }

@@ -48,6 +48,40 @@ function quotaRejected(status, body) {
     return kinds.includes(e?.type) || kinds.includes(e?.code);
   } catch { return false; }
 }
+function quotaRetryAt(incoming, body, row, now = Date.now()) {
+  const future = value => {
+    if (typeof value === 'string' && /^\d+(\.\d+)?$/.test(value.trim())) value = Number(value);
+    const parsed = typeof value === 'number' && Number.isFinite(value)
+      ? (value > 1e12 ? value : value * 1000)
+      : Date.parse(value);
+    return Number.isFinite(parsed) && parsed > now ? parsed + 1000 : null;
+  };
+  const retryAfter = Array.isArray(incoming?.headers?.['retry-after']) ? incoming.headers['retry-after'][0] : incoming?.headers?.['retry-after'];
+  if (retryAfter != null) {
+    const seconds = Number(retryAfter), parsed = Number.isFinite(seconds) ? now + Math.max(1, seconds) * 1000 : future(retryAfter);
+    if (parsed > now) return parsed;
+  }
+  try {
+    const candidates = [];
+    const visit = value => {
+      if (!value || typeof value !== 'object') return;
+      for (const [key, child] of Object.entries(value)) {
+        if (['resets_at','reset_at','retry_at'].includes(key.toLowerCase())) {
+          const parsed = future(child); if (parsed) candidates.push(parsed);
+        }
+        if (child && typeof child === 'object') visit(child);
+      }
+    };
+    visit(JSON.parse(body));
+    if (candidates.length) return Math.min(...candidates);
+  } catch { /* a recognized quota body need not include reset metadata */ }
+  const windows = Array.isArray(row?.Windows) ? row.Windows : [];
+  const cached = windows.filter(window => window?.Dead || (window?.RemainingPct != null && +window.RemainingPct <= 0))
+    .map(window => future(window.ResetsAtUnix)).filter(Boolean);
+  // When the service omits reset metadata, periodically allow one fresh probe.
+  // This prevents an open terminal from retaining a stale local 429 forever.
+  return cached.length ? Math.min(...cached) : now + 60000;
+}
 function accountBound(value) {
   if (!value || typeof value !== 'object') return false;
   // Encrypted reasoning and compaction items are the stateless, portable form
@@ -89,9 +123,25 @@ async function createProxy(config, dependencies = {}) {
   const report = dependencies.report || (() => {});
   // Production never accepts an upstream address from configuration or a request.
   const upstream = dependencies.upstream || 'https://chatgpt.com/backend-api/codex';
+  const now = dependencies.now || Date.now;
   const excluded = new Set();
-  const choices = () => (config.mode === 'Best' ? rank(pool, getRows()) : pool).filter(n => !excluded.has(n));
-  let current = config.owner || choices()[0];
+  const retryAt = new Map();
+  const resetProbes = new Set();
+  const refreshExcluded = () => {
+    const timestamp = now();
+    for (const name of excluded) if ((retryAt.get(name) || 0) <= timestamp) {
+      excluded.delete(name); retryAt.delete(name); resetProbes.add(name);
+    }
+  };
+  const rowFor = (rows, name) => rows[name] || Object.entries(rows).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+  const choices = (freshOnly = false) => {
+    refreshExcluded();
+    const usable = pool.filter(name => !excluded.has(name));
+    if (config.mode !== 'Best') return usable;
+    const ranked = rank(usable, getRows(), now());
+    return freshOnly ? ranked : [...ranked, ...usable.filter(name => resetProbes.has(name) && !ranked.includes(name))];
+  };
+  let current = config.owner || choices(true)[0];
   if (config.owner && !pool.includes(config.owner)) throw Error('Starting account is not in the pool.');
   if (!current) throw Error('No fresh usable pool account. Refresh usage first.');
   // Automatic pools are validated up front. Manual-only sessions validate the
@@ -102,12 +152,15 @@ async function createProxy(config, dependencies = {}) {
   let activeRequests = 0;
   let lastRequestAccount = null;
   let lastRequestRoute = null;
-  const status = () => ({
+  const status = () => {
+    refreshExcluded();
+    return ({
     version: 1,
     environment: { name:config.environment || null, pooled:environmentPool.length > 0, accounts:environmentPool },
     failover: { automatic, mode:config.mode, accounts:pool, active:current, unavailable:[...excluded], lastRequestAccount, lastRequestRoute },
     busy: activeRequests > 0
-  });
+    });
+  };
   const server = http.createServer(async (req, res) => {
     // A capability URL, exact Host and no browser Origin prevent unauthenticated LAN/browser access.
     if (req.headers.host !== `127.0.0.1:${server.address().port}` || req.headers.origin || !req.url.startsWith('/' + secret + '/')) return reply(res, 403, 'Forbidden.');
@@ -126,6 +179,8 @@ async function createProxy(config, dependencies = {}) {
         // its usage window reset). The next model request is the fresh probe;
         // another quota 429 will simply exclude it again.
         excluded.delete(selected);
+        retryAt.delete(selected);
+        resetProbes.add(selected);
         if (selected !== current) { current = selected; report(current); }
         return replyJson(res, status());
       } catch { return reply(res, 400, 'Expected a small JSON account request.'); }
@@ -159,7 +214,12 @@ async function createProxy(config, dependencies = {}) {
       // be retried without duplicating an accepted response.
       let attempts = 0, maxAttempts = conversation && automatic ? pool.length : 1;
       while (!res.destroyed && attempts++ < maxAttempts) {
-        if (excluded.has(current)) return reply(res, 429, 'Selected account quota is exhausted. Start a new session after refreshing usage.');
+        refreshExcluded();
+        if (excluded.has(current)) {
+          const next = automatic ? choices()[0] : null;
+          if (next) { current = next; report(current); }
+          else return reply(res, 429, 'Selected account quota is exhausted until its reset. Retry later or choose another account.');
+        }
         const used = current, auth = getCredentials(used);
         lastRequestAccount = used;
         lastRequestRoute = routePath;
@@ -190,6 +250,9 @@ async function createProxy(config, dependencies = {}) {
           const rejected = await collect(incoming, 1024 * 1024);
           if (quotaRejected(429, rejected)) {
             excluded.add(used);
+            resetProbes.delete(used);
+            const rows = getRows();
+            retryAt.set(used, quotaRetryAt(incoming, rejected, rowFor(rows, used), now()));
             // A manual selection may arrive while this accepted response is
             // streaming (for example from the Pool skill's local tool call).
             // Preserve it for the next request unless that same account failed.
@@ -199,6 +262,7 @@ async function createProxy(config, dependencies = {}) {
           }
           res.writeHead(429, { 'content-type':'application/json', 'cache-control':'no-store' }); res.end(rejected); return;
         }
+        resetProbes.delete(used);
         const responseHeaders = { 'cache-control':'no-store' };
         const blockedResponseHeaders = new Set(['connection','proxy-connection','transfer-encoding','upgrade','set-cookie']);
         for (const [name,value] of Object.entries(incoming.headers)) if (!blockedResponseHeaders.has(name) && name !== 'cache-control' && value != null) responseHeaders[name] = value;
@@ -217,7 +281,7 @@ async function createProxy(config, dependencies = {}) {
   await new Promise((resolve,reject) => { server.once('error',reject); server.listen(0, '127.0.0.1', resolve); });
   return { server, baseUrl:`http://127.0.0.1:${server.address().port}/${secret}`, account:current };
 }
-module.exports = { createProxy, rank, quotaRejected, accountBound, credentials };
+module.exports = { createProxy, rank, quotaRejected, quotaRetryAt, accountBound, credentials };
 if (require.main === module) {
   if (Number(process.versions.node.split('.')[0]) < 18) { process.stderr.write('Deck failover requires Node.js 18 or newer.\n'); process.exit(1); }
   // Private inherited stdin supplies startup configuration and acts as a parent-lifetime pipe.
