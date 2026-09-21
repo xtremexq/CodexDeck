@@ -153,8 +153,8 @@ function Invoke-DeckDelayedMessageJob([string]$SuiteRoot,[string]$JobId) {
     $path=Join-Path (Get-DeckMessageJobDirectory $SuiteRoot delayed) ($JobId+'.json')
     try{
         $job=Read-DeckMessageJob $path delayed $JobId
-        $due=[DateTimeOffset]::Parse([string]$job.DueAtUtc)
-        $expires=[DateTimeOffset]::Parse([string]$job.ExpiresAtUtc)
+        $due=[DateTimeOffset]::Parse([string]$job.DueAtUtc,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind)
+        $expires=[DateTimeOffset]::Parse([string]$job.ExpiresAtUtc,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind)
         while([DateTimeOffset]::UtcNow -lt $due.ToUniversalTime()){
             $remaining=$due.ToUniversalTime()-[DateTimeOffset]::UtcNow
             $milliseconds=[Math]::Max(1,[Math]::Min(3600000,[int][Math]::Ceiling($remaining.TotalMilliseconds)))
@@ -207,7 +207,7 @@ function Invoke-DeckScheduledMessageJob([string]$SuiteRoot,[string]$JobId) {
     try{
         $job=Read-DeckMessageJob $claimed scheduled $JobId
         Unregister-ScheduledTask -TaskName ([string]$job.TaskName) -Confirm:$false -ErrorAction SilentlyContinue
-        $expires=[DateTimeOffset]::Parse([string]$job.ExpiresAtUtc)
+        $expires=[DateTimeOffset]::Parse([string]$job.ExpiresAtUtc,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind)
         if([DateTimeOffset]::UtcNow -gt $expires.ToUniversalTime()){throw 'This scheduled message expired before Windows could run it.'}
         $accountDir=Get-Item -LiteralPath ([string]$job.CodexHome) -ErrorAction Stop
         if(-not $accountDir.PSIsContainer -or $accountDir.Name -ne $job.OwnerAccount -or $accountDir.Parent.Name -ne 'accounts'){throw 'The scheduled message owner no longer matches its account directory.'}

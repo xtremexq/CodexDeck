@@ -93,7 +93,7 @@ The installer adds command wrappers to your user PATH and preserves existing acc
 | **Esc** | Clear the search, or quit when no search is active |
 | **Q** | Quit the dashboard |
 
-Cached usage appears immediately and opening the dashboard performs no account checks. Press **R** to refresh the selected signed-in account or **A** to queue all signed-in accounts, with up to three checks running at once. Checks stay in the background and do not block navigation. Opening the dashboard also does not send a warm-up prompt.
+Cached usage appears immediately and opening the dashboard performs no account checks. Press **R** to refresh the selected signed-in account or **A** to queue all signed-in accounts, with up to three checks running at once. Run `codex-auth -a` to open the dashboard and queue that same all-account refresh immediately; `-a` is only accepted with the otherwise plain command. Checks stay in the background and do not block navigation. Opening the dashboard also does not send a warm-up prompt.
 
 **Bars show quota remaining.** Primary is the five-hour window, or another plan-specific window such as a free account's longer allowance. Weekly is shown separately when available. `?` means the value is unknown; it does not mean zero. Reset timestamps use your local time. **Reset passed** means the displayed value needs a fresh check.
 
@@ -133,6 +133,7 @@ In the terminal dashboard, **W** toggles the selected account and **P** pauses o
 
 ```powershell
 codex-auth                       # Interactive terminal dashboard
+codex-auth -a                    # Open dashboard and check all signed-in accounts
 codex-auth status                # Cached snapshot; no network
 codex-auth list                  # List local profiles
 codex-auth account1              # Launch an account

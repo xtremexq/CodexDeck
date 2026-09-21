@@ -15,6 +15,7 @@ class AutoCompactController {
     this.handoffRequest=handoffRequest;
     this.threadId=null; this.activeTurnId=null; this.phase='normal'; this.armed=true;
     this.handoff=''; this.checkpointTurnId=null; this.compactionTurnId=null;
+    this.checkpointInterrupted=false;
     this.compactionItemDone=false; this.compactionTurnDone=false; this.usagePercent=null;
     this.queue=[]; this.once=false; this.done=false; this.failed=false;
   }
@@ -35,7 +36,7 @@ class AutoCompactController {
     this.usagePercent=Math.round(exactPercent);
     if(!this.armed && exactPercent < usedLimit*0.8) this.armed=true;
     if(this.phase!=='normal' || !this.armed || exactPercent < usedLimit) return;
-    this.armed=false; this.phase='checkpoint'; this.handoff='';
+    this.armed=false; this.phase='checkpoint'; this.handoff=''; this.checkpointInterrupted=false;
     this.report(`Context ${this.usagePercent}% used / ${100-this.usagePercent}% free (limit ${this.threshold}% free): requesting task-state handoff.`);
     if(this.activeTurnId && event.turnId===this.activeTurnId) {
       try {
@@ -57,12 +58,20 @@ class AutoCompactController {
     this.report(message);
     if(this.once) { this.failed=true; this.done=true; }
   }
-  onItem(event) {
+  async onItem(event) {
     const item=event.item || {};
-    if(this.phase==='checkpoint' && event.turnId===this.checkpointTurnId && item.type==='agentMessage' && item.phase==='final_answer') this.handoff=item.text || '';
+    if(this.phase==='checkpoint' && event.turnId===this.checkpointTurnId && item.type==='agentMessage' && (item.text || '').trimStart().startsWith(HANDOFF)) {
+      this.handoff=item.text;
+      if(item.phase!=='final_answer' && !this.checkpointInterrupted) {
+        this.checkpointInterrupted=true;
+        this.report('Handoff captured. Stopping the active turn before compaction.');
+        try { await this.rpc('turn/interrupt',{threadId:this.threadId,turnId:this.checkpointTurnId}); }
+        catch(error) { this.report(`The handoff turn ended while it was being stopped: ${error.message}`); }
+      }
+    }
     if(this.phase==='compacting' && item.type==='contextCompaction') {
       this.compactionTurnId=event.turnId; this.compactionItemDone=true;
-      this.finishCompactionIfReady();
+      await this.finishCompactionIfReady();
     }
   }
   async onTurnCompleted(event) {
@@ -78,9 +87,10 @@ class AutoCompactController {
     if(this.phase==='checkpoint') {
       if(!this.checkpointTurnId) { await this.startCheckpoint(); return; }
       if(turn.id!==this.checkpointTurnId) return;
-      const fallback=(turn.items || []).filter(item=>item.type==='agentMessage' && item.phase==='final_answer').at(-1);
+      const fallback=(turn.items || []).filter(item=>item.type==='agentMessage' && (item.text || '').trimStart().startsWith(HANDOFF)).at(-1);
       if(!this.handoff) this.handoff=fallback?.text || '';
-      if(turn.status!=='completed' || !this.handoff.trim().startsWith(HANDOFF)) {
+      const handoffTurnFinished=turn.status==='completed' || (this.checkpointInterrupted && turn.status==='interrupted');
+      if(!handoffTurnFinished || !this.handoff.trimStart().startsWith(HANDOFF)) {
         this.phase='normal'; this.failCycle('Handoff was missing or incomplete; compaction skipped to preserve the task.');
         await this.drain(); return;
       }
@@ -101,7 +111,7 @@ class AutoCompactController {
     this.report('Compaction completed. Replaying the quoted handoff and continuing.');
     try {
       const result=await this.rpc('turn/start',{threadId:this.threadId,input:textInput(replayPrompt(this.handoff))});
-      this.activeTurnId=result.turn.id; this.phase='normal'; this.checkpointTurnId=null; this.handoff='';
+      this.activeTurnId=result.turn.id; this.phase='normal'; this.checkpointTurnId=null; this.checkpointInterrupted=false; this.handoff='';
     } catch(error) { this.phase='normal'; this.failCycle(`Replay failed; handoff remains visible above: ${error.message}`); await this.drain(); }
   }
   async drain() {
@@ -232,6 +242,7 @@ async function main() {
   const controller=new AutoCompactController(rpc,options.threshold,report,options.handoffRequest); controller.once=options.once;
   const input=readline.createInterface({input:process.stdin,output:process.stdout,terminal:process.stdin.isTTY});
   let approval=null; let multiline=null; let lastFinalMessage=''; let intentionalShutdown=false; const streamed=new Set();
+  let controllerEvents=Promise.resolve();
   function finishOneShot() {
     if(!controller.done || intentionalShutdown) return;
     if(options.outputLastMessage && !controller.failed) {
@@ -241,6 +252,12 @@ async function main() {
     if(controller.failed) process.exitCode=1;
     else report('One-shot task completed successfully.');
     intentionalShutdown=true; child.kill(); input.close();
+  }
+  function queueControllerEvent(label, callback, fatal=false) {
+    controllerEvents=controllerEvents.then(callback).then(finishOneShot).catch(error=>{
+      if(fatal) process.exitCode=1;
+      report(`${label}: ${error.message}`);
+    });
   }
   function prompt() { if(!options.once) input.setPrompt(multiline?'...> ':'you> '), input.prompt(); }
   input.on('line',line=>{
@@ -288,14 +305,14 @@ async function main() {
       return;
     }
     const p=message.params || {};
-    if(message.method==='thread/tokenUsage/updated') controller.onUsage(p).then(finishOneShot).catch(error=>report(`Usage handler: ${error.message}`));
+    if(message.method==='thread/tokenUsage/updated') queueControllerEvent('Usage handler',()=>controller.onUsage(p));
     else if(message.method==='item/agentMessage/delta') { streamed.add(p.itemId); process.stdout.write(p.delta || ''); }
     else if(message.method==='item/completed') {
-      controller.onItem(p);
+      queueControllerEvent('Item handler',()=>controller.onItem(p));
       if(p.item?.type==='agentMessage') { if(p.item.phase==='final_answer') lastFinalMessage=p.item.text || ''; if(!streamed.has(p.item.id)) process.stdout.write(`\n${p.item.text || ''}`); process.stdout.write('\n'); streamed.delete(p.item.id); }
       else if(p.item?.type==='commandExecution') report(`Command exited ${p.item.exitCode ?? p.item.status}: ${p.item.command || ''}`);
       else if(p.item?.type==='fileChange') report(`File change: ${p.item.status}.`);
-    } else if(message.method==='turn/completed') controller.onTurnCompleted(p).then(finishOneShot).catch(error=>{process.exitCode=1;report(`Turn handler: ${error.message}`);});
+    } else if(message.method==='turn/completed') queueControllerEvent('Turn handler',()=>controller.onTurnCompleted(p),true);
     else if(message.method==='error') report(`Codex error: ${p.error?.message || p.message || 'unknown'}`);
   });
   child.on('exit',(code,signal)=>{for(const pending of waiting.values()){clearTimeout(pending.timer);pending.reject(Error('Codex app-server exited'));}waiting.clear(); input.close(); if(code || (signal && !intentionalShutdown))process.exitCode=code || 1;});

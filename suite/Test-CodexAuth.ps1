@@ -4,6 +4,11 @@ if (-not (Test-Path -LiteralPath $sourcePath)) { $sourcePath=Join-Path $PSScript
 $tokens=$null; $errors=$null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($sourcePath, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors -join '; ') }
+$sourceText=[IO.File]::ReadAllText($sourcePath)
+$checkAllParameter=$ast.ParamBlock.Parameters | Where-Object {$_.Name.VariablePath.UserPath -eq 'CheckAll'} | Select-Object -First 1
+if(-not $checkAllParameter -or $checkAllParameter.Extent.Text -notmatch "Alias\('a'\)" -or $sourceText -notmatch 'Show-DeckTerminal[^\r\n]+-CheckAll:\$CheckAll'){throw 'codex-auth -a is not wired to the dashboard all-check action'}
+$invalidCheckAll=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sourcePath -a status 2>&1
+if($LASTEXITCODE -eq 0 -or ($invalidCheckAll -join "`n") -notmatch 'only works with the plain codex-auth dashboard command'){throw 'codex-auth -a accepted a non-plain command'}
 foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Normalize-AccountName','Ensure-FreeAccountDefaults','Read-TextFile','Write-TextFile','Normalize-Newlines','ConvertTo-DeckWindowsArgument','Invoke-DeckCodex','Write-DeckSessionExit') {
     $definition=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $true)
     . ([scriptblock]::Create($definition.Extent.Text))

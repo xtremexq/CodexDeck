@@ -24,6 +24,8 @@ param(
     [string[]]$FailoverAccounts,
     [switch]$Direct,
     [switch]$AutoCompact,
+    [Alias('a')]
+    [switch]$CheckAll,
 
     [Alias('Delete')]
     [switch]$Del,
@@ -584,6 +586,7 @@ function Initialize-AccountDirectory {
 function Show-Usage {
     Write-Host "Usage: codex-auth [dashboard|status|accountN|N|list] [codex args...]"
     Write-Host "  codex-auth          Interactive account dashboard"
+    Write-Host "  codex-auth -a       Open the dashboard and queue checks for every signed-in account"
     Write-Host "  codex-auth status   Cached dashboard snapshot (no network)"
     Write-Host "  codex-auth -Best    Launch the recommended fresh account"
     Write-Host "  codex-auth pool -Pool -PoolAccounts '*'  Configure the pooled environment"
@@ -822,6 +825,9 @@ if (-not (Test-Path -LiteralPath $environmentModule)) { $environmentModule = Joi
 $bundledSkillsModule = Join-Path $runtimeRoot 'Deck.BundledSkills.ps1'
 if (-not (Test-Path -LiteralPath $bundledSkillsModule)) { $bundledSkillsModule = Join-Path $PSScriptRoot '../suite/Deck.BundledSkills.ps1' }
 if (Test-Path -LiteralPath $bundledSkillsModule) { . $bundledSkillsModule }
+if($CheckAll -and @($PSBoundParameters.Keys | Where-Object {$_ -ne 'CheckAll'}).Count){
+    throw '-a only works with the plain codex-auth dashboard command.'
+}
 $autoCompactThresholdOverride=$null
 if($AutoCompact -and $CodexArgs -and [string]$CodexArgs[0] -match '^([0-9]+)%$'){
     $autoCompactThresholdOverride=[int]$Matches[1]
@@ -927,7 +933,7 @@ if ([string]::IsNullOrWhiteSpace($Account) -or $Account -in @('dashboard', 'stat
     # Runtime data always belongs to the installed accounts root.
     $runtimeRoot = Split-Path -Parent $accountsRoot
     if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'Deck.Core.ps1'))) { throw 'Codex Deck core missing. Run Install-CodexDeck.ps1 first.' }
-    Show-DeckTerminal -SuiteRoot $runtimeRoot -AuthScript $PSCommandPath -Snapshot:($Account -eq 'status')
+    Show-DeckTerminal -SuiteRoot $runtimeRoot -AuthScript $PSCommandPath -Snapshot:($Account -eq 'status') -CheckAll:$CheckAll
     exit 0
 }
 

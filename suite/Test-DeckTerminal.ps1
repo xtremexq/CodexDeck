@@ -40,6 +40,12 @@ $instructionsPath=Get-DeckAccountInstructionsPath $fixture account1
 Assert ($instructionsPath -eq (Join-Path $fixture 'accounts/account1/AGENTS.md')) 'Account instructions path incorrect'
 $skillsPath=Get-DeckSkillsDirectory $fixture account1 -Create
 Assert ((Test-Path -LiteralPath $skillsPath -PathType Container) -and $skillsPath -eq (Join-Path $fixture 'accounts/account1/skills')) 'Skills directory path incorrect'
+[IO.File]::WriteAllText((Join-Path $fixture 'accounts/account1/auth.json'),'{}',[Text.UTF8Encoding]::new($false))
+$checkQueue=[Collections.Generic.Queue[string]]::new()
+$checkProfiles=@{account1=@{PlanType='plus'};pool=@{PlanType='pool'}}
+$queued=Add-DeckTerminalCheckQueue @('account1','pool') $checkProfiles @{} $checkQueue (Join-Path $fixture 'accounts')
+Assert ($queued -eq 1 -and $checkQueue.Count -eq 1 -and $checkQueue.Peek() -eq 'account1') 'Dashboard all-check did not queue exactly the signed-in accounts'
+Assert ((Add-DeckTerminalCheckQueue @('account1') $checkProfiles @{} $checkQueue (Join-Path $fixture 'accounts')) -eq 0) 'Dashboard all-check queued a duplicate account'
 Assert ((Get-DeckMemoryPath $memoryRoot 'project/notes.md').StartsWith($memoryRoot,[StringComparison]::OrdinalIgnoreCase)) 'Nested memory path was not accepted'
 foreach($unsafeMemory in @('../outside.md','C:\outside.md','notes.exe','con.md')){
     $rejected=$false;try{[void](Get-DeckMemoryPath $memoryRoot $unsafeMemory)}catch{$rejected=$true}
@@ -56,6 +62,7 @@ $dashboard=$terminalAst.Find({param($node)$node -is [Management.Automation.Langu
 Assert ($dashboard -notmatch '\$attempted|TotalMinutes\s+-lt\s+5') 'Opening the terminal dashboard still schedules automatic usage checks'
 Assert ($dashboard -match 'Auto-compact enabled for account and pool launches') 'Dashboard does not advertise pool auto-compact support'
 Assert ($dashboard -notmatch 'Auto-compact needs an individual account') 'Dashboard still blocks pool auto-compact launches'
+Assert ($dashboard -match '\$queueAll=\$CheckAll\.IsPresent' -and $dashboard -match 'Add-DeckTerminalCheckQueue') 'Dashboard -a startup does not reuse the A shortcut queue'
 $snapshot = @(Show-DeckTerminal -SuiteRoot $fixture -AuthScript 'unused' -Snapshot)
 Assert (($snapshot -join "`n") -match 'CODEX / DECK') 'Snapshot did not render'
 'PASS: terminal quota, sanitization, cache merge, paging, masking, empty state and snapshot.'

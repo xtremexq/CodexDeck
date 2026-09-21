@@ -144,8 +144,17 @@ public static class CodexDeckNativeKeyboard {
         return $true
     }catch{return $false}
 }
+function Add-DeckTerminalCheckQueue([string[]]$Names,$Profiles,$Tasks,[Collections.Generic.Queue[string]]$Pending,[string]$AccountRoot) {
+    $queued=0
+    foreach($item in $Names){
+        if($Profiles[$item].PlanType -eq 'pool' -or -not (Test-Path -LiteralPath (Join-Path $AccountRoot "$item/auth.json"))){continue}
+        if(-not $Tasks.ContainsKey($item) -and -not $Pending.Contains($item)){$Pending.Enqueue($item);$queued++}
+    }
+    return $queued
+}
+
 function Show-DeckTerminal {
-    param([string]$SuiteRoot, [string]$AuthScript, [switch]$Snapshot)
+    param([string]$SuiteRoot, [string]$AuthScript, [switch]$Snapshot, [switch]$CheckAll)
     . (Join-Path $SuiteRoot 'Deck.Core.ps1')
     $root = Join-Path $SuiteRoot 'deck'
     $accountRoot = Join-Path $SuiteRoot 'accounts'
@@ -154,6 +163,7 @@ function Show-DeckTerminal {
     $profiles = @{}; $tasks = @{}; $pending = [Collections.Generic.Queue[string]]::new()
     $names=@(); $sessions=@(); $warmHistory=@{}; $stateRefreshAt=[DateTimeOffset]::MinValue
     $selected = 0; $filter = ''; $notice = 'Ready. Cached usage is shown; press R or A for fresh checks.'; $mask = $true; $autoCompact = $false
+    $queueAll=$CheckAll.IsPresent
     $compactAdjusting=$false; $compactDraft=[int]$warmSettings.AutoCompactThresholdPercent
     $interactive = -not $Snapshot -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
     if (-not $interactive) { $notice = 'Cached snapshot. Run codex-auth in a terminal for live checks and actions.' }
@@ -176,6 +186,11 @@ function Show-DeckTerminal {
                 foreach ($name in $names) {if (-not $profiles.ContainsKey($name)) { $profiles[$name] = Get-DeckProfile $SuiteRoot $name }}
                 $sessions=@(Get-DeckSessions $root)
                 $stateRefreshAt=$loopNow.AddSeconds(2)
+            }
+            if($interactive -and $queueAll){
+                $queued=Add-DeckTerminalCheckQueue $names $profiles $tasks $pending $accountRoot
+                $notice=if($queued){"Queued $queued signed-in accounts (three checks at a time)."}else{'No additional signed-in accounts to queue.'}
+                $queueAll=$false
             }
             $terminalCacheDirty=$false
             foreach ($name in @($tasks.Keys)) {
@@ -298,11 +313,7 @@ function Show-DeckTerminal {
                     elseif($name){$notice="$name is not signed in or cannot be checked."}
                 }
                 'A' {
-                    $queued=0
-                    foreach($item in $names){
-                        if($profiles[$item].PlanType -eq 'pool' -or -not (Test-Path -LiteralPath (Join-Path $accountRoot "$item/auth.json"))){continue}
-                        if(-not $tasks.ContainsKey($item) -and -not $pending.Contains($item)){$pending.Enqueue($item);$queued++}
-                    }
+                    $queued=Add-DeckTerminalCheckQueue $names $profiles $tasks $pending $accountRoot
                     $notice=if($queued){"Queued $queued signed-in accounts (three checks at a time)."}else{'No additional signed-in accounts to queue.'}
                 }
                 'U' {

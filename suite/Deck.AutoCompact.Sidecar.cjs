@@ -71,15 +71,22 @@ class RpcClient {
 class ThreadObserver {
   constructor(rpc, threshold, handoffRequest, report=()=>{}) {
     this.rpc=rpc; this.threshold=threshold; this.handoffRequest=handoffRequest; this.report=report;
-    this.controllers=new Map(); this.pending=new Set(); this.serial=new Map();
+    this.controllers=new Map(); this.pending=new Set(); this.subscribed=new Set(); this.serial=new Map();
   }
   async attach(threadId) {
-    if(this.controllers.has(threadId) || this.pending.has(threadId)) return;
-    this.pending.add(threadId);
-    try {
+    if(!this.controllers.has(threadId)) {
       const controller=new AutoCompactController(this.rpc,this.threshold,this.report,this.handoffRequest);
       controller.threadId=threadId;
       this.controllers.set(threadId,controller);
+    }
+    if(this.subscribed.has(threadId) || this.pending.has(threadId)) return;
+    this.pending.add(threadId);
+    try {
+      await this.rpc('thread/resume',{threadId,excludeTurns:true});
+      this.subscribed.add(threadId);
+    } catch {
+      // A newly started thread may be visible in memory before its rollout exists.
+      // Discovery retries until this observer connection can subscribe to it.
     } finally { this.pending.delete(threadId); }
   }
   async discover() {
@@ -93,18 +100,18 @@ class ThreadObserver {
   onNotification(message) {
     const event=message.params || {};
     if(message.method==='thread/started' && event.thread?.id) { this.attach(event.thread.id); return; }
-    if(message.method==='thread/closed') { this.controllers.delete(event.threadId); return; }
+    if(message.method==='thread/closed') { this.controllers.delete(event.threadId); this.subscribed.delete(event.threadId); this.serial.delete(event.threadId); return; }
     const controller=this.controllers.get(event.threadId);
     if(!controller) return;
     if(message.method==='turn/started') {
       if(controller.phase==='normal' || controller.phase==='checkpoint') controller.activeTurnId=event.turn?.id || null;
       return;
     }
-    if(message.method==='item/completed') { controller.onItem(event); return; }
-    if(message.method!=='thread/tokenUsage/updated' && message.method!=='turn/completed') return;
+    if(!['item/completed','thread/tokenUsage/updated','turn/completed'].includes(message.method)) return;
     const previous=this.serial.get(event.threadId) || Promise.resolve();
     const next=previous.then(async()=>{
-      if(message.method==='thread/tokenUsage/updated') {
+      if(message.method==='item/completed') await controller.onItem(event);
+      else if(message.method==='thread/tokenUsage/updated') {
         if(!controller.activeTurnId && controller.phase==='normal') controller.activeTurnId=event.turnId;
         await controller.onUsage(event);
       } else await controller.onTurnCompleted(event);
