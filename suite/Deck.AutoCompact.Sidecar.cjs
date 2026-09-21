@@ -17,7 +17,7 @@ function optionsFromArgs(args) {
     else throw Error(`Unknown sidecar option: ${name}`);
   }
   options.threshold=Number(options.threshold);
-  if(!Number.isInteger(options.threshold) || options.threshold<30 || options.threshold>90) throw Error('Auto-compact threshold must be 30-90%.');
+  if(!Number.isInteger(options.threshold) || options.threshold<30 || options.threshold>90) throw Error('Auto-compact remaining-context threshold must be 30-90%.');
   if(!options.codexExe) throw Error('Missing Codex executable.');
   if(!options.handoffRequest?.includes(HANDOFF)) throw Error(`Auto-compact handoff prompt must contain ${HANDOFF}.`);
   if(!Array.isArray(options.serverConfig) || options.serverConfig.some(value=>typeof value!=='string')) throw Error('Invalid server configuration arguments.');
@@ -77,13 +77,9 @@ class ThreadObserver {
     if(this.controllers.has(threadId) || this.pending.has(threadId)) return;
     this.pending.add(threadId);
     try {
-      // An empty new thread has no rollout yet. The next poll retries after its first turn starts.
-      await this.rpc('thread/resume',{threadId,excludeTurns:true});
       const controller=new AutoCompactController(this.rpc,this.threshold,this.report,this.handoffRequest);
       controller.threadId=threadId;
       this.controllers.set(threadId,controller);
-    } catch(error) {
-      if(!/no rollout found/i.test(error.message)) this.report(`Could not observe thread ${threadId}: ${error.message}`);
     } finally { this.pending.delete(threadId); }
   }
   async discover() {
@@ -148,7 +144,9 @@ async function main() {
     if(!socket) throw Error('Codex app-server did not become ready.');
     let observer;
     const client=new RpcClient(socket,message=>observer?.onNotification(message));
-    await client.call('initialize',{clientInfo:{name:'codex_deck_auto_compact_observer',version:'1.0.0'},capabilities:{experimentalApi:true}});
+    // This app-server hosts the native Codex TUI. Keep its persisted threads in CLI history;
+    // the observer connection must not classify the shared session as an editor client.
+    await client.call('initialize',{clientInfo:{name:'codex-tui',version:'1.0.0'},capabilities:{experimentalApi:true}});
     client.send({method:'initialized'});
     let reportedBytes=0;
     const report=message=>{

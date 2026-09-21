@@ -51,7 +51,7 @@ function Get-DeckTerminalHealth($Record) {
     if ($Record.Status -ne 'available') { return 'Unavailable' }
     return 'Ready'
 }
-function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 70) {
+function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 70, [bool]$CompactAdjusting = $false) {
     $lines = [Collections.Generic.List[object]]::new()
     function Add-Line([string]$Text, [string]$Color = 'Gray', [string]$Background = 'Black') {
         $lines.Add(@{ Text = (ConvertTo-DeckTerminalText $Text ([Math]::Max(1,$Width - 1))); Color = $Color; Background = $Background })
@@ -101,7 +101,11 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     }
     Add-Line '  WARMUP   U run now  T daily times  W select account  P pause/resume' 'DarkMagenta'
     Add-Line ('  ' + $Notice) 'Yellow'
-    Add-Line ('  NAVIGATE Enter launch  / search  B best  Q quit  C compact [{0}] {1}%' -f $(if($AutoCompact){'x'}else{' '}),$CompactThreshold) 'Gray'
+    if($CompactAdjusting){
+        Add-Line ('  AUTO-COMPACT FREE CONTEXT  [{0}%]   Up/Down 5%   Enter save   Esc cancel' -f $CompactThreshold) 'White' 'DarkBlue'
+    }else{
+        Add-Line ('  NAVIGATE Enter launch  / search  B best  Q quit  C compact [{0}] {1}% free (hold C to adjust)' -f $(if($AutoCompact){'x'}else{' '}),$CompactThreshold) 'Gray'
+    }
     Add-Line '  MANAGE   R refresh  A all  H history  F2 rename  L login  N new' 'DarkGray'
     Add-Line '  DISPLAY  D desktop  S settings  G global  I instructions  E memories  K skills  M mask' 'DarkGray'
     return $lines.ToArray()
@@ -121,6 +125,25 @@ function Read-DeckTerminalInput([string]$Prompt, [int]$MaxLength = 40) {
         }
     }
 }
+function Test-DeckTerminalKeyHold([int]$VirtualKey, [int]$HoldMilliseconds = 450) {
+    try {
+        if(-not ('CodexDeckNativeKeyboard' -as [type])){
+            Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class CodexDeckNativeKeyboard {
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int virtualKey);
+}
+'@
+        }
+        $until=[DateTimeOffset]::UtcNow.AddMilliseconds($HoldMilliseconds)
+        while([DateTimeOffset]::UtcNow -lt $until){
+            if(([CodexDeckNativeKeyboard]::GetAsyncKeyState($VirtualKey) -band 0x8000) -eq 0){return $false}
+            Start-Sleep -Milliseconds 20
+        }
+        return $true
+    }catch{return $false}
+}
 function Show-DeckTerminal {
     param([string]$SuiteRoot, [string]$AuthScript, [switch]$Snapshot)
     . (Join-Path $SuiteRoot 'Deck.Core.ps1')
@@ -131,6 +154,7 @@ function Show-DeckTerminal {
     $profiles = @{}; $tasks = @{}; $pending = [Collections.Generic.Queue[string]]::new()
     $names=@(); $sessions=@(); $warmHistory=@{}; $stateRefreshAt=[DateTimeOffset]::MinValue
     $selected = 0; $filter = ''; $notice = 'Ready. Cached usage is shown; press R or A for fresh checks.'; $mask = $true; $autoCompact = $false
+    $compactAdjusting=$false; $compactDraft=[int]$warmSettings.AutoCompactThresholdPercent
     $interactive = -not $Snapshot -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
     if (-not $interactive) { $notice = 'Cached snapshot. Run codex-auth in a terminal for live checks and actions.' }
     elseif($warmSettings.WarmupEnabled -and $warmSettings.WarmupSchedulingEnabled){
@@ -185,7 +209,8 @@ function Show-DeckTerminal {
             $selected = [Math]::Max(0,[Math]::Min($selected,$visible.Count - 1))
             $width = 110; $height = [Math]::Max(25,$visible.Count + 18)
             if ($interactive) { $width = [Console]::WindowWidth; $height = [Console]::WindowHeight }
-            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory $autoCompact $warmSettings.AutoCompactThresholdPercent)
+            $compactThreshold=if($compactAdjusting){$compactDraft}else{[int]$warmSettings.AutoCompactThresholdPercent}
+            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory $autoCompact $compactThreshold $compactAdjusting)
             if (-not $interactive) { $frame | ForEach-Object { Write-Output $_.Text }; return }
             $signature = "$width/$height/" + (($frame | ForEach-Object { $_.Text + $_.Color + $_.Background }) -join "`n")
             if ($signature -ne $lastFrame) {
@@ -208,6 +233,22 @@ function Show-DeckTerminal {
             if (-not [char]::IsControl($key.KeyChar)) { $action = ([string]$key.KeyChar).ToUpperInvariant() }
             elseif ([int]$key.KeyChar -in @(10,13)) { $action = 'Enter' }
             elseif ([int]$key.KeyChar -eq 27) { $action = 'Escape' }
+            if($compactAdjusting){
+                switch($action){
+                    'UpArrow' {$compactDraft=[Math]::Min(90,$compactDraft+5)}
+                    'DownArrow' {$compactDraft=[Math]::Max(30,$compactDraft-5)}
+                    'Enter' {
+                        $warmSettings.AutoCompactThresholdPercent=$compactDraft
+                        Write-DeckJson (Join-Path $root 'settings.json') $warmSettings
+                        $warmSettings=Get-DeckSettings $root
+                        $compactAdjusting=$false
+                        $notice="Auto-compact saved at $compactDraft% context remaining."
+                    }
+                    'Escape' {$compactAdjusting=$false; $notice='Auto-compact threshold unchanged.'}
+                    'C' {}
+                }
+                continue
+            }
             switch ($action) {
                 'Q' { return }
                 'Escape' { if ($filter) { $filter = ''; $selected = 0 } else { return } }
@@ -242,7 +283,16 @@ function Show-DeckTerminal {
                     }
                 }
                 'M' { $mask = -not $mask }
-                'C' { $autoCompact = -not $autoCompact; $notice = if($autoCompact){'Auto-compact enabled for account and pool launches.'}else{'Auto-compact disabled.'} }
+                'C' {
+                    if(Test-DeckTerminalKeyHold 0x43){
+                        $compactDraft=[int]$warmSettings.AutoCompactThresholdPercent
+                        $compactAdjusting=$true
+                        $notice='Adjust the free-context threshold in 5% steps, then press Enter to save.'
+                    }else{
+                        $autoCompact = -not $autoCompact
+                        $notice = if($autoCompact){'Auto-compact enabled for account and pool launches.'}else{'Auto-compact disabled.'}
+                    }
+                }
                 'R' {
                     if($name -and $profiles[$name].PlanType -ne 'pool' -and (Test-Path -LiteralPath (Join-Path $accountRoot "$name/auth.json")) -and -not $tasks.ContainsKey($name) -and -not $pending.Contains($name)){$pending.Enqueue($name); $notice="Queued $name."}
                     elseif($name){$notice="$name is not signed in or cannot be checked."}
@@ -300,7 +350,7 @@ function Show-DeckTerminal {
                             if ($name) {
                                 [void][IO.Directory]::CreateDirectory($accountRoot)
                                 $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$AuthScript,$name)
-                                if ($action -eq 'Enter' -and $autoCompact) { $arguments += '-AutoCompact' }
+                                if ($action -eq 'Enter' -and $autoCompact) { $arguments += @('-AutoCompact',(([int]$warmSettings.AutoCompactThresholdPercent).ToString()+'%')) }
                                 if ($action -in @('L','N')) { $arguments += 'login' }
                                 & powershell.exe @arguments
                                 $notice = "$name returned (exit $LASTEXITCODE)."

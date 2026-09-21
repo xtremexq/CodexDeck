@@ -78,7 +78,7 @@ The installer adds command wrappers to your user PATH and preserves existing acc
 | **↑ / ↓** | Select an account |
 | **Page Up / Page Down**, **Home / End** | Navigate a longer list |
 | **Enter** | Launch Codex; return to the dashboard when it exits |
-| **C** | Toggle auto-compaction for individual account launches |
+| **C** | Toggle auto-compaction; hold **C** to adjust its threshold with ↑/↓ and Enter |
 | **R** | Refresh the selected account |
 | **A** | Queue fresh checks for every account |
 | **/** | Search account names |
@@ -101,7 +101,7 @@ The selected account's details show its model, reasoning effort, last check and 
 
 For a non-interactive view, use **`codex-auth status`**. It prints cached data without network requests. Redirecting the bare command's input or output also selects snapshot mode.
 
-Auto-compaction is opt-in. Press **C** before entering an account or pool, or run `codex-auth account16 -AutoCompact` or `codex-auth pool -AutoCompact` directly. Set its context threshold and edit the multiline handoff request in **Settings → Context** (default 70%; allowed range 30–90%). Keep `DECK_HANDOFF` in the request so Deck can verify the reply before compacting. Interactive launches use the normal Codex TUI; a local observer watches its app-server session. When the reported context reaches the threshold, Deck requests a visible task-state handoff, compacts the thread, and sends that handoff back quoted with “Please go on.” Account and pool routing, manual switching, and configured quota failover work in this mode. A one-shot `exec` command still uses Deck's supervised worker because it has no interactive TUI: `codex-auth account18 -AutoCompact -Failover Off -CodexArgs @('exec','-m','gpt-5.6-luna','-s','read-only','Investigate…')`. It accepts a prompt plus model, effort/config, sandbox, approval and working-directory options and exits with a completion status; `-Direct` keeps an exact account without routing. Codex's own compaction may still occur first if its configured limit is lower.
+Auto-compaction is opt-in. Press **C** before entering an account or pool, or run `codex-auth account16 -AutoCompact` or `codex-auth pool -AutoCompact` directly. Hold **C** in the dashboard to focus the saved threshold, adjust it by 5% with **↑/↓**, and press **Enter** to save it. For a one-time command-line override, include the percent sign: `codex-auth account16 -AutoCompact 50%`. The threshold is the percentage of model context still free, so the 70% default triggers when 30% is used; a 75% override triggers when 25% is used. The saved threshold and multiline handoff request can also be changed in **Settings → Context** (allowed range 30–90%). Keep `DECK_HANDOFF` in the request so Deck can verify the reply before compacting. Interactive launches use the normal Codex TUI; a local observer watches its app-server session. When free context falls to the threshold, Deck requests a visible task-state handoff, compacts the thread, and sends that handoff back quoted with “Please go on.” Account and pool routing, manual switching, and configured quota failover work in this mode. A one-shot `exec` command still uses Deck's supervised worker because it has no interactive TUI: `codex-auth account18 -AutoCompact -Failover Off -CodexArgs @('exec','-m','gpt-5.6-luna','-s','read-only','Investigate…')`. It accepts a prompt plus model, effort/config, sandbox, approval and working-directory options and exits with a completion status; `-Direct` keeps an exact account without routing. Codex's own compaction may still occur first if its configured limit is lower.
 
 ## Desktop companion
 
@@ -136,6 +136,7 @@ codex-auth                       # Interactive terminal dashboard
 codex-auth status                # Cached snapshot; no network
 codex-auth list                  # List local profiles
 codex-auth account1              # Launch an account
+codex-auth account1 -AutoCompact 50% # Auto-compact at 50% context remaining for this run
 codex-auth account1 -Resume      # Pick a conversation from this account
 codex-auth account1 -Resume 00000000-0000-4000-8000-000000000001 # Resume one conversation by ID
 codex-auth 2                     # Shorthand for account2

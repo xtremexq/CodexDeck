@@ -600,6 +600,7 @@ function Show-Usage {
     Write-Host "  codex-auth -Failover Ordered -FailoverAccounts account1,account2"
     Write-Host "  codex-auth -Failover Best -FailoverAccounts account1,account2"
     Write-Host "  codex-auth account15 -Direct -CodexArgs @('exec',...)  Launch without Deck's local routing proxy"
+    Write-Host "  codex-auth account1 -AutoCompact 50%   Launch with a one-time 50% remaining-context threshold"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  codex-auth account1"
@@ -821,6 +822,12 @@ if (-not (Test-Path -LiteralPath $environmentModule)) { $environmentModule = Joi
 $bundledSkillsModule = Join-Path $runtimeRoot 'Deck.BundledSkills.ps1'
 if (-not (Test-Path -LiteralPath $bundledSkillsModule)) { $bundledSkillsModule = Join-Path $PSScriptRoot '../suite/Deck.BundledSkills.ps1' }
 if (Test-Path -LiteralPath $bundledSkillsModule) { . $bundledSkillsModule }
+$autoCompactThresholdOverride=$null
+if($AutoCompact -and $CodexArgs -and [string]$CodexArgs[0] -match '^([0-9]+)%$'){
+    $autoCompactThresholdOverride=[int]$Matches[1]
+    if($autoCompactThresholdOverride -lt 30 -or $autoCompactThresholdOverride -gt 90){throw 'Auto-compact remaining-context threshold must be 30-90%.'}
+    $CodexArgs=if($CodexArgs.Count -gt 1){@($CodexArgs[1..($CodexArgs.Count-1)])}else{@()}
+}
 if($ResumePromptEnvironment){
     if(-not $Resume -or $ResumePromptEnvironment -notmatch '^CODEX_DECK_SCHEDULED_PROMPT_[A-F0-9]{32}$'){throw 'Invalid scheduled resume prompt source.'}
     if($PSBoundParameters.ContainsKey('ResumePrompt')){throw 'Choose one resume prompt source.'}
@@ -1040,7 +1047,7 @@ try {
             $codexExecutable = (Get-Command node.exe -ErrorAction Stop).Source
         }
         $compactSettings = Get-DeckSettings (Join-Path $runtimeRoot 'deck')
-        $threshold = $compactSettings.AutoCompactThresholdPercent
+        $threshold = if($null -ne $autoCompactThresholdOverride){$autoCompactThresholdOverride}else{$compactSettings.AutoCompactThresholdPercent}
         $handoffEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$compactSettings.AutoCompactHandoffPrompt))
         $clientArgs = @($clientPath,'--codex-exe',$codexExecutable,'--threshold',[string]$threshold,'--cwd',(Get-Location).Path,'--handoff-base64',$handoffEncoded)
         if ($codexEntry) { $clientArgs += @('--codex-entry',$codexEntry) }

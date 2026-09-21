@@ -31,11 +31,12 @@ class AutoCompactController {
     const window=usage.modelContextWindow || 0;
     if(!tokens || !window) return;
     const exactPercent=tokens/window*100;
+    const usedLimit=100-this.threshold;
     this.usagePercent=Math.round(exactPercent);
-    if(!this.armed && exactPercent < this.threshold*0.8) this.armed=true;
-    if(this.phase!=='normal' || !this.armed || exactPercent < this.threshold) return;
+    if(!this.armed && exactPercent < usedLimit*0.8) this.armed=true;
+    if(this.phase!=='normal' || !this.armed || exactPercent < usedLimit) return;
     this.armed=false; this.phase='checkpoint'; this.handoff='';
-    this.report(`Context ${this.usagePercent}% (limit ${this.threshold}%): requesting task-state handoff.`);
+    this.report(`Context ${this.usagePercent}% used / ${100-this.usagePercent}% free (limit ${this.threshold}% free): requesting task-state handoff.`);
     if(this.activeTurnId && event.turnId===this.activeTurnId) {
       try {
         await this.rpc('turn/steer',{threadId:this.threadId,expectedTurnId:this.activeTurnId,input:textInput(this.handoffRequest)});
@@ -206,7 +207,7 @@ function parseArgs(argv) {
     throw Error(`Unknown auto-compact option: ${arg}`);
   }
   options.threshold=Number(options.threshold);
-  if(!Number.isInteger(options.threshold) || options.threshold<30 || options.threshold>90) throw Error('Auto-compact threshold must be 30-90%.');
+  if(!Number.isInteger(options.threshold) || options.threshold<30 || options.threshold>90) throw Error('Auto-compact remaining-context threshold must be 30-90%.');
   if(!options.codexExe) throw Error('Missing Codex executable.');
   if(!options.handoffRequest.trim().includes(HANDOFF)) throw Error(`Auto-compact handoff prompt must contain ${HANDOFF}.`);
   const launch=translateLaunchArgs(options.launchArgs,options.cwd);
@@ -263,7 +264,7 @@ async function main() {
     }
     if(line.trim()==='/multi') { multiline=[]; report('Multiline draft started. Enter /send to submit or /cancel to discard.'); prompt(); return; }
     if(line.trim()==='/help') { report('/status, /interrupt, /multi, /exit. In /multi mode, finish with /send or /cancel.'); prompt(); return; }
-    if(line.trim()==='/status') { report(`Thread ${controller.threadId}; context ${controller.usagePercent ?? '?'}%; threshold ${options.threshold}%; state ${controller.phase}.`); prompt(); return; }
+    if(line.trim()==='/status') { const used=controller.usagePercent; report(`Thread ${controller.threadId}; context ${used ?? '?'}% used / ${used===null?'?':100-used}% free; limit ${options.threshold}% free; state ${controller.phase}.`); prompt(); return; }
     if(line.trim()==='/interrupt' && controller.activeTurnId) { rpc('turn/interrupt',{threadId:controller.threadId,turnId:controller.activeTurnId}).catch(error=>report(error.message)); prompt(); return; }
     if(line.trim()) controller.start(line).catch(error=>report(error.message));
     prompt();
@@ -305,7 +306,7 @@ async function main() {
     if(options.ephemeral) threadParams.ephemeral=true;
     const started=await rpc('thread/start',threadParams);
     controller.threadId=started.thread.id;
-    report(`Auto-compact ON at ${options.threshold}%. Account: ${process.env.CODEX_HOME?.split(/[\\/]/).at(-1) || 'unknown'}. Thread: ${controller.threadId}`);
+    report(`Auto-compact ON when context reaches ${options.threshold}% free (${100-options.threshold}% used). Account: ${process.env.CODEX_HOME?.split(/[\\/]/).at(-1) || 'unknown'}. Thread: ${controller.threadId}`);
     report('Supervised terminal mode. /help lists terminal commands.');
     if(options.prompt) {
       const initial=textInput(options.prompt);
