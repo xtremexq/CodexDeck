@@ -652,7 +652,7 @@ function Show-DeckSettings {
         Details=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
         Compaction=@('AutoCompactMode','AutoCompactThresholdPercent','AutoCompactHandoffPrompt')
-        Trajectory=@('TrajectoryEnabled','ContextManagerEnabled','ContextManagerProtected')
+        Trajectory=@('TrajectoryEnabled','ContextManagerEnabled','ContextManagerAutoOpen','ContextManagerProtected')
         Efficiency=@('EfficiencyAnalyticsEnabled','EfficiencySessionLimit')
         'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupPlanTypes','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
     }
@@ -663,9 +663,10 @@ function Show-DeckSettings {
     $labels.AutoCompactHandoffPrompt='Pre-compaction handoff request'
     $labels.TrajectoryEnabled='Enable local trajectory viewer'
     $labels.ContextManagerEnabled='Enable live context suppression and editing for new conversations'
+    $labels.ContextManagerAutoOpen='Automatically open Live Context when opening accounts'
     $labels.ContextManagerProtected='Advanced: allow overlays on protected items'
     $labels.EfficiencyAnalyticsEnabled='Enable independent efficiency analytics'
-    $labels.EfficiencySessionLimit='Sessions to analyze (10–1000)'
+    $labels.EfficiencySessionLimit='Recent sessions to analyze (10–1000)'
     $panels=@{}; $controls=@{}
     foreach($group in $groups.Keys){
         $tab=[Windows.Controls.TabItem]::new(); $tab.Header=$group
@@ -690,7 +691,7 @@ function Show-DeckSettings {
     }
     $fieldLabels=@{}
     foreach ($key in @(@($groups.Values | ForEach-Object { $_ }) + @($settings.Keys) | Select-Object -Unique)) {
-        if ($key -in @('Width','Height','WidgetWidth','WidgetHeight','WidgetAutoHeight')) { continue }
+        if ($key -in @('Width','Height','WidgetWidth','WidgetHeight','WidgetAutoHeight','EfficiencyLimitVersion')) { continue }
         $group=@($groups.Keys | Where-Object { $key -in $groups[$_] })[0]
         if(-not $group){$group='Appearance'}
         $panel=if($group -eq 'Details'){$detailPanels[$key]}else{$panels[$group]}
@@ -1316,8 +1317,8 @@ try{
         $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
         if ($headers -notcontains 'Environments') { throw 'Environment sharing Settings tab missing.' }
         if ($headers -notcontains 'Trajectory' -or $headers -notcontains 'Efficiency') { throw 'Separate trajectory and efficiency Settings tabs are missing.' }
-        if ($settingsTest.Controls.TrajectoryEnabled.IsChecked -or $settingsTest.Controls.ContextManagerEnabled.IsChecked -or -not $settingsTest.Controls.EfficiencyAnalyticsEnabled.IsChecked) { throw 'Trajectory/context defaults or enabled-by-default efficiency analytics are incorrect.' }
-        if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '200') { throw 'Efficiency analytics session limit default failed.' }
+        if ($settingsTest.Controls.TrajectoryEnabled.IsChecked -or $settingsTest.Controls.ContextManagerEnabled.IsChecked -or $settingsTest.Controls.ContextManagerAutoOpen.IsChecked -or -not $settingsTest.Controls.EfficiencyAnalyticsEnabled.IsChecked) { throw 'Trajectory/context defaults or enabled-by-default efficiency analytics are incorrect.' }
+        if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '1000') { throw 'Efficiency analytics session limit default failed.' }
         if ($headers -notcontains 'Skills' -or -not $settingsTest.Skills.State.Controls.ContainsKey('debug-swarm') -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked) { throw 'Globally enabled Deck skills Settings tab missing or invalid.' }
         $environmentUI=$settingsTest.Environment
         if($environmentUI.Name.Text -ne 'pool' -or $environmentUI.Name.SelectedItem -ne 'pool'){throw 'Environment picker did not select its default pool.'}

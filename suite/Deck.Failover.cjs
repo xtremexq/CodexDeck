@@ -205,6 +205,30 @@ async function createProxy(config, dependencies = {}) {
   const now = dependencies.now || Date.now;
   const contextEnabled = config.contextManager === true;
   const allowProtected = config.contextManagerProtected === true;
+  const autoCompact = config.autoCompact && config.autoCompact.enabled === true
+    ? {enabled:true,mode:config.autoCompact.mode === 'Custom' ? 'Custom' : 'Native',freePercent:Number(config.autoCompact.freePercent) || null}
+    : {enabled:false,mode:null,freePercent:null};
+  let usageRows = {}, usageRowsAt = -Infinity;
+  const quotaStatus = () => {
+    if (now() - usageRowsAt > 5000) { try { usageRows=getRows(); } catch { usageRows={}; } usageRowsAt=now(); }
+    const row=usageRows[current] || Object.entries(usageRows).find(([name])=>name.toLowerCase()===current.toLowerCase())?.[1];
+    return {checkedAt:row?.CheckedAt || null,windows:(row?.Windows || []).slice(0,2).map(window=>({label:window.Label || null,usedPercent:Number.isFinite(Number(window.UsedPct)) && window.UsedPct != null ? Number(window.UsedPct) : null,remainingPercent:Number.isFinite(Number(window.RemainingPct)) && window.RemainingPct != null ? Number(window.RemainingPct) : null,resetsAtUnix:window.ResetsAtUnix || null}))};
+  };
+  const contextWindows = new Map();
+  const modelContextWindow = model => {
+    if (!model || !config.root) return null;
+    const key=current+':'+model, cached=contextWindows.get(key);
+    if (cached && now()-cached.at<30000) return cached.value;
+    let value=null;
+    for (const account of [current,config.environment]) try {
+      const entry=readJson(path.join(config.root,'accounts',account,'models_cache.json')).models?.find(item=>item.slug===model);
+      const size=Number(entry?.context_window),percent=Number(entry?.effective_context_window_percent || 100);
+      if(size>0 && percent>0){value=Math.floor(size*percent/100);break}
+    } catch { /* model metadata is optional */ }
+    contextWindows.set(key,{at:now(),value});
+    return value;
+  };
+  const sessionStatus = () => ({model:contextSnapshot.model || null,contextWindow:contextSnapshot.model ? modelContextWindow(contextSnapshot.model) : null,autoCompact,quota:quotaStatus()});
   let contextRules = new Map(), contextThread = null;
   const threadRules = new Map();
   let contextSnapshot = { version:1, revision:0, enabled:contextEnabled, protectedChanges:allowProtected, threadId:null, capturedAt:null, requestPath:null, raw:[], effective:[], rawTokens:0, effectiveTokens:0, savedTokens:0, rules:[] };
@@ -289,8 +313,8 @@ async function createProxy(config, dependencies = {}) {
       if (req.method === 'GET') {
         const since=Number(routeQuery.get('since'));
         const account=current;
-        if(routeQuery.has('since')&&Number.isInteger(since)&&since===contextSnapshot.revision)return replyJson(res,{version:1,revision:contextSnapshot.revision,unchanged:true,busy:activeRequests>0,account});
-        return replyJson(res, { ...contextSnapshot, account, busy:activeRequests > 0, rules:[...contextRules.entries()].map(([key,rule]) => ({key,...rule})) });
+        if(routeQuery.has('since')&&Number.isInteger(since)&&since===contextSnapshot.revision)return replyJson(res,{version:1,revision:contextSnapshot.revision,unchanged:true,busy:activeRequests>0,account,session:sessionStatus()});
+        return replyJson(res, { ...contextSnapshot, account, busy:activeRequests > 0, session:sessionStatus(), rules:[...contextRules.entries()].map(([key,rule]) => ({key,...rule})) });
       }
       if (req.method !== 'POST' || (req.headers['content-encoding'] || 'identity') !== 'identity') return reply(res, 404, 'Unsupported context control request.');
       try {
@@ -343,7 +367,7 @@ async function createProxy(config, dependencies = {}) {
           const projection = projectContext(parsed, contextRules, allowProtected);
           parsed = projection.output;
           body = Buffer.from(JSON.stringify(parsed));
-          contextSnapshot = { version:1, revision:contextSnapshot.revision+1, enabled:true, protectedChanges:allowProtected, threadId:contextThread, capturedAt:new Date(now()).toISOString(), requestPath:routePath,
+          contextSnapshot = { version:1, revision:contextSnapshot.revision+1, enabled:true, protectedChanges:allowProtected, threadId:contextThread, capturedAt:new Date(now()).toISOString(), requestPath:routePath, model:typeof parsed.model==='string' ? parsed.model : null,
             raw:projection.entries.map(({raw,...entry}) => entry), effective:projection.effective.map(({raw,...entry}) => entry),
             rawTokens:projection.rawTokens, effectiveTokens:projection.effectiveTokens, savedTokens:Math.max(0, projection.rawTokens - projection.effectiveTokens), rules:[] };
         }

@@ -24,9 +24,12 @@ $script:openedInspectors=@()
 function Open-DeckInspector([string]$SuiteRoot,[string]$Mode,[switch]$Companion,[string]$SessionPath) {$script:openedInspectors += [pscustomobject]@{Mode=$Mode;Companion=[bool]$Companion;SessionPath=$SessionPath}; return 'http://127.0.0.1/test'}
 $suiteRoot='C:\synthetic-suite'; $deckInteractiveConversation=$true; $deckSession='C:\synthetic-suite\deck\sessions\live.json'
 $failoverProxy=[pscustomobject]@{ContextUrl='http://127.0.0.1:12345/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/_deck/context'}
-$deckSettings=[pscustomobject]@{TrajectoryEnabled=$true;ContextManagerEnabled=$true;EfficiencyAnalyticsEnabled=$true}
+$deckSettings=[pscustomobject]@{TrajectoryEnabled=$true;ContextManagerEnabled=$true;ContextManagerAutoOpen=$true;EfficiencyAnalyticsEnabled=$true}
 Open-DeckLaunchInspector
 if($script:openedInspectors.Count -ne 1 -or $script:openedInspectors[0].Mode -ne 'Trajectory' -or -not $script:openedInspectors[0].Companion -or $script:openedInspectors[0].SessionPath -ne $deckSession){throw 'Context-managed interactive launch did not open its exact-session compact companion'}
+$deckSettings.ContextManagerAutoOpen=$false
+Open-DeckLaunchInspector
+if($script:openedInspectors.Count -ne 1){throw 'Disabling Live Context auto-open still opened a window.'}
 $deckSettings=[pscustomobject]@{TrajectoryEnabled=$true;ContextManagerEnabled=$false;EfficiencyAnalyticsEnabled=$true}
 Open-DeckLaunchInspector
 if($script:openedInspectors.Count -ne 2 -or $script:openedInspectors[1].Mode -ne 'Trajectory' -or $script:openedInspectors[1].Companion){throw 'Interactive launch did not fall back to full Trajectory while keeping Efficiency independent'}

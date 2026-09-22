@@ -12,7 +12,7 @@ async function main() {
   const deck=path.join(root,'deck'), sessions=path.join(root,'accounts','account1','sessions','2026','09','22');
   const settingsFile=path.join(deck,'settings.json'), stateFile=path.join(deck,'inspector.json');
   const writeSettings=value=>fs.writeFileSync(settingsFile,JSON.stringify(value),'utf8');
-  let server, proxy;
+  let server, proxy, secondProxy;
   try {
     fs.mkdirSync(sessions,{recursive:true});fs.mkdirSync(deck,{recursive:true});
     writeSettings({TrajectoryEnabled:true,ContextManagerEnabled:false,EfficiencyAnalyticsEnabled:true,EfficiencySessionLimit:20});
@@ -43,6 +43,12 @@ async function main() {
     const secondTail=await timelineChunk({file:tailFile},firstTail.next);assert.equal(secondTail.items.length,1);assert.equal(secondTail.items[0].kind,'function_call');assert.equal(secondTail.done,true);
     const report=await efficiency(root,20);assert.equal(report.totals.sessions,1);assert.equal(report.totals.exactSessions,1);
     assert.ok(report.recommendations.some(item=>item.title==='Repeated shell work'));assert.ok(report.recommendations.some(item=>item.title==='Large tool output'));
+    const manyRoot=path.join(root,'many'),older=path.join(manyRoot,'accounts','account1','sessions'),newer=path.join(manyRoot,'accounts','account2','sessions');
+    fs.mkdirSync(older,{recursive:true});fs.mkdirSync(newer,{recursive:true});
+    for(let i=0;i<25;i++){const file=path.join(older,`rollout-${i}.jsonl`);fs.writeFileSync(file,JSON.stringify(rows[0])+'\n');fs.utimesSync(file,new Date(1000000+i*1000),new Date(1000000+i*1000))}
+    const newestFile=path.join(newer,'rollout-newest.jsonl');fs.writeFileSync(newestFile,JSON.stringify(rows[0])+'\n');fs.utimesSync(newestFile,new Date(2000000),new Date(2000000));
+    const globalIndex=walkSessions(manyRoot,20);assert.equal(globalIndex.length,20);assert.equal(globalIndex.available,26);assert.equal(globalIndex[0].account,'account2','The newest session must lead regardless of account order');
+    const globalReport=await efficiency(manyRoot,20);assert.equal(globalReport.totals.sessions,20);assert.equal(globalReport.availableSessions,26);assert.equal(globalReport.limitReached,true);assert.equal(globalReport.sessions.length,20);assert.equal(globalReport.sessions[0].account,'account2');
 
     const liveDirectory=path.join(deck,'sessions');fs.mkdirSync(liveDirectory,{recursive:true});
     fs.writeFileSync(path.join(liveDirectory,'older.json'),JSON.stringify({ProcessId:process.pid,Account:'account1',Folder:'C:\\work\\project',StartedAt:'2026-09-22T11:59:00Z'}),'utf8');
@@ -54,8 +60,11 @@ async function main() {
     let response=await fetch(inspector.baseUrl+'trajectory');assert.equal(response.status,200);const trajectoryHtml=await response.text();assert.match(trajectoryHtml,/Trajectory \+ Context/);
     assert.match(trajectoryHtml,/managed\[0\]/,'Trajectory must prefer the newest managed live context');assert.match(trajectoryHtml,/pollTimeline/,'Trajectory must tail active rollouts');assert.match(trajectoryHtml,/setInterval\([^]*1000\)/,'Live views must poll while Codex is working');assert.match(trajectoryHtml,/state\.protectedChanges/,'Protected context controls must honor the advanced setting');
     response=await fetch(inspector.baseUrl+'efficiency');assert.equal(response.status,200);assert.match(await response.text(),/Efficiency Analytics/);
+    assert.match(await (await fetch(inspector.baseUrl+'efficiency')).text(),/Session limit reached/,'The efficiency panel must explain when its cap is reached');
     const sessionResponse=await (await fetch(inspector.baseUrl+'api/sessions')).json();assert.equal(sessionResponse.sessions.length,1);assert.equal('file' in sessionResponse.sessions[0],false);assert.equal(sessionResponse.live[0].startedAt,'2026-09-22T12:00:00Z','Newest live launch must be selected first');assert.equal(sessionResponse.sessions[0].live.startedAt,'2026-09-22T12:00:00Z','A historical session must bind to its newest matching live launch');
     const apiReport=await (await fetch(inspector.baseUrl+'api/efficiency')).json();assert.equal(apiReport.totals.total,1400);assert.equal('file' in apiReport.sessions[0],false);
+    writeSettings({TrajectoryEnabled:true,ContextManagerEnabled:false,EfficiencyAnalyticsEnabled:true,EfficiencySessionLimit:200});
+    assert.equal((await (await fetch(inspector.baseUrl+'api/efficiency')).json()).limit,1000,'The legacy saved 200-session default must migrate in the inspector');
     assert.equal((await fetch(inspector.baseUrl+'api/context?id=missing')).status,403,'Context management has its own opt-in gate');
     assert.equal((await fetch(inspector.baseUrl+'context?live=aaaaaaaaaaaaaaaaaaaaaaaa')).status,403,'The compact companion must share the live-context opt-in gate');
     assert.equal((await fetch(inspector.baseUrl+'health',{headers:{origin:'https://example.com'}})).status,403);
@@ -63,6 +72,8 @@ async function main() {
     writeSettings({TrajectoryEnabled:true,ContextManagerEnabled:true,ContextManagerProtected:false,EfficiencyAnalyticsEnabled:true,EfficiencySessionLimit:20});
     response=await fetch(inspector.baseUrl+'context?live=aaaaaaaaaaaaaaaaaaaaaaaa');assert.equal(response.status,200);const companionHtml=await response.text();
     assert.match(companionHtml,/Live Context/);assert.match(companionHtml,/Full studio/);assert.match(companionHtml,/content-visibility:auto/);assert.match(companionHtml,/&since=/);assert.match(companionHtml,/Suppress this item from the next request/);assert.match(companionHtml,/Edit model-visible content/);
+    assert.match(companionHtml,/Follow new/);assert.match(companionHtml,/deck\.context\.follow/);assert.match(companionHtml,/card\.append\(actions,body,remove\)/,'Edit must appear to the left of Suppress');
+    assert.match(companionHtml,/Context free ≈/);assert.match(companionHtml,/Auto-compact/);assert.match(companionHtml,/renderedEnd/);
     const proxySecret='b'.repeat(64), markerFile=path.join(liveDirectory,'newer.json');
     proxy=http.createServer((request,result)=>{
       assert.equal(request.url,`/${proxySecret}/_deck/context`);
@@ -75,6 +86,17 @@ async function main() {
     const firstContext=await fetch(inspector.baseUrl+'api/context?id='+markerId);
     assert.equal(firstContext.status,200,'The compact companion must reach its exact live conversation');
     assert.equal((await firstContext.json()).account,'account1');
+    const secondSecret='c'.repeat(64), secondMarker=path.join(liveDirectory,'second-terminal.json');
+    secondProxy=http.createServer((request,result)=>{assert.equal(request.url,`/${secondSecret}/_deck/context`);result.writeHead(200,{'content-type':'application/json'});result.end(JSON.stringify({revision:1,account:'account2',threadId:'second-terminal',raw:[],effective:[]}))});
+    await new Promise(resolve=>secondProxy.listen(0,'127.0.0.1',resolve));
+    fs.writeFileSync(secondMarker,JSON.stringify({ProcessId:process.pid,Account:'account2',Folder:'C:\\other',StartedAt:'2026-09-22T12:01:00Z',ContextUrl:`http://127.0.0.1:${secondProxy.address().port}/${secondSecret}/_deck/context`}),'utf8');
+    const secondId=crypto.createHash('sha256').update(secondMarker).digest('hex').slice(0,24);
+    assert.equal((await (await fetch(inspector.baseUrl+'api/context?id='+secondId)).json()).account,'account2','A second terminal must reach only its own proxy');
+    assert.equal((await (await fetch(inspector.baseUrl+'api/context?id='+markerId)).json()).account,'account1','The first terminal must retain its own proxy');
+    assert.equal((await (await fetch(inspector.baseUrl+'api/context/presence?id='+markerId)).json()).open,false);
+    assert.equal((await fetch(inspector.baseUrl+'api/context/presence?id='+markerId,{method:'POST'})).status,200);
+    assert.equal((await (await fetch(inspector.baseUrl+'api/context/presence?id='+markerId)).json()).open,true);
+    assert.equal((await (await fetch(inspector.baseUrl+'api/context/presence?id='+secondId)).json()).open,false,'Window presence must be per terminal');
 
     writeSettings({TrajectoryEnabled:false,ContextManagerEnabled:false,EfficiencyAnalyticsEnabled:true,EfficiencySessionLimit:20});
     assert.equal((await fetch(inspector.baseUrl+'trajectory')).status,403);assert.equal((await fetch(inspector.baseUrl+'efficiency')).status,200,'Efficiency analytics must remain independently available');
@@ -84,6 +106,7 @@ async function main() {
   } finally {
     if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
     if(proxy){proxy.closeAllConnections();await new Promise(resolve=>proxy.close(resolve));}
+    if(secondProxy){secondProxy.closeAllConnections();await new Promise(resolve=>secondProxy.close(resolve));}
     fs.rmSync(root,{recursive:true,force:true});
   }
 }

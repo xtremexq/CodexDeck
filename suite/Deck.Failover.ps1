@@ -40,7 +40,7 @@ function Resolve-DeckFailoverPool([string]$SuiteRoot, [string]$Pool, [string]$Mo
     }
     return @{ Pool=$names; Account=$initial }
 }
-function Start-DeckFailover([string]$SuiteRoot, [string[]]$Pool, [string]$Mode, [string]$Account, [string]$Environment = '', [string[]]$EnvironmentPool = @(), [bool]$Automatic = $true, [bool]$ContextManagerEnabled = $false, [bool]$ContextManagerProtected = $false) {
+function Start-DeckFailover([string]$SuiteRoot, [string[]]$Pool, [string]$Mode, [string]$Account, [string]$Environment = '', [string[]]$EnvironmentPool = @(), [bool]$Automatic = $true, [bool]$ContextManagerEnabled = $false, [bool]$ContextManagerProtected = $false, [bool]$AutoCompact = $false, [string]$AutoCompactMode = '', [int]$AutoCompactFreePercent = 0) {
     $node = (Get-Command node.exe -ErrorAction Stop).Source
     $scriptPath = Join-Path $SuiteRoot 'Deck.Failover.cjs'
     if (-not (Test-Path -LiteralPath $scriptPath)) { throw 'Failover proxy missing. Reinstall Codex Deck.' }
@@ -55,7 +55,7 @@ function Start-DeckFailover([string]$SuiteRoot, [string[]]$Pool, [string]$Mode, 
         # Write BOM-free UTF-8 regardless of the host console encoding.
         $writer = [IO.StreamWriter]::new($process.StandardInput.BaseStream, [Text.UTF8Encoding]::new($false))
         $normalizedEnvironmentPool = @($EnvironmentPool | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        $writer.WriteLine((@{ root=$SuiteRoot; pool=@($Pool); mode=$Mode; owner=$Account; environment=$Environment; environmentPool=$normalizedEnvironmentPool; automatic=$Automatic; contextManager=$ContextManagerEnabled; contextManagerProtected=$ContextManagerProtected } | ConvertTo-Json -Compress))
+        $writer.WriteLine((@{ root=$SuiteRoot; pool=@($Pool); mode=$Mode; owner=$Account; environment=$Environment; environmentPool=$normalizedEnvironmentPool; automatic=$Automatic; contextManager=$ContextManagerEnabled; contextManagerProtected=$ContextManagerProtected; autoCompact=@{enabled=$AutoCompact;mode=$AutoCompactMode;freePercent=$AutoCompactFreePercent} } | ConvertTo-Json -Compress))
         $writer.Flush()
         $ready = $process.StandardOutput.ReadLineAsync()
         if (-not $ready.Wait(10000) -or -not $ready.Result) {

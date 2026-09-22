@@ -1,6 +1,9 @@
 'use strict';
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const zlib = require('node:zlib');
 const { once } = require('node:events');
 const { createProxy, rank, quotaRejected } = require('./Deck.Failover.cjs');
@@ -19,6 +22,11 @@ async function main() {
   });
   upstream.listen(0,'127.0.0.1'); await once(upstream,'listening');
   const proxies=[];
+  const modelRoot=fs.mkdtempSync(path.join(os.tmpdir(),'deck-context-status-'));
+  for(const account of ['a','b']){
+    const dir=path.join(modelRoot,'accounts',account);fs.mkdirSync(dir,{recursive:true});
+    fs.writeFileSync(path.join(dir,'models_cache.json'),JSON.stringify({models:[{slug:'gpt-test',context_window:100000,effective_context_window_percent:90}]}));
+  }
   async function start(extra={}, deps={}) {
     seen=[]; reports=[];
     const p=await createProxy({pool:['a','b','c'],mode:'Ordered',...extra}, {
@@ -118,20 +126,24 @@ async function main() {
     behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
     url=await start(); assert.equal((await compact(url,{input:[{encrypted_content:'portable'}]})).status,429);
     assert.equal(seen.length,3,'Encrypted compact history must try the configured pool');
-    const contextBody={input:[
+    const contextBody={model:'gpt-test',input:[
       {type:'message',role:'system',content:[{type:'input_text',text:'protected system instructions'}]},
       {type:'message',role:'user',content:[{type:'input_text',text:'remember this user detail'}]},
       {type:'function_call',call_id:'call_1',name:'exec_command',arguments:'{"cmd":"dir"}'},
       {type:'function_call_output',call_id:'call_1',output:'large paired tool output'}
     ]};
     behavior=(_req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end('{"output":[]}');};
-    url=await start({contextManager:true,environment:'launch-account'});
+    const statusRows={a:{CheckedAt:new Date().toISOString(),Windows:[{Label:'5H',UsedPct:28,RemainingPct:72},{Label:'Weekly',UsedPct:12,RemainingPct:88}]},b:{CheckedAt:new Date().toISOString(),Windows:[{Label:'5H',UsedPct:65,RemainingPct:35},{Label:'Weekly',UsedPct:40,RemainingPct:60}]}};
+    url=await start({contextManager:true,environment:'launch-account',root:modelRoot,autoCompact:{enabled:true,mode:'Custom',freePercent:55}},{rows:()=>statusRows});
     let emptyContext=await (await context(url)).json();assert.equal(emptyContext.raw.length,0);assert.equal(emptyContext.capturedAt,null,'A newly opened terminal must show an empty context before its first model request');
+    assert.deepEqual(emptyContext.session.autoCompact,{enabled:true,mode:'Custom',freePercent:55});
+    assert.equal(emptyContext.session.quota.windows[0].usedPercent,28);
     await (await send(url,contextBody)).text();
     state=await (await fetch(url+'/_deck/account')).json();assert.equal(state.contextManager.enabled,true);
     let contextState=await (await context(url)).json();assert.equal(contextState.raw.length,4);assert.equal(contextState.effective.length,4);assert.equal(contextState.account,'a');
+    assert.equal(contextState.session.model,'gpt-test');assert.equal(contextState.session.contextWindow,90000);
     const firstRevision=contextState.revision;
-    let unchanged=await (await fetch(url+'/_deck/context?since='+firstRevision)).json();assert.equal(unchanged.unchanged,true);assert.equal(unchanged.revision,firstRevision);assert.equal('raw' in unchanged,false,'Unchanged companion polls must stay tiny');
+    let unchanged=await (await fetch(url+'/_deck/context?since='+firstRevision)).json();assert.equal(unchanged.unchanged,true);assert.equal(unchanged.revision,firstRevision);assert.equal('raw' in unchanged,false,'Unchanged companion polls must stay tiny');assert.equal(unchanged.session.quota.windows[0].usedPercent,28);
     const systemItem=contextState.raw.find(item=>item.role==='system'), userItem=contextState.raw.find(item=>item.role==='user'), toolItem=contextState.raw.find(item=>item.callId==='call_1');
     assert.ok(systemItem && userItem && toolItem,'The live context snapshot must expose stable item identities');
     assert.equal((await context(url,{action:'suppress',key:systemItem.key})).status,403,'Protected context must require the advanced setting');
@@ -153,7 +165,7 @@ async function main() {
     assert.equal((await context(url,{action:'suppress',key:contextState.raw.find(item=>item.role==='user').key})).status,200);
     assert.equal((await select(url,'b')).status,200);
     await (await send(url,contextBody,{'thread-id':'thread-one'})).text();
-    contextState=await (await context(url)).json();assert.equal(contextState.account,'b','A manual account switch must update the companion account');
+    contextState=await (await context(url)).json();assert.equal(contextState.account,'b','A manual account switch must update the companion account');assert.equal(contextState.session.quota.windows[0].usedPercent,65,'Quota details must follow the active routed account');
     assert.equal(seen.at(-1).account,'b');assert.equal(JSON.parse(seen.at(-1).body).input.length,3,'A manual account switch must keep the current conversation overlay');
     await (await send(url,contextBody,{'thread-id':'thread-two'})).text();
     contextState=await (await context(url)).json();assert.equal(contextState.threadId,'thread-two');assert.equal(contextState.rules.length,0,'A new conversation must not inherit overlays from the previous conversation');
@@ -191,6 +203,7 @@ async function main() {
     state=await (await fetch(url+'/_deck/account')).json(); assert.equal(state.failover.lastRequestAccount,'b');
     console.log('PASS: failover routing, concurrent requests, live account and context control, fresh ranking, bounded quota retries, affinity protection, credential isolation, stream interruption, transport errors, access controls and cancellation.');
   } finally {
+    fs.rmSync(modelRoot,{recursive:true,force:true});
     for(const server of [...proxies,upstream]) { server.closeAllConnections(); server.close(); }
   }
 }

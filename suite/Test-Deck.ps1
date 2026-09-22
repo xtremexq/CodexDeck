@@ -10,6 +10,13 @@ Assert (-not $settings.AutoCompactLaunchEnabled) 'Auto-compact launches must def
 Assert ($settings.AutoCompactHandoffPrompt -match 'DECK_HANDOFF') 'Default handoff prompt must require the checkpoint marker'
 Assert ($settings.AutoCompactHandoffPrompt -eq 'Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.') 'Default handoff prompt is incorrect'
 Assert (-not $settings.TrajectoryEnabled -and -not $settings.ContextManagerEnabled -and $settings.EfficiencyAnalyticsEnabled) 'Trajectory/context must remain opt-in and efficiency analytics must default on'
+Assert (-not $settings.ContextManagerAutoOpen -and $settings.EfficiencySessionLimit -eq 1000) 'Context auto-open must default off and efficiency must analyze 1000 sessions by default'
+$legacySettings=Join-Path $fixture 'settings.json'
+Write-DeckJson $legacySettings @{EfficiencySessionLimit=200}
+Assert ((Get-DeckSettings $fixture).EfficiencySessionLimit -eq 1000) 'The old saved 200-session default was not upgraded'
+Write-DeckJson $legacySettings @{EfficiencySessionLimit=200;EfficiencyLimitVersion=2}
+Assert ((Get-DeckSettings $fixture).EfficiencySessionLimit -eq 200) 'An explicitly saved new-version limit of 200 was not retained'
+Remove-Item -LiteralPath $legacySettings
 Assert ((Get-DeckInspectorMarkerId 'C:\synthetic\marker.json') -eq 'bbb109b158ae51aad899ea44') 'Inspector marker IDs must match the Node inspector session identity'
 Assert (-not (Test-DeckInspectorHealth ([pscustomobject]@{ok=$true;pid=123}) ([pscustomobject]@{ProcessId=123}) 'expected')) 'A pre-update inspector must be restarted'
 Assert (-not (Test-DeckInspectorHealth ([pscustomobject]@{ok=$true;pid=123;version='old'}) ([pscustomobject]@{ProcessId=123}) 'expected')) 'A stale inspector version must be restarted'

@@ -1151,7 +1151,9 @@ if ($codexConversation -and -not $Direct -and -not $poolEntry -and -not $failove
 $useRoutingProxy = $codexConversation -and $failoverChoice -and @($failoverChoice.Pool).Count
 $originalCodexHome = $env:CODEX_HOME
 $originalDeckSessionUrl = $env:CODEX_DECK_SESSION_URL
+$originalDeckSessionPath = $env:CODEX_DECK_SESSION_PATH
 $env:CODEX_HOME = $accountDir
+Remove-Item Env:CODEX_DECK_SESSION_PATH -ErrorAction SilentlyContinue
 if ($Direct) { Remove-Item Env:CODEX_DECK_SESSION_URL -ErrorAction SilentlyContinue }
 $deckSession = $null
 $deckSettings = $null
@@ -1162,6 +1164,7 @@ try {
         . $deckCore
         $deckRoot = Join-Path $suiteRoot 'deck'
         $deckSession = Register-DeckSession $deckRoot $accountName (Get-Location).Path
+        $env:CODEX_DECK_SESSION_PATH = $deckSession
         $deckSettings = Get-DeckSettings $deckRoot
         if ($deckSettings.AutoStart) { Start-DeckCompanion $suiteRoot }
     }
@@ -1171,16 +1174,16 @@ if ($deckInteractiveConversation -and $deckSettings -and $deckSettings.AutoCompa
 function Open-DeckLaunchInspector {
     if (-not $deckInteractiveConversation -or -not $deckSettings) { return }
     try {
-        if($deckSettings.TrajectoryEnabled -and $deckSettings.ContextManagerEnabled -and $failoverProxy -and $failoverProxy.ContextUrl){
+        if($deckSettings.TrajectoryEnabled -and $deckSettings.ContextManagerEnabled -and $deckSettings.ContextManagerAutoOpen -and $failoverProxy -and $failoverProxy.ContextUrl){
             [void](Open-DeckInspector $suiteRoot 'Trajectory' -Companion -SessionPath $deckSession)
             Write-Host 'Codex Deck Live Context companion opened for this conversation.'
-        }elseif($deckSettings.TrajectoryEnabled){
+        }elseif($deckSettings.TrajectoryEnabled -and -not $deckSettings.ContextManagerEnabled){
             [void](Open-DeckInspector $suiteRoot 'Trajectory')
             Write-Host 'Codex Deck Trajectory opened for this conversation.'
-        }elseif($deckSettings.EfficiencyAnalyticsEnabled){
+        }elseif(-not $deckSettings.TrajectoryEnabled -and $deckSettings.EfficiencyAnalyticsEnabled){
             [void](Open-DeckInspector $suiteRoot 'Efficiency')
             Write-Host 'Codex Deck Efficiency Analytics opened for this conversation.'
-        }else{return}
+        }
     } catch { Write-Warning "Codex Deck inspector could not open: $($_.Exception.Message)" }
 }
 $failoverProxy = $null
@@ -1222,7 +1225,7 @@ try {
         }
         if ($useRoutingProxy) {
             $environmentMembers = if ($poolConversation) { @($members) } else { @() }
-            $failoverProxy = Start-DeckFailover -SuiteRoot $suiteRoot -Pool $failoverChoice.Pool -Mode $routeMode -Account $failoverChoice.Account -Environment $accountName -EnvironmentPool $environmentMembers -Automatic:$automaticFailover -ContextManagerEnabled:$deckSettings.ContextManagerEnabled -ContextManagerProtected:$deckSettings.ContextManagerProtected
+            $failoverProxy = Start-DeckFailover -SuiteRoot $suiteRoot -Pool $failoverChoice.Pool -Mode $routeMode -Account $failoverChoice.Account -Environment $accountName -EnvironmentPool $environmentMembers -Automatic:$automaticFailover -ContextManagerEnabled:$deckSettings.ContextManagerEnabled -ContextManagerProtected:$deckSettings.ContextManagerProtected -AutoCompact:$AutoCompact -AutoCompactMode $compactSettings.AutoCompactMode -AutoCompactFreePercent $threshold
             Set-DeckSessionContext $deckSession $failoverProxy.ContextUrl
             if ($automaticFailover -or $poolConversation) {
                 foreach ($poolAccount in $failoverChoice.Pool) {
@@ -1288,7 +1291,7 @@ try {
         }
     } elseif ($useRoutingProxy) {
         $environmentMembers = if ($poolConversation) { @($members) } else { @() }
-        $failoverProxy = Start-DeckFailover -SuiteRoot $suiteRoot -Pool $failoverChoice.Pool -Mode $routeMode -Account $failoverChoice.Account -Environment $accountName -EnvironmentPool $environmentMembers -Automatic:$automaticFailover -ContextManagerEnabled:$deckSettings.ContextManagerEnabled -ContextManagerProtected:$deckSettings.ContextManagerProtected
+        $failoverProxy = Start-DeckFailover -SuiteRoot $suiteRoot -Pool $failoverChoice.Pool -Mode $routeMode -Account $failoverChoice.Account -Environment $accountName -EnvironmentPool $environmentMembers -Automatic:$automaticFailover -ContextManagerEnabled:$deckSettings.ContextManagerEnabled -ContextManagerProtected:$deckSettings.ContextManagerProtected -AutoCompact:$AutoCompact -AutoCompactMode $compactSettings.AutoCompactMode -AutoCompactFreePercent $threshold
         Set-DeckSessionContext $deckSession $failoverProxy.ContextUrl
         if ($automaticFailover -or $poolConversation) {
             foreach ($poolAccount in $failoverChoice.Pool) {
@@ -1311,6 +1314,7 @@ try {
 } finally {
     $env:CODEX_HOME = $originalCodexHome
     $env:CODEX_DECK_SESSION_URL = $originalDeckSessionUrl
+    $env:CODEX_DECK_SESSION_PATH = $originalDeckSessionPath
     $proxyExitedEarly = $false
     $proxyExitCode = $null
     $activeAccount = $accountName

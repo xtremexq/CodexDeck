@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('account','pool','usage','delay','schedule')]
+    [ValidateSet('account','pool','usage','delay','schedule','context')]
     [string]$Command = 'account',
 
     [Parameter(Position = 1)]
@@ -87,6 +87,29 @@ function Write-DeckSessionStatus([object]$Status) {
 
 $requested = if ($UseAccount) { $UseAccount } else { $Selection }
 $status = Invoke-DeckSessionAccount
+
+if($Command -eq 'context'){
+    if($requested -or $MessageParts -or $Json){throw '!context does not accept arguments.'}
+    $sessionPath=[string]$env:CODEX_DECK_SESSION_PATH
+    if(-not $sessionPath -or -not $env:CODEX_HOME){throw 'This terminal has no attached live context session.'}
+    $accountDir=Get-Item -LiteralPath $env:CODEX_HOME -ErrorAction Stop
+    if(-not $accountDir.PSIsContainer -or $accountDir.Parent.Name -ne 'accounts'){throw 'This command must run inside a managed codex-auth conversation.'}
+    $suiteRoot=$accountDir.Parent.Parent.FullName
+    $sessionRoot=[IO.Path]::GetFullPath((Join-Path $suiteRoot 'deck/sessions'))
+    $sessionFull=[IO.Path]::GetFullPath($sessionPath)
+    if([IO.Path]::GetDirectoryName($sessionFull) -ne $sessionRoot){throw 'The attached live context session path is invalid.'}
+    $core=Join-Path $suiteRoot 'Deck.Core.ps1'
+    if(-not (Test-Path -LiteralPath $core -PathType Leaf)){throw 'Live context support is not installed. Reinstall Codex Deck.'}
+    . $core
+    $marker=Read-DeckJson $sessionFull
+    if(-not $marker -or $marker.Account -ne [string]$status.environment.name -or $marker.ContextUrl -ne ($env:CODEX_DECK_SESSION_URL+'/_deck/context')){throw 'The live context route does not match this terminal.'}
+    $contextUrl=Open-DeckInspector $suiteRoot 'Trajectory' -Companion -SessionPath $sessionFull -NoOpen
+    $presenceUrl=$contextUrl.Replace('/context?live=','/api/context/presence?id=')
+    $presence=Invoke-RestMethod -Uri $presenceUrl -Method Get -TimeoutSec 2
+    if($presence.open){Write-Output 'Codex Deck Live Context is already open for this terminal.'}
+    else{[void](Open-DeckInspector $suiteRoot 'Trajectory' -Companion -SessionPath $sessionFull);Write-Output 'Codex Deck Live Context opened for this terminal.'}
+    exit 0
+}
 
 if($Command -in @('delay','schedule')){
     if($UseAccount -or $Json){throw "$Command does not accept account-selection or JSON options."}

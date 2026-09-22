@@ -39,8 +39,8 @@ function Get-DeckDefaults {
         FailoverEnabled=$false; FailoverMode='Ordered'; FailoverAccounts=''
         AutoCompactLaunchEnabled=$false; AutoCompactMode='Native'; AutoCompactThresholdPercent=55
         AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.'
-        TrajectoryEnabled=$false; ContextManagerEnabled=$false; ContextManagerProtected=$false
-        EfficiencyAnalyticsEnabled=$true; EfficiencySessionLimit=200
+        TrajectoryEnabled=$false; ContextManagerEnabled=$false; ContextManagerAutoOpen=$false; ContextManagerProtected=$false
+        EfficiencyAnalyticsEnabled=$true; EfficiencySessionLimit=1000; EfficiencyLimitVersion=2
     }
 }
 function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
@@ -175,6 +175,9 @@ function Get-DeckSettings([string]$Root) {
                 try { $settings[$key]=[Convert]::ToInt32($candidate) } catch { }
             }
         }
+        # The old 200-session default was saved by the UI. Move that stock
+        # value to the new default while retaining other chosen limits.
+        if (-not $saved.PSObject.Properties['EfficiencyLimitVersion'] -and $saved.EfficiencySessionLimit -eq 200) { $settings.EfficiencySessionLimit=1000 }
         # WarmupAllPaid was the pre-1.5 boolean selector. Migrate it only when
         # the new multi-select scope has not already been saved.
         if (-not $saved.PSObject.Properties['WarmupPlanTypes'] -and

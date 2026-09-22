@@ -7,7 +7,7 @@ $files = @('Codex-Deck.ps1','Deck.Core.ps1','Deck.Commands.ps1','Deck.WarmupWork
     'Test-Deck.ps1','Test-DeckCommands.ps1','Test-DeckEnvironments.ps1','Test-DeckEnvironmentLaunch.ps1','Test-DeckAccountTools.ps1','Test-DeckFailover.ps1','Test-DeckScheduler.ps1','Test-DeckStorage.ps1','Test-DeckBackup.ps1','Test-CodexAuth.ps1','Test-CodexLoopUsage.ps1',
     'Test-DeckBundledSkills.ps1','Test-DeckScheduledMessages.ps1','deck/assets/codex-deck.png','deck/assets/codex-deck.ico','skills/debug-swarm/SKILL.md','skills/debug-swarm/agents/openai.yaml','skills/debug-swarm/.codexdeck.json')
 $files += @('Deck.AutoCompact.cjs','Deck.AutoCompact.Sidecar.cjs','Deck.Inspector.cjs','Test-DeckAutoCompact.cjs','Test-DeckInspector.cjs')
-$wrappers = @('codex-auth.ps1','codex-auth.cmd','codex-check.cmd','codex-deck.cmd','codex-deck-session.ps1','codex-deck-session.cmd','account.cmd','pool.cmd','usage.cmd','delay.cmd','schedule.cmd','check.cmd','deck.cmd')
+$wrappers = @('codex-auth.ps1','codex-auth.cmd','codex-check.cmd','codex-deck.cmd','codex-deck-session.ps1','codex-deck-session.cmd','account.cmd','pool.cmd','usage.cmd','delay.cmd','schedule.cmd','check.cmd','deck.cmd','context.cmd')
 # Validate the complete payload before changing an existing installation.
 foreach ($name in $files) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "suite/$name") -PathType Leaf)) { throw "Missing suite file: $name" } }
 foreach ($name in $wrappers) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "bin/$name") -PathType Leaf)) { throw "Missing command: $name" } }

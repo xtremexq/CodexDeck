@@ -19,7 +19,7 @@ try {
         if(Test-Path -LiteralPath (Join-Path $pool "skills/$name")){throw "Legacy AI-backed command skill was not removed: $name"}
     }
     if([IO.File]::ReadAllText((Join-Path $custom 'skills/account/SKILL.md')) -ne 'user-owned'){throw 'An unmanaged same-name skill was removed.'}
-    foreach($name in @('account','pool','usage','delay','schedule','check','deck')){
+    foreach($name in @('account','pool','usage','delay','schedule','check','deck','context')){
         $wrapper=Join-Path $PSScriptRoot "../bin/$name.cmd"
         if(-not (Test-Path -LiteralPath $wrapper -PathType Leaf)){throw "Missing local shell command: $name"}
     }
