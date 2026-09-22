@@ -89,3 +89,22 @@ Assert (Test-Path (Join-Path $fixture 'deck/warmup-settings-changed.json')) 'Sch
 
 Assert (($frame.Text -join "`n") -notmatch 'Sessions:') 'Empty sessions line shown'
 Assert (@($frame | Where-Object { $_.Text -match 'NAVIGATE|MANAGE|WARMUP' -and $_.Color -eq 'Cyan' }).Count -eq 0) 'Shortcut groups still cyan'
+
+$themeCache=@{account40=@{Account='account40';Status='available';CheckedAt=[DateTimeOffset]::Now.ToString('o');Windows=@(
+    @{Label='5H';DurationSeconds=18000;RemainingPct=72;ResetsAtUnix=$resetAt},
+    @{Label='Weekly';DurationSeconds=604800;RemainingPct=54;ResetsAtUnix=$weeklyReset}
+)}}
+$themeSignatures=@{}
+foreach($theme in @('Focus','Cards','Ledger','Split')){
+    $themed=@(Get-DeckTerminalFrame $names $themeCache $profiles @() @{} 39 100 25 '' 'Ready' $true $null @{} $false 55 $false 'Native' $theme)
+    $themedText=$themed.Text -join "`n"
+    Assert ($themed.Count -le 24) "$theme theme overflows a 25-line terminal"
+    Assert ($themedText -match 'account40' -and $themedText -match '72%' -and $themedText -match '54%') "$theme theme lost the selected account or quotas"
+    Assert ($themedText -notmatch 'person@example.com') "$theme theme exposed a masked email"
+    Assert ($themedText -match 'LAUNCH' -and $themedText -match 'ACCOUNTS' -and $themedText -match 'WARM-UP' -and $themedText -match 'OPEN' -and $themedText -match 'FILES') "$theme theme did not separate shortcut groups"
+    Assert ($themedText -match 'NOTICE    Ready') "$theme theme hid the current notice"
+    $themeSignatures[$theme]=$themedText
+    $narrow=@(Get-DeckTerminalFrame $names $themeCache $profiles @() @{} 39 60 25 '' 'Ready' $true $null @{} $false 55 $false 'Native' $theme)
+    Assert ($narrow.Count -le 24 -and @($narrow | Where-Object {$_.Text.Length -gt 59}).Count -eq 0) "$theme theme does not fit a narrow terminal"
+}
+Assert (@($themeSignatures.Values | Select-Object -Unique).Count -eq 4) 'Dashboard themes are not distinct'

@@ -43,7 +43,7 @@ Always optional; Deck is free and open source.
 
 **Requires Windows, Windows PowerShell 5.1, and Codex CLI available as `codex`.** The desktop companion uses WPF and the Windows system tray. Linux and macOS are not supported. No administrator account is required.
 
-Download **[CodexDeck-1.7.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/v1.7.0/CodexDeck-1.7.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
+Download **[CodexDeck-1.7.1.zip](https://github.com/xtremexq/CodexDeck/releases/download/v1.7.1/CodexDeck-1.7.1.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
@@ -97,6 +97,8 @@ The installer adds command wrappers to your user PATH and preserves existing acc
 
 Cached usage appears immediately and opening the dashboard performs no account checks. Press **R** to refresh the selected signed-in account or **A** to queue all signed-in accounts, with up to three checks running at once. Run `codex-auth -a` to open the dashboard and queue that same all-account refresh immediately; `-a` is only accepted with the otherwise plain command. Checks stay in the background and do not block navigation. Opening the dashboard also does not send a warm-up prompt.
 
+**Settings → Appearance → Codex-auth dashboard theme** offers five layouts. **Default** keeps the original dashboard; **Focus** emphasizes the selected account; **Cards** shows compact quota cards; **Ledger** compares accounts in a table; **Split** places the account roster beside its details. The four new layouts group shortcuts by task. Changing the setting updates an open dashboard after its next settings refresh.
+
 **Bars show quota remaining.** Primary is the five-hour window, or another plan-specific window such as a free account's longer allowance. Weekly is shown separately when available. `?` means the value is unknown; it does not mean zero. Reset timestamps use your local time. **Reset passed** means the displayed value needs a fresh check.
 
 The selected account's details show its model, reasoning effort, last check and attached terminal sessions. A connected session means a terminal launched through `codex-auth`; it does not necessarily mean Codex is generating a response.
@@ -137,7 +139,7 @@ Context overlays apply at the shared request boundary, so they remain active acr
 
 ### Efficiency analytics (separate feature)
 
-**Efficiency analytics is an independent feature**, enabled by default but separately switchable in Settings. Open it with **Deck Analysis** in the panel, the tray menu, or **Y** in the terminal dashboard. When Trajectory is disabled, interactive `codex-auth` launches Efficiency automatically. Its PrismoDev-inspired analysis scans the 1,000 most recently updated local rollouts across all accounts by default; the limit remains configurable from 10 to 1,000 and a notice appears in the panel when reached. It reports exact token totals where Codex recorded them, cache use, repeated commands and paths, oversized tool results, tool frequency, compactions, and token distribution by account, project, and model. It then ranks concrete opportunities to reduce repeated discovery or noisy output.
+**Efficiency analytics is an independent feature**, enabled by default but separately switchable in Settings. Open it with **Deck Analysis** in the panel, the tray menu, or **Y** in the terminal dashboard. When Trajectory is disabled, interactive `codex-auth` launches Efficiency automatically. Its PrismoDev-inspired analysis scans the 1,000 most recently updated local rollouts across all accounts by default; the limit remains configurable from 10 to 5,000 and a notice appears in the panel when reached. It reports exact token totals where Codex recorded them, cache use, repeated commands and paths, oversized tool results, tool frequency, compactions, and token distribution by account, project, and model. It then ranks concrete opportunities to reduce repeated discovery or noisy output.
 
 The analytics feature does not enable, depend on, or modify Trajectory or the context manager. The two additions share only a low-level local rollout parser/index so Deck does not perform the same filesystem work twice.
 
@@ -197,6 +199,8 @@ Each profile has a separate `CODEX_HOME`. New profiles can inherit local configu
 **Settings → Integrations** can enable one context optimizer—**RTK** or **Headroom MCP**—and independently enable **CodeGraph** repository intelligence and **Browser Harness** browser automation. Fresh Deck installs include only small adapters and a trusted source manifest: no upstream package is downloaded while these options are off. Saving an enabled option installs a missing package on demand. **Check & update** checks for a new version only when requested, and **Roll back** reactivates an earlier retained RTK, Headroom, or CodeGraph version. Deck recognizes an existing Browser Harness installation without replacing it; its update button requires a second click after showing the available version.
 
 Deck stores these tools under `.codex-loop/integrations/packages/<tool>/<version>` and injects their hook/MCP configuration only at launch. It does not rewrite account `config.toml` or `AGENTS.md`, so account and pool isolation remains intact. The selected integrations follow every Deck conversation path, including dashboard/account launches, pools, failover, routing and both auto-compaction modes. RTK and Headroom are deliberately exclusive because both optimize context; CodeGraph can run with either. Prefix a single shell command with `NO_RTK=1 ` to bypass RTK rewriting for that command.
+
+When the CodeGraph MCP server starts for a Codex conversation, it automatically indexes that conversation's starting folder. Its tools are called by the agent when useful; it does not change the account's project. If every account starts in your home folder, CodeGraph will index that home folder for each launch. Start `codex-auth accountX` from the project's folder, or enable **Settings → Appearance → Always ask where to open the terminal** and choose the project folder for each desktop launch. The **CodeGraph tool profile** controls how many tools the agent sees, not which folder is indexed.
 
 The default Global Rules contain usage-efficiency guidance. The debug-swarm rule appears only when that skill is installed for the account; Browser Harness guidance appears only when the integration is enabled and installed. Custom Global Rules remain editable. Browser Harness remains in its existing `uv` tool environment, and Deck preserves any user-owned Browser Harness skill.
 

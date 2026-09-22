@@ -22,6 +22,7 @@
 *.p12
 dist/
 artifacts/
+**/integrations/browser-harness-detection.json
 .DS_Store
 Thumbs.db
 Desktop.ini

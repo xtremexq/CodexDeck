@@ -65,6 +65,8 @@ async function main() {
     const apiReport=await (await fetch(inspector.baseUrl+'api/efficiency')).json();assert.equal(apiReport.totals.total,1400);assert.equal('file' in apiReport.sessions[0],false);
     writeSettings({TrajectoryEnabled:true,ContextManagerEnabled:false,EfficiencyAnalyticsEnabled:true,EfficiencySessionLimit:200});
     assert.equal((await (await fetch(inspector.baseUrl+'api/efficiency')).json()).limit,1000,'The legacy saved 200-session default must migrate in the inspector');
+    writeSettings({TrajectoryEnabled:true,ContextManagerEnabled:false,EfficiencyAnalyticsEnabled:true,EfficiencySessionLimit:5000,EfficiencyLimitVersion:2});
+    assert.equal((await (await fetch(inspector.baseUrl+'api/efficiency')).json()).limit,5000,'The inspector must accept the 5000-session limit');
     assert.equal((await fetch(inspector.baseUrl+'api/context?id=missing')).status,403,'Context management has its own opt-in gate');
     assert.equal((await fetch(inspector.baseUrl+'context?live=aaaaaaaaaaaaaaaaaaaaaaaa')).status,403,'The compact companion must share the live-context opt-in gate');
     assert.equal((await fetch(inspector.baseUrl+'health',{headers:{origin:'https://example.com'}})).status,403);

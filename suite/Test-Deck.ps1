@@ -12,6 +12,9 @@ Assert ($settings.AutoCompactHandoffPrompt -match 'DECK_HANDOFF') 'Default hando
 Assert ($settings.AutoCompactHandoffPrompt -eq 'Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.') 'Default handoff prompt is incorrect'
 Assert (-not $settings.TrajectoryEnabled -and -not $settings.ContextManagerEnabled -and $settings.EfficiencyAnalyticsEnabled) 'Trajectory/context must remain opt-in and efficiency analytics must default on'
 Assert (-not $settings.ContextManagerAutoOpen -and $settings.EfficiencySessionLimit -eq 1000) 'Context auto-open must default off and efficiency must analyze 1000 sessions by default'
+Write-DeckJson (Join-Path $fixture 'settings.json') @{EfficiencySessionLimit=5000;EfficiencyLimitVersion=2}
+Assert ((Get-DeckSettings $fixture).EfficiencySessionLimit -eq 5000) 'Efficiency must allow a 5000-session limit'
+Remove-Item -LiteralPath (Join-Path $fixture 'settings.json')
 $legacySettings=Join-Path $fixture 'settings.json'
 Write-DeckJson $legacySettings @{EfficiencySessionLimit=200}
 Assert ((Get-DeckSettings $fixture).EfficiencySessionLimit -eq 1000) 'The old saved 200-session default was not upgraded'
@@ -58,6 +61,7 @@ Assert (-not $settings.WarmupEnabled) 'Warm-up must default off'
 Assert (-not $settings.WarmupSchedulingEnabled) 'Background warm-up scheduling must default off'
 Assert (-not $settings.AlwaysOnTop) 'Always on top must default off'
 Assert ($settings.ViewMode -eq 'Widget') 'Widget must be default'
+Assert ($settings.DashboardTheme -eq 'Default') 'Terminal dashboard theme must default to the original layout'
 Assert ($settings.Width -eq 476 -and $settings.WidgetWidth -eq 238 -and $settings.Height -eq 0 -and $settings.WidgetHeight -eq 0) 'Content-based geometry defaults failed'
 $recoverySuite=Join-Path $fixture 'recovery-suite'
 $recoveryAccount=Join-Path $recoverySuite 'accounts/account1'
@@ -141,6 +145,14 @@ Assert ($task.Process.WaitForExit(10000)) 'Worker did not finish'
 Assert ($task.Out.Result.Trim() -eq 'synthetic worker output') 'Worker output lost'
 Assert ($task.Job) 'Worker process tree was not assigned to a cleanup job'
 Dispose-DeckTask $task
+$moduleTask=Start-DeckTask 'Get-FileHash -LiteralPath $PSHOME\powershell.exe | Select-Object -ExpandProperty Algorithm' 'Test' ''
+Assert ($moduleTask.Process.WaitForExit(10000)) 'Worker module check did not finish'
+Assert ($moduleTask.Process.ExitCode -eq 0 -and $moduleTask.Out.Result.Trim() -eq 'SHA256') 'Windows PowerShell worker inherited an incompatible module path'
+Dispose-DeckTask $moduleTask
+$errorTask=Start-DeckTask "throw 'Synthetic integration failure'" 'Test' ''
+Assert ($errorTask.Process.WaitForExit(10000)) 'Worker error check did not finish'
+Assert ((Get-DeckTaskFailureMessage $errorTask) -eq 'Synthetic integration failure') 'Worker CLIXML error was not decoded'
+Dispose-DeckTask $errorTask
 $treeCode='$child=Start-Process powershell.exe -ArgumentList ''-NoProfile'',''-Command'',''Start-Sleep -Seconds 30'' -PassThru; [Console]::Out.WriteLine($child.Id)'
 $treeTask=Start-DeckTask $treeCode 'Test' 'account1'
 Assert ($treeTask.Process.WaitForExit(10000)) 'Process-tree parent did not finish'

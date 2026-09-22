@@ -29,7 +29,7 @@ function efficiencyLimit(root) {
   const saved=settings(root);
   const legacyDefault=saved.EfficiencyLimitVersion == null && Number(saved.EfficiencySessionLimit) === 200;
   const value=legacyDefault ? 1000 : Number(saved.EfficiencySessionLimit || 1000);
-  return Math.max(10,Math.min(1000,Number.isFinite(value) ? value : 1000));
+  return Math.max(10,Math.min(5000,Number.isFinite(value) ? value : 1000));
 }
 function enabled(root, mode) {
   const value = settings(root);
@@ -278,11 +278,11 @@ $('#search').oninput=renderSessions;$('#cancelEdit').onclick=()=>$('#editor').cl
 setInterval(refreshSessionList,30000);
 </script></body></html>`}
 async function createInspector(root,stateFile){
-  const secret=crypto.randomBytes(32).toString('hex'); let sessions=[],lastIndexAt=0,indexing=null; const contextPresence=new Map();
+  const secret=crypto.randomBytes(32).toString('hex'); let sessions=[],lastIndexAt=0,indexing=null,indexedLimit=0; const contextPresence=new Map();
   const refresh=async()=>{
     const limit=efficiencyLimit(root);
-    if(Date.now()-lastIndexAt>10000){
-      if(!indexing)indexing=walkSessionsAsync(root,1000).then(result=>{sessions=result;lastIndexAt=Date.now()}).finally(()=>{indexing=null});
+    if(Date.now()-lastIndexAt>10000 || limit>indexedLimit){
+      if(!indexing)indexing=walkSessionsAsync(root,limit).then(result=>{sessions=result;indexedLimit=limit;lastIndexAt=Date.now()}).finally(()=>{indexing=null});
       await indexing;
     }
     return limit;

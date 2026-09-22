@@ -51,7 +51,123 @@ function Get-DeckTerminalHealth($Record) {
     if ($Record.Status -ne 'available') { return 'Unavailable' }
     return 'Ready'
 }
-function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 55, [bool]$CompactAdjusting = $false, [string]$CompactMode = 'Native') {
+function Get-DeckTerminalThemePageSize([string]$Theme, [int]$Height) {
+    switch ($Theme) {
+        'Focus' { return [Math]::Max(1,$Height - 20) }
+        'Cards' { return [Math]::Max(1,[int][Math]::Floor(($Height - 15) / 2)) }
+        'Ledger' { return [Math]::Max(1,$Height - 18) }
+        'Split' { return [Math]::Max(1,$Height - 15) }
+        default { return [Math]::Max(1,$Height - 18) }
+    }
+}
+function Get-DeckTerminalThemeEntry([string]$Name,$Cache,$Profiles,$Sessions,$Tasks,[bool]$Mask) {
+    $row=$Cache[$Name]; $profile=$Profiles[$Name]
+    $primary=$row.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
+    if(-not $primary){$primary=$row.Windows | Where-Object DurationSeconds -ne 604800 | Select-Object -First 1}
+    $weekly=$row.Windows | Where-Object DurationSeconds -eq 604800 | Select-Object -First 1
+    $state=Get-DeckTerminalHealth $row
+    if($profile.PlanType -eq 'pool'){$state='Pooled session'}
+    if($Tasks.ContainsKey($Name)){$state='Checking...'}
+    $email=[string]$profile.Email
+    if($Mask -and $email){$email=$email -replace '^(.).*?(@.*)$','$1***$2'}
+    $checked='never'
+    if($row.CheckedAt){try{$checked=([DateTimeOffset]$row.CheckedAt).ToLocalTime().ToString('MMM dd HH:mm')}catch{}}
+    $connected=@($Sessions | Where-Object Account -eq $Name)
+    return [pscustomobject]@{
+        Name=$Name;Plan=[string]$profile.PlanType;State=$state;Primary=$primary;Weekly=$weekly
+        Reset=(Format-DeckTerminalReset (Get-DeckTerminalResetWindow $row $primary))
+        Email=$email;Model=[string]$profile.Model;Effort=[string]$profile.Effort
+        Checked=$checked;SessionCount=$connected.Count;Credits=(Format-DeckResetCredits $row)
+    }
+}
+function Format-DeckTerminalThemePercent($Window) {
+    if(-not $Window -or $null -eq $Window.RemainingPct){return '  ?%'}
+    return ('{0,3}%' -f [int][Math]::Min(100,[Math]::Max(0,[double]$Window.RemainingPct)))
+}
+function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[int]$Selected,[int]$Width,[int]$Height,[string]$Filter,[string]$Notice,[bool]$Mask,$WarmupSettings,$WarmupHistory,[bool]$AutoCompact,[int]$CompactThreshold,[bool]$CompactAdjusting,[string]$CompactMode,[string]$Theme) {
+    $lines=[Collections.Generic.List[object]]::new()
+    function Add-Line([string]$Text,[string]$Color='Gray',[string]$Background='Black') {
+        [void]$lines.Add(@{Text=(ConvertTo-DeckTerminalText $Text ([Math]::Max(1,$Width - 1)));Color=$Color;Background=$Background})
+    }
+    $rule='  '+('-' * [Math]::Max(1,[Math]::Min(78,$Width - 4)))
+    $pageSize=Get-DeckTerminalThemePageSize $Theme $Height
+    $start=[int]([Math]::Floor($Selected / $pageSize) * $pageSize)
+    $end=[Math]::Min($Names.Count,$start+$pageSize)
+    $entries=@(for($i=$start;$i -lt $end;$i++){Get-DeckTerminalThemeEntry $Names[$i] $Cache $Profiles $Sessions $Tasks $Mask})
+    $active=if($Names.Count){Get-DeckTerminalThemeEntry $Names[$Selected] $Cache $Profiles $Sessions $Tasks $Mask}else{$null}
+    $filterText=if($Filter){"FILTER  $Filter"}else{'FILTER  All accounts  / to search'}
+    Add-Line ("  CODEX / DECK     $($Theme.ToUpperInvariant())") 'Cyan'
+    Add-Line ('  {0} accounts    {1} sessions    {2} checking    |    {3}' -f $Names.Count,@($Sessions).Count,$Tasks.Count,$filterText) 'DarkGray'
+    Add-Line $rule 'DarkGray'
+    switch($Theme){
+        'Focus' {
+            Add-Line '  SELECTED ACCOUNT' 'Cyan'
+            if($active){
+                Add-Line ('  > {0}   {1}   {2}' -f $active.Name,$active.Plan,$active.State) 'White' 'DarkBlue'
+                Add-Line ('    PRIMARY  {0}    WEEKLY  {1}' -f (Format-DeckTerminalQuota $active.Primary),(Format-DeckTerminalQuota $active.Weekly)) 'Green'
+                Add-Line ('    RESET  {0}    CHECKED  {1}    SESSIONS  {2}' -f $active.Reset,$active.Checked,$active.SessionCount) 'Gray'
+                Add-Line ('    {0}   |   {1} / {2}' -f $active.Email,$active.Model,$active.Effort) 'DarkGray'
+            }else{Add-Line '  No matching accounts. Press N to add one.' 'Yellow';Add-Line '';Add-Line '';Add-Line ''}
+            Add-Line '  ACCOUNT ROSTER                         PRIMARY   WEEKLY   STATE' 'DarkCyan'
+            foreach($entry in $entries){
+                $marker=if($entry.Name -eq $active.Name){'>'}else{' '}
+                Add-Line ('  {0} {1,-27} {2,5}   {3,5}   {4}' -f $marker,(ConvertTo-DeckTerminalText $entry.Name 27),(Format-DeckTerminalThemePercent $entry.Primary),(Format-DeckTerminalThemePercent $entry.Weekly),$entry.State) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})
+            }
+        }
+        'Cards' {
+            foreach($entry in $entries){
+                $marker=if($entry.Name -eq $active.Name){'>'}else{' '}
+                Add-Line ('  {0} {1,-24} {2,-9} {3}' -f $marker,(ConvertTo-DeckTerminalText $entry.Name 24),(ConvertTo-DeckTerminalText $entry.Plan 9),$entry.State) $(if($marker -eq '>'){'White'}else{'Cyan'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})
+                Add-Line ('      PRIMARY {0}    WEEKLY {1}    RESET {2}' -f (Format-DeckTerminalQuota $entry.Primary),(Format-DeckTerminalQuota $entry.Weekly),$entry.Reset) 'Green'
+            }
+            if(-not $Names.Count){Add-Line '  No matching accounts. Press N to add one.' 'Yellow'}
+            if($active){Add-Line ('  SELECTED  {0}  |  {1} / {2}  |  {3}' -f $active.Name,$active.Model,$active.Effort,$active.Email) 'DarkCyan'}
+        }
+        'Ledger' {
+            Add-Line ('  {0,-20} {1,-8} {2,7} {3,7} {4,-15} {5}' -f 'ACCOUNT','PLAN','PRIMARY','WEEK','STATE','RESET') 'DarkCyan'
+            foreach($entry in $entries){
+                $marker=if($entry.Name -eq $active.Name){'>'}else{' '}
+                Add-Line ('  {0}{1,-19} {2,-8} {3,7} {4,7} {5,-15} {6}' -f $marker,(ConvertTo-DeckTerminalText $entry.Name 19),(ConvertTo-DeckTerminalText $entry.Plan 8),(Format-DeckTerminalThemePercent $entry.Primary),(Format-DeckTerminalThemePercent $entry.Weekly),(ConvertTo-DeckTerminalText $entry.State 15),$entry.Reset) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})
+            }
+            if(-not $Names.Count){Add-Line '  No matching accounts. Press N to add one.' 'Yellow'}
+            Add-Line $rule 'DarkGray'
+            if($active){Add-Line ('  {0}  |  {1} / {2}  |  {3}' -f $active.Name,$active.Model,$active.Effort,$active.Email) 'Cyan';Add-Line ('  Checked {0}   Sessions {1}   Reset credits {2}' -f $active.Checked,$active.SessionCount,$active.Credits) 'DarkGray'}
+            else{Add-Line '';Add-Line ''}
+        }
+        'Split' {
+            $left=[Math]::Min(34,[Math]::Max(24,[int][Math]::Floor($Width * .38)))
+            Add-Line (('  {0,-'+$left+'} | ACCOUNT DETAIL') -f 'ACCOUNTS') 'DarkCyan'
+            $detail=@()
+            if($active){
+                $detail=@($active.Name,('Plan: '+$active.Plan),('State: '+$active.State),('Primary: '+(Format-DeckTerminalQuota $active.Primary)),('Weekly:  '+(Format-DeckTerminalQuota $active.Weekly)),('Next reset: '+$active.Reset),('Checked: '+$active.Checked),('Sessions: '+$active.SessionCount),('Model: '+$active.Model+' / '+$active.Effort),$active.Email)
+            }
+            for($j=0;$j -lt [Math]::Max($entries.Count,[Math]::Min($detail.Count,$pageSize));$j++){
+                $entry=if($j -lt $entries.Count){$entries[$j]}else{$null}
+                $marker=if($entry -and $entry.Name -eq $active.Name){'>'}else{' '}
+                $leftText=if($entry){'{0} {1,-16} {2,4}' -f $marker,(ConvertTo-DeckTerminalText $entry.Name 16),(Format-DeckTerminalThemePercent $entry.Primary)}else{''}
+                $rightText=if($j -lt $detail.Count){$detail[$j]}else{''}
+                Add-Line (('  {0,-'+$left+'} | {1}') -f $leftText,$rightText) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})
+            }
+            if(-not $Names.Count){Add-Line '  No matching accounts. Press N to add one.' 'Yellow'}
+        }
+    }
+    Add-Line ('  {0}-{1} of {2} accounts' -f [Math]::Min($start+1,$Names.Count),$end,$Names.Count) 'DarkGray'
+    Add-Line $rule 'DarkGray'
+    Add-Line '  LAUNCH    Enter open   / find   B best   Q quit' 'Cyan'
+    Add-Line '  ACCOUNTS  R check   A all   N new   L login   F2 rename   M mask' 'Gray'
+    Add-Line '  WARM-UP   U now   T times   W select   P pause' 'Gray'
+    Add-Line '  OPEN      D desktop   S settings   V trajectory   Y analysis' 'Gray'
+    Add-Line '  FILES     G rules   I instructions   E memories   K skills' 'Gray'
+    if($CompactAdjusting){Add-Line ('  COMPACT   {0}  {1}% free   Up/Down 5%   Enter save   Esc cancel' -f $CompactMode,$CompactThreshold) 'White' 'DarkBlue'}
+    else{Add-Line ('  COMPACT   C [{0}] {1} at {2}% free   Hold C to adjust' -f $(if($AutoCompact){'x'}else{' '}),$CompactMode,$CompactThreshold) 'Gray'}
+    $warmMode=if(-not $WarmupSettings -or -not $WarmupSettings.WarmupEnabled){'PAUSED'}elseif($WarmupSettings.WarmupSchedulingEnabled){'SCHEDULED'}else{'UNSCHEDULED'}
+    $warmState=if($WarmupSettings -and $active){Get-DeckWarmupStatus $WarmupSettings $(if($Cache[$active.Name]){$Cache[$active.Name]}else{@{Account=$active.Name}}) $WarmupHistory[$active.Name]}else{'No account selected'}
+    Add-Line ('  STATUS    Warm-up {0}  |  {1}' -f $warmMode,$warmState) 'Yellow'
+    Add-Line ('  NOTICE    '+$Notice) 'Yellow'
+    return $lines.ToArray()
+}
+function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 55, [bool]$CompactAdjusting = $false, [string]$CompactMode = 'Native', [string]$Theme = 'Default') {
+    if($Theme -in @('Focus','Cards','Ledger','Split')){return Get-DeckTerminalThemeFrame $Names $Cache $Profiles $Sessions $Tasks $Selected $Width $Height $Filter $Notice $Mask $WarmupSettings $WarmupHistory $AutoCompact $CompactThreshold $CompactAdjusting $CompactMode $Theme}
     $lines = [Collections.Generic.List[object]]::new()
     function Add-Line([string]$Text, [string]$Color = 'Gray', [string]$Background = 'Black') {
         $lines.Add(@{ Text = (ConvertTo-DeckTerminalText $Text ([Math]::Max(1,$Width - 1))); Color = $Color; Background = $Background })
@@ -226,7 +342,7 @@ function Show-DeckTerminal {
             $width = 110; $height = [Math]::Max(25,$visible.Count + 18)
             if ($interactive) { $width = [Console]::WindowWidth; $height = [Console]::WindowHeight }
             $compactThreshold=if($compactAdjusting){$compactDraft}else{[int]$warmSettings.AutoCompactThresholdPercent}
-            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory $autoCompact $compactThreshold $compactAdjusting $warmSettings.AutoCompactMode)
+            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory $autoCompact $compactThreshold $compactAdjusting $warmSettings.AutoCompactMode $warmSettings.DashboardTheme)
             if (-not $interactive) { $frame | ForEach-Object { Write-Output $_.Text }; return }
             $signature = "$width/$height/" + (($frame | ForEach-Object { $_.Text + $_.Color + $_.Background }) -join "`n")
             if ($signature -ne $lastFrame) {
@@ -272,8 +388,8 @@ function Show-DeckTerminal {
                 'DownArrow' { $selected = [Math]::Min($visible.Count - 1,$selected + 1) }
                 'Home' { $selected = 0 }
                 'End' { $selected = [Math]::Max(0,$visible.Count - 1) }
-                'PageUp' { $selected = [Math]::Max(0,$selected - [Math]::Max(1,$height - 18)) }
-                'PageDown' { $selected = [Math]::Min($visible.Count - 1,$selected + [Math]::Max(1,$height - 18)) }
+                'PageUp' { $selected = [Math]::Max(0,$selected - (Get-DeckTerminalThemePageSize $warmSettings.DashboardTheme $height)) }
+                'PageDown' { $selected = [Math]::Min($visible.Count - 1,$selected + (Get-DeckTerminalThemePageSize $warmSettings.DashboardTheme $height)) }
                 'B' {
                     $choice = @(Get-DeckRecommendations $names $cache) | Select-Object -First 1
                     if ($choice) { $filter=''; $selected=[array]::IndexOf($names,$choice.Account); $notice=$choice.Account+': '+$choice.Reason }

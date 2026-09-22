@@ -30,7 +30,7 @@ function Get-DeckDefaults {
         ShowFolder=$false; ShowSource=$false; ShowCheckedAt=$false; ShowCredits=$false
         ShowWarmup=$true; MaskEmail=$false; Compact=$false; CloseToTray=$true
         ShowModel=$false; AccountPickerUsage=$false
-        ViewMode='Widget'; WidgetOneLine=$true; WidgetShowEmail=$false; WidgetShowResets=$true; WidgetAutoHeight=$true
+        ViewMode='Widget'; DashboardTheme='Default'; WidgetOneLine=$true; WidgetShowEmail=$false; WidgetShowResets=$true; WidgetAutoHeight=$true
         WidgetWidth=238; WidgetHeight=0
         WarmupEnabled=$false; WarmupSchedulingEnabled=$false; WarmupPlanTypes=''; WarmupAccounts=''; WarmupModel='gpt-5.6-luna'
         WarmupGraceSeconds=60; WarmupMaxDelayMinutes=30
@@ -197,7 +197,7 @@ function Get-DeckSettings([string]$Root) {
     $settings.WidgetWidth = [Math]::Min(600, [Math]::Max(238, $settings.WidgetWidth))
     $settings.WidgetHeight = [Math]::Min(800, [Math]::Max(0, $settings.WidgetHeight))
     $settings.AutoCompactThresholdPercent = [Math]::Min(90, [Math]::Max(30, $settings.AutoCompactThresholdPercent))
-    $settings.EfficiencySessionLimit = [Math]::Min(1000, [Math]::Max(10, $settings.EfficiencySessionLimit))
+    $settings.EfficiencySessionLimit = [Math]::Min(5000, [Math]::Max(10, $settings.EfficiencySessionLimit))
     if ($settings.AutoCompactMode -notin @('Native','Custom')) { $settings.AutoCompactMode='Native' }
     if ($settings.ContextOptimizer -notin @('Off','RTK','Headroom')) { $settings.ContextOptimizer='Off' }
     if ($settings.CodeGraphProfile -notin @('core','graph','all')) { $settings.CodeGraphProfile='core' }
@@ -211,6 +211,7 @@ function Get-DeckSettings([string]$Root) {
     }
     if ($settings.FailoverMode -notin @('Ordered','Best')) { $settings.FailoverMode='Ordered' }
     if ($settings.ViewMode -notin @('Panel','Widget','Tray')) { $settings.ViewMode='Widget' }
+    if ($settings.DashboardTheme -notin @('Default','Focus','Cards','Ledger','Split')) { $settings.DashboardTheme='Default' }
     $settings.WarmupPlanTypes=ConvertTo-DeckWarmupPlanTypes $settings.WarmupPlanTypes
     return $settings
 }
@@ -361,16 +362,30 @@ function Open-DeckInspector([string]$SuiteRoot, [ValidateSet('Trajectory','Effic
         $info.FileName=$node
         $info.Arguments=(@($scriptPath,'--root',$SuiteRoot,'--state',$statePath) | ForEach-Object {ConvertTo-DeckProcessArgument ([string]$_)}) -join ' '
         $info.UseShellExecute=$false; $info.CreateNoWindow=$true; $info.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
-        $process=[Diagnostics.Process]::Start($info); if(-not $process){throw 'Deck Inspector could not start.'}; $process.Dispose()
-        $deadline=[DateTimeOffset]::UtcNow.AddSeconds(6)
-        do{
-            Start-Sleep -Milliseconds 100
-            $state=Read-DeckJson $statePath
-            if($state -and [string]$state.BaseUrl -match '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/$'){
-                try{$health=Invoke-RestMethod -Uri ($state.BaseUrl+'health') -UseBasicParsing -TimeoutSec 1;if(Test-DeckInspectorHealth $health $state $version){$baseUrl=[string]$state.BaseUrl}}catch{}
+        $info.RedirectStandardError=$true
+        $process=[Diagnostics.Process]::Start($info); if(-not $process){throw 'Deck Inspector could not start.'}
+        $errorOutput=$process.StandardError.ReadToEndAsync()
+        try{
+            $deadline=[DateTimeOffset]::UtcNow.AddSeconds(20)
+            $startupIssue='No inspector state file appeared.'
+            do{
+                Start-Sleep -Milliseconds 100
+                $state=Read-DeckJson $statePath
+                if($state -and [string]$state.BaseUrl -match '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/$'){
+                    try{
+                        $health=Invoke-RestMethod -Uri ($state.BaseUrl+'health') -UseBasicParsing -TimeoutSec 1
+                        if(Test-DeckInspectorHealth $health $state $version){$baseUrl=[string]$state.BaseUrl}
+                        else{$startupIssue='Inspector health identity or version did not match.'}
+                    }catch{$startupIssue=$_.Exception.Message}
+                }
+            }while(-not $baseUrl -and -not $process.HasExited -and [DateTimeOffset]::UtcNow -lt $deadline)
+            if(-not $baseUrl){
+                if(-not $process.HasExited){try{$process.Kill();$process.WaitForExit(2000) | Out-Null}catch{}}
+                $stderr=if($errorOutput.IsCompleted){[string]$errorOutput.Result}else{''}
+                $detail=if($stderr.Trim()){$stderr.Trim()}else{$startupIssue}
+                throw "Deck Inspector did not become ready: $detail"
             }
-        }while(-not $baseUrl -and [DateTimeOffset]::UtcNow -lt $deadline)
-        if(-not $baseUrl){throw 'Deck Inspector did not become ready.'}
+        }finally{$process.Dispose()}
     }
     if($Companion){
         if($Mode -ne 'Trajectory' -or -not $current.ContextManagerEnabled){throw 'The live context companion is disabled. Enable Trajectory and Live context manager in Deck Settings first.'}
@@ -461,6 +476,10 @@ function Start-DeckTask([string]$Code, [string]$Kind, [string]$Account) {
     $info.Arguments = '-NoProfile -ExecutionPolicy Bypass -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Code))
     $info.UseShellExecute=$false; $info.CreateNoWindow=$true
     $info.RedirectStandardOutput=$true; $info.RedirectStandardError=$true
+    # A PowerShell 7 parent supplies its own module path. Windows PowerShell
+    # then tries to load incompatible modules (including Get-FileHash).
+    # Let powershell.exe construct its own Windows PowerShell module path.
+    [void]$info.EnvironmentVariables.Remove('PSModulePath')
     $process = [Diagnostics.Process]::Start($info)
     $job=$null
     try{$job=[DeckProcessJob]::new($process)}catch{}
@@ -495,6 +514,19 @@ function Dispose-DeckTask($Task) {
     if(-not $Task){return}
     try{if($Task.Job){$Task.Job.Dispose()}}catch{}
     try{$Task.Process.Dispose()}catch{}
+}
+function Get-DeckTaskFailureMessage($Task) {
+    $errorText=[string]$Task.Err.Result
+    if($errorText -match '^#< CLIXML\s*') {
+        try {
+            $xml=[xml]($errorText -replace '^#< CLIXML\s*','')
+            $errorNode=$xml.SelectSingleNode("//*[local-name()='S' and @S='Error']")
+            $errorText=if($errorNode){$errorNode.InnerText -replace '_x000D__x000A_',' '}else{''}
+        } catch {$errorText=''}
+    }
+    $message=($errorText -split "`r?`n" | Where-Object {$_ -and $_ -notmatch '^#< CLIXML$'} | Select-Object -First 1)
+    if($message){return $message.Trim()}
+    return "Worker exited with code $($Task.Process.ExitCode)."
 }
 function Get-DeckModelsCode([string]$SuiteRoot, [string]$Account) {
     if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') { throw 'Invalid account.' }

@@ -237,6 +237,22 @@ function Get-DeckBrowserHarnessLatestVersion {
     if($version -notmatch '^\d+(?:\.\d+){1,3}$'){throw 'PyPI returned an unsupported Browser Harness version.'}
     return $version
 }
+function Stop-DeckBrowserHarnessDaemonForUpdate([string]$UvExecutable,[string]$BrowserExecutable,[bool]$BrowserValid) {
+    # The Python daemon keeps uv's tool environment open on Windows. Ask the
+    # current CLI to release it first, then handle a broken CLI's orphaned daemon.
+    if($BrowserValid){
+        try { & $BrowserExecutable --reload 2>$null | Out-Null } catch {}
+    }
+    $toolRoot=(& $UvExecutable tool dir 2>$null | Select-Object -First 1)
+    if($LASTEXITCODE -ne 0 -or -not $toolRoot){return}
+    $python=Join-Path ([string]$toolRoot).Trim() 'browser-harness/Scripts/python.exe'
+    $daemons=@(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue | Where-Object {
+        $_.ExecutablePath -and $_.ExecutablePath.Equals($python,[StringComparison]::OrdinalIgnoreCase) -and
+        $_.CommandLine -match '(?i)(?:^|\s)-m\s+browser_harness\.daemon(?:\s|$)'
+    })
+    foreach($daemon in $daemons){Stop-Process -Id $daemon.ProcessId -Force -ErrorAction Stop}
+    if($daemons.Count){Start-Sleep -Milliseconds 500}
+}
 function Install-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness')][string]$Name,[switch]$Update) {
     $component=Get-DeckIntegrationComponent $SuiteRoot $Name
     if($Name -eq 'browser_harness'){
@@ -244,11 +260,21 @@ function Install-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom
         if($existing.Valid -and -not $Update){return $existing}
         $uv=Get-Command uv -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if(-not $uv){throw 'Browser Harness installation requires uv on PATH.'}
-        $arguments=@('tool','install','--python','3.12')
-        if($existing.Valid){$arguments+=@('--upgrade','--force')}
+        Stop-DeckBrowserHarnessDaemonForUpdate $uv.Source $existing.Executable $existing.Valid
+        $arguments=@('tool','install','--python','3.12','--force')
+        if($existing.Valid){$arguments+='--upgrade'}
         $arguments+='browser-harness'
-        & $uv.Source @arguments | Out-Null
-        if($LASTEXITCODE -ne 0){throw 'uv could not install Browser Harness.'}
+        $previousPreference=$ErrorActionPreference
+        try {
+            $ErrorActionPreference='Continue'
+            $installOutput=(& $uv.Source @arguments 2>&1 | Out-String).Trim()
+            $installExitCode=$LASTEXITCODE
+        } finally {$ErrorActionPreference=$previousPreference}
+        if($installExitCode -ne 0){
+            $detail=($installOutput -split "`r?`n" | Where-Object {$_ -match '^(error:|  Caused by:|Failed |warning:)' } | Select-Object -Last 1)
+            if(-not $detail){$detail=($installOutput -split "`r?`n" | Where-Object {$_} | Select-Object -Last 1)}
+            throw ('uv could not install Browser Harness'+$(if($detail){': '+$detail.Trim()}else{'.'}))
+        }
         $installed=Get-DeckIntegrationStatus $SuiteRoot $Name
         if(-not $installed.Valid){throw 'Browser Harness CLI was not found on PATH after installation. Open a new terminal and retry.'}
         if($Update -and $existing.Valid){Sync-DeckBrowserHarnessSkillSource $SuiteRoot -Refresh | Out-Null}
@@ -349,11 +375,11 @@ function Get-DeckIntegrationWorkerCode([string]$SuiteRoot,[string[]]$Names,[swit
     $root=$SuiteRoot.Replace("'","''")
     $namesLiteral=@($Names | ForEach-Object { "'"+$_.Replace("'","''")+"'" }) -join ','
     $updateLiteral=if($Update){'$true'}else{'$false'}
-    return "`$ErrorActionPreference='Stop'`n. '$core'`nforeach(`$name in @($namesLiteral)){Install-DeckIntegration '$root' `$name -Update:$updateLiteral | Out-Null}"
+    return "`$ErrorActionPreference='Stop'`n`$ProgressPreference='SilentlyContinue'`ntry{. '$core'; foreach(`$name in @($namesLiteral)){Install-DeckIntegration '$root' `$name -Update:$updateLiteral | Out-Null}}catch{[Console]::Error.WriteLine(`$_.Exception.Message);exit 1}"
 }
 function Get-DeckBrowserHarnessVersionWorkerCode([string]$SuiteRoot) {
     $core=(Join-Path $SuiteRoot 'Deck.Core.ps1').Replace("'","''")
-    return "`$ErrorActionPreference='Stop'`n. '$core'`nGet-DeckBrowserHarnessLatestVersion"
+    return "`$ErrorActionPreference='Stop'`n`$ProgressPreference='SilentlyContinue'`ntry{. '$core'; Get-DeckBrowserHarnessLatestVersion}catch{[Console]::Error.WriteLine(`$_.Exception.Message);exit 1}"
 }
 function Sync-DeckBrowserHarnessSkillSource([string]$SuiteRoot,[switch]$Refresh) {
     $source=Join-Path $SuiteRoot 'integrations/skills/browser-harness/SKILL.md'

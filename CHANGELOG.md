@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.1 - 2026-09-22
+
+- Added four distinct codex-auth dashboard themes in Settings: Focus, Cards, Ledger and Split. The original layout remains the default, and the new layouts group shortcuts by task.
+- Increased the Efficiency session limit to 5,000 while keeping the default at 1,000.
+- Fixed Settings integration installs and updates by starting Windows PowerShell workers with its own module path, reporting readable errors, and timing out stalled operations.
+- Repaired Browser Harness updates when a broken tool environment or running daemon blocks replacement.
+- Stabilized inspector startup for the Windows checks workflow.
+
 ## 1.7.0 - 2026-09-22
 
 - Added opt-in, on-demand managed RTK, Headroom MCP and CodeGraph integrations. Deck installs nothing while they are disabled, verifies upstream release checksums, keeps packages in versioned local directories and retains earlier versions for one-click rollback.
