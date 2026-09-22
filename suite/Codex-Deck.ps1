@@ -23,11 +23,13 @@ if (-not $created -and -not $SmokeTest -and -not $Demo) {
 . (Join-Path $PSScriptRoot 'Deck.Core.ps1')
 . (Join-Path $PSScriptRoot 'Deck.Backup.ps1')
 $script:settings = if($SmokeTest -or $Demo){Get-DeckDefaults}else{Get-DeckSettings $root}
+$script:settingsStamp=0
+if(-not $SmokeTest -and -not $Demo){$settingsItem=Get-Item -LiteralPath (Join-Path $root 'settings.json') -ErrorAction SilentlyContinue;if($settingsItem){$script:settingsStamp=$settingsItem.LastWriteTimeUtc.Ticks}}
 $script:cache = @{}; $script:nextCheck = @{}; $script:resets = @{}; $script:history = @{}
 $script:rowPools=@{}; $script:rowControls=@{}; $script:rowStyle=''; $script:expandedRows=@{}; $script:profiles=@{}; $script:profileStamps=@{}; $script:cacheVersion=0; $script:lastPicker=[DateTimeOffset]::MinValue
 $script:accountNames=@(); $script:pickerContentKeys=@{}; $script:usageCacheStamp=''
 $script:tasks = @{}; $script:batchAccounts=@(); $script:batchUntil=[DateTimeOffset]::MinValue; $script:task = $null
-$script:quit = $false; $script:allProfiles = $false; $script:accountFilter='all'; $script:lastWarmupScheduleCheck=[DateTimeOffset]::UtcNow; $script:scheduleRepairTask=$null; $script:initialScheduleRepairStarted=$false
+$script:quit = $false; $script:accountFilter='all'; $script:lastWarmupScheduleCheck=[DateTimeOffset]::UtcNow; $script:scheduleRepairTask=$null; $script:initialScheduleRepairStarted=$false
 $script:sessions = @(); $script:notice = 'Ready'; $script:lastRender = ''
 $script:pins=@(if(-not $SmokeTest -and -not $Demo){Read-DeckJson (Join-Path $root 'pins.json')})
 $script:viewStates=@{}
@@ -111,7 +113,7 @@ public static class DeckTaskbarIdentity {
 $script:window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
 $script:appIcon=[Windows.Media.Imaging.BitmapImage]::new([uri](Join-Path $root 'assets/codex-deck.png'))
 $window.Icon=$appIcon; $window.FindName('AppLogo').Source=$appIcon
-foreach ($name in 'AccountPicker','SettingsButton','LaunchButton','ConfigButton','NewButton','Summary','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','StudioBar','TrajectoryButton','EfficiencyButton','Brand','Subtitle','LayoutRoot','Disclaimer','Header','SummaryButton','FilterButton','StatusButton','CardScroll') {
+foreach ($name in 'AccountPicker','SettingsButton','ConfigButton','NewButton','AutoCompactButton','Summary','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','EfficiencyButton','Brand','Subtitle','LayoutRoot','Disclaimer','Header','SummaryButton','FilterButton','StatusButton','CardScroll') {
     Set-Variable -Name $name -Value $window.FindName($name) -Scope Script
 }
 # Native caption hit testing covers the top padding, logo, text and gaps too.
@@ -383,7 +385,7 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
     $script:widget=$Mode -ne 'Panel'; $settings.ViewMode=$Mode
     $window.ShowInTaskbar=-not $widget
     $visibility=if($widget){'Collapsed'}else{'Visible'}
-    foreach($control in @($LaunchBar,$StudioBar,$Subtitle,$SettingsButton,$MinimizeButton)){$control.Visibility=$visibility}
+    foreach($control in @($LaunchBar,$Subtitle,$SettingsButton,$MinimizeButton)){$control.Visibility=$visibility}
     $window.MinWidth=if($widget){238}else{476}; $window.MinHeight=100
     $window.Width=if($widget){$settings.WidgetWidth}else{[Math]::Max($window.MinWidth,$settings.Width)}
     $savedHeight=if($widget){$settings.WidgetHeight}else{$settings.Height}
@@ -408,9 +410,13 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
     if(-not $SmokeTest -and -not $Demo){Write-DeckJson (Join-Path $root 'settings.json') $settings}
     if($Mode -eq 'Tray'){$window.Hide()}elseif(-not $Initial){Show-DeckWindow}
 }
-function Update-DeckStudioControls {
-    $TrajectoryButton.ToolTip=if($settings.TrajectoryEnabled){'Open the local trajectory viewer'+$(if($settings.ContextManagerEnabled){' and live context manager'}else{''})}else{'Enable Trajectory in Deck Settings first'}
+function Update-DeckPanelControls {
     $EfficiencyButton.ToolTip=if($settings.EfficiencyAnalyticsEnabled){'Open independent local efficiency analytics'}else{'Enable Efficiency Analytics in Deck Settings first'}
+    $compactOn=[bool]$settings.AutoCompactLaunchEnabled
+    $AutoCompactButton.Content='Auto-compact '+$(if($compactOn){'On'}else{'Off'})
+    $AutoCompactButton.ToolTip=if($compactOn){'Auto-compaction is enabled for terminals opened next. Click to disable it.'}else{'Auto-compaction is disabled for terminals opened next. Click to enable it.'}
+    $AutoCompactButton.Foreground=if($compactOn){'#8CE6CD'}else{'#DDE2E7'}
+    $AutoCompactButton.Background=if($compactOn){'#24463F'}else{'#181A1D'}
 }
 function Set-DeckSavedSettings($Saved) {
     # Settings click handlers use GetNewClosure so TestUI can invoke them after
@@ -419,13 +425,14 @@ function Set-DeckSavedSettings($Saved) {
     # unchanged; Set-DeckMode then persisted the old values over the new file.
     $wasCompact=[bool]$script:settings.Compact
     $script:settings=$Saved
-    Update-DeckStudioControls
+    Update-DeckPanelControls
     foreach($account in @($nextCheck.Keys)){
         if($cache[$account].CheckedAt){$nextCheck[$account]=Get-DeckNextCheck $settings $cache[$account] ([DateTimeOffset]$cache[$account].CheckedAt)}
     }
     if($settings.Compact -and -not $wasCompact){$script:expandedRows=@{}}
     Set-DeckAppearance
     Set-DeckMode $settings.ViewMode
+    if(-not $SmokeTest -and -not $Demo){$settingsItem=Get-Item -LiteralPath (Join-Path $root 'settings.json') -ErrorAction SilentlyContinue;if($settingsItem){$script:settingsStamp=$settingsItem.LastWriteTimeUtc.Ticks}}
     $script:lastRender=''
 }
 function Get-DeckAccounts {
@@ -895,8 +902,7 @@ function Test-DeckAccountFilter([string]$Name) {
     return $true
 }
 function Get-DeckVisibleAccounts {
-    $names=@($sessions | ForEach-Object Account | Select-Object -Unique)
-    if($allProfiles){$names=@($accountNames)}
+    $names=@($accountNames)
     @($names | Where-Object {Test-DeckAccountFilter $_} | Sort-Object @{Expression={if($_ -in $pins){0}else{1}}},@{Expression={if($_ -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},{$_})
 }
 function Set-DeckAccountFilter([string]$Filter) {
@@ -909,15 +915,16 @@ function Set-DeckAccountFilter([string]$Filter) {
 }
 function Render-Deck {
     $names=@(Get-DeckVisibleAccounts)
+    $connectedCount=@($sessions | ForEach-Object Account | Select-Object -Unique).Count
     $warmupLabel=if(-not $settings.WarmupEnabled){'off'}elseif($settings.WarmupSchedulingEnabled){'scheduled'}else{'scheduling off'}
-    $Summary.Text="{0} connected accounts  /  {1} terminals  /  warm-up {2}" -f @($sessions | ForEach-Object Account | Select-Object -Unique).Count,$sessions.Count,$warmupLabel
-    if($widget){$Summary.Text="{0} online  /  {1} terminals" -f @($sessions | ForEach-Object Account | Select-Object -Unique).Count,$sessions.Count}
+    $Summary.Text="{0} accounts  /  {1} connected  /  {2} terminals  /  warm-up {3}" -f $names.Count,$connectedCount,$sessions.Count,$warmupLabel
+    if($widget){$Summary.Text="{0} accounts  /  {1} online  /  {2} terminals" -f $names.Count,$connectedCount,$sessions.Count}
     $warming=@($tasks.Values | Where-Object Kind -eq 'Warm-up').Count
     $StatusLine.Text = if ($tasks.Count) { "Checking $($tasks.Count-$warming) / warming $warming…" } else { $(if($settings.AutoCheck){"$notice / auto-check every $($settings.PollMinutes)m"}else{"$notice / auto-check off"}) }
     if($widget -and -not $tasks.Count){$StatusLine.Text='Checks '+$(if($settings.AutoCheck){'on'}else{'off'})+'  /  warm-up '+$warmupLabel}
-    $SummaryButton.ToolTip=if($allProfiles){'Showing all accounts. Click for connected only.'}else{'Showing connected accounts. Click to see all.'}
-    $Summary.Foreground=if($allProfiles){'#69DEC0'}else{'#8493AA'}
-    $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + $allProfiles + '/' + $accountFilter + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
+    $SummaryButton.ToolTip='Showing all accounts. Use the plan filter on the right to narrow the list.'
+    $Summary.Foreground='#69DEC0'
+    $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + '/' + $accountFilter + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
     if ($signature -eq $lastRender) { return }
     $script:lastRender=$signature
     $style=(@('Compact','FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowResetCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupSchedulingEnabled','WarmupPlanTypes','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
@@ -1032,6 +1039,16 @@ function Complete-DeckScheduleRepair {
 }
 function Invoke-DeckTick {
     if($SmokeTest -or $Demo){Render-Deck; return}
+    $settingsItem=Get-Item -LiteralPath (Join-Path $root 'settings.json') -ErrorAction SilentlyContinue
+    $freshStamp=if($settingsItem){$settingsItem.LastWriteTimeUtc.Ticks}else{0}
+    if($freshStamp -ne $settingsStamp){
+        $freshSettings=Get-DeckSettings $root
+        if([bool]$freshSettings.AutoCompactLaunchEnabled -ne [bool]$settings.AutoCompactLaunchEnabled){
+            $settings.AutoCompactLaunchEnabled=[bool]$freshSettings.AutoCompactLaunchEnabled
+            Update-DeckPanelControls
+        }
+        $script:settingsStamp=$freshStamp
+    }
     $settingsSignal=Join-Path $root 'warmup-settings-changed.json'
     if(Test-Path -LiteralPath $settingsSignal){
         Remove-Item -LiteralPath $settingsSignal -ErrorAction SilentlyContinue
@@ -1151,14 +1168,22 @@ $AccountPicker.Add_DropDownOpened({
         $popup.Child.Width=[Math]::Min([Windows.SystemParameters]::WorkArea.Width-32,[Math]::Max($AccountPicker.ActualWidth,[Math]::Ceiling($longest+42)))
     }
 })
-$LaunchButton.Add_Click({Open-DeckTerminal ([string]$AccountPicker.SelectedValue)})
 function Invoke-DeckInspector([string]$Mode) {
     try { [void](Open-DeckInspector $suite $Mode) }
     catch { [void][Windows.MessageBox]::Show($_.Exception.Message,'Codex Deck',[Windows.MessageBoxButton]::OK,[Windows.MessageBoxImage]::Information) }
 }
-$TrajectoryButton.Add_Click({Invoke-DeckInspector 'Trajectory'})
 $EfficiencyButton.Add_Click({Invoke-DeckInspector 'Efficiency'})
-Update-DeckStudioControls
+$AutoCompactButton.Add_Click({
+    try {
+        $enabled=-not [bool]$settings.AutoCompactLaunchEnabled
+        if($SmokeTest -or $Demo){$settings.AutoCompactLaunchEnabled=$enabled}else{$script:settings=Set-DeckAutoCompactLaunch $root $enabled}
+        if(-not $SmokeTest -and -not $Demo){$settingsItem=Get-Item -LiteralPath (Join-Path $root 'settings.json') -ErrorAction SilentlyContinue;if($settingsItem){$script:settingsStamp=$settingsItem.LastWriteTimeUtc.Ticks}}
+        Update-DeckPanelControls
+        $script:notice='Auto-compact '+$(if($enabled){'enabled'}else{'disabled'})+' for terminals opened next.'
+        $script:lastRender=''; Render-Deck
+    }catch{$script:notice='Auto-compact setting failed: '+$_.Exception.Message;$script:lastRender='';Render-Deck}
+})
+Update-DeckPanelControls
 $configMenu=[Windows.Controls.ContextMenu]::new()
 $configMenu.Resources=$window.Resources
 $accountConfigItem=[Windows.Controls.MenuItem]::new(); $accountConfigItem.Header='Account config'
@@ -1183,11 +1208,9 @@ $ConfigButton.Add_Click({
 $accountConfigItem.Add_Click({if($AccountPicker.SelectedValue){Edit-DeckConfig (Join-Path $suite ('accounts/'+$AccountPicker.SelectedValue+'/config.toml')) ([string]$AccountPicker.SelectedValue)}})
 $defaultsItem.Add_Click({Edit-DeckConfig (Join-Path $HOME '.codex/config.toml') 'Global defaults'})
 $SettingsButton.Add_Click({Show-DeckSettings})
-$toggleProfiles={
-    $script:allProfiles=-not $allProfiles
-    $script:lastRender=''; Render-Deck
-}
-$SummaryButton.Add_Click($toggleProfiles)
+$SummaryButton.IsHitTestVisible=$false
+$SummaryButton.Focusable=$false
+$SummaryButton.IsTabStop=$false
 $script:filterMenu=[Windows.Controls.ContextMenu]::new(); $filterMenu.Resources=$window.Resources
 foreach($option in @(@('all','All accounts'),@('free','Free'),@('paid','Plus or higher'))){
     $item=[Windows.Controls.MenuItem]::new(); $item.Header=$option[1]; $item.Tag=$option[0]; $item.IsCheckable=$true; $item.IsChecked=$option[0] -eq $accountFilter
@@ -1197,7 +1220,7 @@ foreach($option in @(@('all','All accounts'),@('free','Free'),@('paid','Plus or 
 $FilterButton.ContextMenu=$filterMenu
 $FilterButton.Add_Click({$filterMenu.PlacementTarget=$FilterButton; $filterMenu.Placement='Bottom'; $filterMenu.IsOpen=$true})
 $FilterButton.ToolTip='Filter visible accounts by plan. Accounts with an unknown plan appear under All.'
-$StatusButton.ToolTip='Check visible accounts. Show all includes disconnected profiles. Up to eight checks run together. A list cooldown starts when they finish.'
+$StatusButton.ToolTip='Check every account visible under the current plan filter. Up to eight checks run together. A list cooldown starts when they finish.'
 $checkVisible={
     if($batchAccounts.Count -or [DateTimeOffset]::UtcNow -lt $batchUntil){return}
     $names=@(Get-DeckVisibleAccounts)
@@ -1293,7 +1316,7 @@ try{
         $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
         if ($headers -notcontains 'Environments') { throw 'Environment sharing Settings tab missing.' }
         if ($headers -notcontains 'Trajectory' -or $headers -notcontains 'Efficiency') { throw 'Separate trajectory and efficiency Settings tabs are missing.' }
-        if ($settingsTest.Controls.TrajectoryEnabled.IsChecked -or $settingsTest.Controls.ContextManagerEnabled.IsChecked -or $settingsTest.Controls.EfficiencyAnalyticsEnabled.IsChecked) { throw 'Trajectory, context management and efficiency analytics must be opt-in.' }
+        if ($settingsTest.Controls.TrajectoryEnabled.IsChecked -or $settingsTest.Controls.ContextManagerEnabled.IsChecked -or -not $settingsTest.Controls.EfficiencyAnalyticsEnabled.IsChecked) { throw 'Trajectory/context defaults or enabled-by-default efficiency analytics are incorrect.' }
         if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '200') { throw 'Efficiency analytics session limit default failed.' }
         if ($headers -notcontains 'Skills' -or -not $settingsTest.Skills.State.Controls.ContainsKey('debug-swarm') -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked) { throw 'Globally enabled Deck skills Settings tab missing or invalid.' }
         $environmentUI=$settingsTest.Environment
@@ -1328,21 +1351,21 @@ try{
         $scopeMenu.Items[0].IsChecked=$false; $scopeMenu.Items[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
         $schedulingControl.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         if(-not [bool]$schedulingControl.Tag -or $schedulingControl.Content -ne 'Disable background scheduling' -or -not $settingsTest.Controls.WarmupEnabled.IsChecked){throw 'Background scheduling opt-in did not update its saved state.'}
-        $before=$allProfiles
-        $SummaryButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
-        if($allProfiles -eq $before){throw 'Summary did not switch account view.'}
-        $SummaryButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
-        if($allProfiles -ne $before){throw 'Summary did not restore account view.'}
+        if($SummaryButton.IsHitTestVisible -or $SummaryButton.Focusable -or $SummaryButton.IsTabStop){throw 'Account summary must be a non-interactive status surface.'}
+        if($EfficiencyButton.Content -ne 'Deck Analysis' -or $AutoCompactButton.Content -ne 'Auto-compact Off'){throw 'Single-row analysis or auto-compact controls failed.'}
+        $AutoCompactButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        if(-not $settings.AutoCompactLaunchEnabled -or $AutoCompactButton.Content -ne 'Auto-compact On'){throw 'Panel auto-compact toggle did not update shared launch state.'}
+        $AutoCompactButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         $script:testPickerNames=@('account1','account2'); Update-DeckPicker -Force
         if(($accountNames -join ',') -ne (@($AccountPicker.Items | ForEach-Object Tag) -join ',')){throw 'Main account snapshot and dropdown names diverged.'}
+        if((@(Get-DeckVisibleAccounts) -join ',') -ne 'account1,account2'){throw 'Account list did not include disconnected profiles by default.'}
         $profiles.account2=[pscustomobject]@{PlanType='free';Email='free@example.com';Model='Codex default';Effort='default'}
         $cache.account2=[pscustomobject]@{Account='account2';PlanType='free';Status='available';Windows=@()}
-        $script:allProfiles=$true
         $filterMenu.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
         if($FilterButton.Content -ne 'Free ▾' -or (@(Get-DeckVisibleAccounts) -join ',') -ne 'account2'){throw 'Free account filter failed.'}
         $filterMenu.Items[2].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
         if($FilterButton.Content -ne 'Plus+ ▾' -or (@(Get-DeckVisibleAccounts) -join ',') -ne 'account1'){throw 'Plus or higher account filter failed.'}
-        Set-DeckAccountFilter 'all'; $script:allProfiles=$before; $script:testPickerNames=$null; $script:lastRender=''; Render-Deck
+        Set-DeckAccountFilter 'all'; $script:testPickerNames=$null; $script:lastRender=''; Render-Deck
         $StatusButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         foreach($name in @($sessions | ForEach-Object Account | Select-Object -Unique)){if(-not $manualChecks.ContainsKey($name)){throw 'Status check skipped a visible account.'}}
         $manualChecks.Clear(); $script:batchAccounts=@()
@@ -1370,27 +1393,8 @@ try{
         if((($pickerEntry.Content.Inlines | ForEach-Object Text) -join '') -notmatch '5H 72%' -or $pickerEntry.Content.TextWrapping -ne 'NoWrap'){throw ('Picker: '+ [string]::Join('|',@($pickerEntry.Content.Inlines | ForEach-Object Text)))}
         $AccountPicker.SelectedValue='account1'
         if($AccountPicker.SelectedValue -ne 'account1'){throw 'Account picker identity lost.'}
-        # Exercise the actual dropdown, including an unselected account.
-        $otherEntry=@($AccountPicker.Items | Where-Object {$_.Tag -ne 'account1' -and $_.Tag -ne 'pool'})[0]
-        if($otherEntry){
-            $otherName=[string]$otherEntry.Tag; $previousRecord=$cache[$otherName]
-            $record=$cache.account1 | ConvertTo-Json -Depth 20 | ConvertFrom-Json; $record.Account=$otherName
-            $cache[$otherName]=$record; Update-DeckPicker -Force
-            Set-DeckMode 'Panel' -Initial; $window.Show(); $window.UpdateLayout(); $AccountPicker.ApplyTemplate() | Out-Null; $AccountPicker.IsDropDownOpen=$true
-            [Windows.Forms.Application]::DoEvents()
-            $popup=$AccountPicker.Template.FindName('PART_Popup',$AccountPicker); $popup.Child.UpdateLayout()
-            $otherEntry.ApplyTemplate() | Out-Null
-            $presenter=@(Find-DeckVisual $otherEntry ([Windows.Controls.ContentPresenter]))[0]
-            $visibleText=($presenter.Content.Inlines | ForEach-Object Text) -join ''
-            if(-not $presenter -or $visibleText -notmatch '5H 72%' -or $visibleText -notmatch 'Last checked:'){throw 'Unselected dropdown account is missing current remaining usage/reset details'}
-            $longest=0
-            foreach($item in $AccountPicker.Items){$item.Content.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity)); $longest=[Math]::Max($longest,$item.Content.DesiredSize.Width)}
-            $expectedWidth=[Math]::Min([Windows.SystemParameters]::WorkArea.Width-32,[Math]::Max($AccountPicker.ActualWidth,[Math]::Ceiling($longest+42)))
-            if([Math]::Abs($popup.Child.ActualWidth-$expectedWidth) -gt 1 -or $otherEntry.ActualHeight -gt 40){throw 'Usage dropdown does not fit its longest line or rows are not compact'}
-            $AccountPicker.IsDropDownOpen=$false; Set-DeckMode $PreviewMode -Initial
-            if($previousRecord){$cache[$otherName]=$previousRecord}else{$cache.Remove($otherName)}
-            Write-Output 'PASS: open account picker renders usage/reset details on unselected rows in a compact content-sized popup.'
-        }
+        if($AccountPicker.Visibility -ne 'Collapsed') { throw 'Internal account picker must remain hidden behind the account cards and Configs menu.' }
+        Write-Output 'PASS: hidden account picker retains pool and account identities for internal launch/config actions.'
 
         $script:testPickerNames=$null;$script:testPoolEntries=$null
         $folderUI=Select-DeckFolder $HOME -TestUI
@@ -1439,7 +1443,7 @@ try{
         Remove-Item -LiteralPath $script:supportTestPath -ErrorAction SilentlyContinue
         $settingsUI.Dialog.Close()
         $window.Content.Measure([Windows.Size]::new($window.Width,$window.Height)); $window.Content.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $window.Content.UpdateLayout()
-        if($Cards.Children.Count -ne 1){throw 'Smoke test card rendering failed.'}
+        if($Cards.Children.Count -ne 2){throw 'Smoke test all-account card rendering failed.'}
         $rowExpander=$Cards.Children[0].Child
         if($rowExpander -isnot [Windows.Controls.Expander] -or $rowExpander.IsExpanded){throw 'Row must start collapsed.'}
         $collapsedHeight=$window.Height
@@ -1463,7 +1467,7 @@ try{
         $Cards.Children[0].Child.IsExpanded=$true
         $detailLabels=@($Cards.Children[0].Child.Content.Children | Where-Object {$_ -is [Windows.Controls.Grid]} | ForEach-Object {$_.Children[0].Text})
         foreach($label in @('Status','Email','Plan','Terminals','Model','Uptime','Last check','Source','Process IDs','Folders','Warm-up','Credits')){if($label -notin $detailLabels){throw "Missing expanded field: $label"}}
-        if($LaunchBar.Visibility -ne 'Visible' -or $StudioBar.Visibility -ne 'Visible' -or $Cards.Children.Count -ne 1){throw 'Panel mode failed.'}
+        if($LaunchBar.Visibility -ne 'Visible' -or $Cards.Children.Count -ne 3){throw "Panel mode failed: LaunchBar=$($LaunchBar.Visibility), cards=$($Cards.Children.Count)."}
         if($window.FindName('AllButton') -or $window.FindName('CheckButton')){throw 'Redundant panel controls remain.'}
         if(-not $window.ShowInTaskbar -or $MinimizeButton.Visibility -ne 'Visible'){throw 'Panel taskbar/minimize failed.'}
         if($MinimizeButton.Parent.Children[0] -ne $MinimizeButton){throw 'Minimize must be the first caption button.'}
@@ -1474,7 +1478,8 @@ try{
         $menuSurface=[Windows.Media.VisualTreeHelper]::GetChild($configMenu,0)
         if($menuSurface -isnot [Windows.Controls.Border] -or $menuSurface.Background.ToString() -ne '#FF141619'){throw 'Configs menu background template failed.'}
         if(-not $window.Icon -or -not $settingsUI.Dialog.Icon){throw 'Application window icon missing.'}
-        if($configMenu.Items.Count -ne 4 -or $globalRulesItem.Header -ne 'Global Rules' -or $ConfigButton.Content -ne 'Configs' -or [Windows.Controls.Grid]::GetColumn($NewButton) -ne 0){throw 'Account controls layout failed.'}
+        if($window.FindName('StudioBar') -or $window.FindName('LaunchButton') -or $window.FindName('TrajectoryButton')){throw 'Obsolete second-row panel controls remain.'}
+        if($configMenu.Items.Count -ne 4 -or $globalRulesItem.Header -ne 'Global Rules' -or $ConfigButton.Content -ne 'Configs' -or [Windows.Controls.Grid]::GetColumn($NewButton) -ne 0 -or [Windows.Controls.Grid]::GetColumn($EfficiencyButton) -ne 1 -or [Windows.Controls.Grid]::GetColumn($AutoCompactButton) -ne 2 -or [Windows.Controls.Grid]::GetColumn($ConfigButton) -ne 3){throw 'Single-row account controls layout failed.'}
 
         if($chrome.CaptionHeight -ne 62){throw 'Panel caption does not cover top padding.'}
         foreach($button in @($MinimizeButton,$ModeButton,$SettingsButton,$CloseButton)) {
@@ -1508,7 +1513,9 @@ try{
             Set-DeckMode $testMode; Render-Deck
             if([Math]::Abs($window.Width-$rememberWidth) -gt 1 -or [Math]::Abs($window.Height-$rememberHeight) -gt 1 -or -not $Cards.Children[0].Child.IsExpanded){throw "$testMode state was not restored: $($window.Width)/$rememberWidth, $($window.Height)/$rememberHeight, expanded=$($Cards.Children[0].Child.IsExpanded)"}
         }
-        $script:sessions=@(1..40 | ForEach-Object {[pscustomobject]@{Account="account$_";ProcessId=$PID;StartedAt=[DateTimeOffset]::Now.ToString('o')}})
+        $stressAccounts=@(1..40 | ForEach-Object {"account$_"})
+        $script:sessions=@($stressAccounts | ForEach-Object {[pscustomobject]@{Account=$_;ProcessId=$PID;StartedAt=[DateTimeOffset]::Now.ToString('o')}})
+        Set-DeckPickerNames $stressAccounts
         foreach($session in $sessions){$record=$cache.account1 | ConvertTo-Json -Depth 20 | ConvertFrom-Json; $record.Account=$session.Account; $cache[$session.Account]=$record}
         foreach($testMode in @('Panel','Widget')){
             $watch=[Diagnostics.Stopwatch]::StartNew()

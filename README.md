@@ -2,7 +2,7 @@
   <img src="suite/deck/assets/codex-deck.png" width="88" alt="Codex Deck">
 </p>
 <h1 align="center">Codex Deck</h1>
-<p align="center"><strong>One command. Every account. A clear view of your usage.</strong><br>
+<p align="center"><strong>One command. Every account.</strong><br>
 A terminal dashboard and desktop companion for multiple Codex CLI accounts on Windows.</p>
 <p align="center">
   <a href="https://github.com/xtremexq/CodexDeck/actions/workflows/test.yml"><img src="https://github.com/xtremexq/CodexDeck/actions/workflows/test.yml/badge.svg" alt="Windows checks"></a>
@@ -43,7 +43,7 @@ Always optional; Deck is free and open source.
 
 **Requires Windows, Windows PowerShell 5.1, and Codex CLI available as `codex`.** The desktop companion uses WPF and the Windows system tray. Linux and macOS are not supported. No administrator account is required.
 
-Download **[CodexDeck-1.5.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/1.5.0/CodexDeck-1.5.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
+Download **[CodexDeck-1.6.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/v1.6.0/CodexDeck-1.6.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
@@ -103,7 +103,7 @@ The selected account's details show its model, reasoning effort, last check and 
 
 For a non-interactive view, use **`codex-auth status`**. It prints cached data without network requests. Redirecting the bare command's input or output also selects snapshot mode.
 
-Auto-compaction is opt-in. Press **C** before entering an account or pool, or run `codex-auth account16 -AutoCompact` or `codex-auth pool -AutoCompact` directly. Hold **C** in the dashboard to focus the saved threshold, adjust it by 5% with **↑/↓**, and press **Enter** to save it. For a one-time command-line override, include the percent sign: `codex-auth account16 -AutoCompact 50%`. The threshold is the percentage of model context still free, so the 55% default triggers when 45% is used; a 75% override triggers when 25% is used.
+Auto-compaction is opt-in. Press **C** before entering an account or pool, or click **Auto-compact** in the desktop panel; both controls share the same saved launch state and update one another while open. The choice applies to terminals opened next, not conversations already running. You can also run `codex-auth account16 -AutoCompact` or `codex-auth pool -AutoCompact` directly. Hold **C** in the dashboard to focus the saved threshold, adjust it by 5% with **↑/↓**, and press **Enter** to save it. For a one-time command-line override, include the percent sign: `codex-auth account16 -AutoCompact 50%`. The threshold is the percentage of model context still free, so the 55% default triggers when 45% is used; a 75% override triggers when 25% is used.
 
 **Settings → Compaction** selects the implementation. **Native** is the default: Deck converts the free-context percentage into Codex's native token threshold for the selected model's effective context window, then launches the normal Codex TUI. It works through ordinary accounts, pools, configured quota failover, manual `!account` switching, resumed conversations and one-shot `exec` commands because the setting travels with the complete Deck launch. **Custom** preserves Deck's existing observer workflow: when context reaches the threshold, Deck requests a visible `DECK_HANDOFF`, compacts the thread, and sends the handoff back quoted with “Please go on.” Its multiline handoff setting appears only while Custom is selected. `-Direct` still keeps an exact account without routing.
 
@@ -113,8 +113,8 @@ Auto-compaction is opt-in. Press **C** before entering an account or pool, or ru
 
 Run **`codex-deck`**, or press **D** in the terminal dashboard.
 
-- **Open Terminal** launches the selected account in your default or chosen folder.
-- Click the **online / terminals** bar to switch between connected accounts and all profiles, in either view. Use the adjacent plan filter to show all, Free, or Plus and higher accounts.
+- The panel has one compact action row: **+** adds an account, **Deck Analysis** opens efficiency analytics, **Auto-compact** controls future terminal launches, and **Configs** keeps the account/global configuration menu. Open an account terminal from its row menu.
+- The **accounts / online / terminals** bar is a read-only status surface. Both views always list all profiles; use the adjacent plan filter to show all, Free, or Plus and higher accounts.
 - Click the status bar below the list to check every visible account.
 - Switch between the **panel** and **widget**, then expand account rows for more detail.
 - **Settings** controls appearance, visible fields, Deck skills, email masking, automatic checks and warm-up.
@@ -125,15 +125,17 @@ Desktop automatic checks are off by default. Enable them in Settings if you want
 
 ### Trajectory and live context control (opt-in)
 
-Enable **Trajectory** in Settings to get a fast local timeline of sessions across Deck accounts: requests, messages, tool calls and results, token-usage records, compactions, subagent/session metadata, and live sessions. Open it from the desktop Studio bar, tray menu, or the terminal dashboard's **V** shortcut. Rollout files are indexed locally, large histories are streamed in bounded pages, and raw paths are not exposed to the browser frontend.
+Enable **Trajectory** in Settings to get a fast local timeline of sessions across Deck accounts: requests, messages, tool calls and results, token-usage records, compactions, subagent/session metadata, and live sessions. Interactive `codex-auth` launches open it automatically; you can also open it from the tray menu or the terminal dashboard's **V** shortcut. The newest managed conversation is selected first, live context refreshes automatically, active rollouts are tailed in bounded pages, and raw paths are not exposed to the browser frontend.
 
-The **Live context manager** is a second opt-in inside the Trajectory settings. For conversations launched through Deck's loopback route, it shows both immutable raw history and the effective context for the next model request. You can suppress an item, restore it, or replace its model-visible text without rewriting the rollout. Tool calls and outputs are paired by default, while system, developer, reasoning, and encrypted items are protected unless the advanced override is explicitly enabled.
+The **Live context manager** is a second opt-in inside the Trajectory settings. Every interactive account or pool opened from `codex-auth`, its dashboard, or Codex Deck then gets a dedicated slim app-style companion beside the terminal, targeted directly at that launch. It shows the complete model-visible context as individual message, tool-call, and tool-result cards from the first request onward. Use the red **−** to suppress a card, edit or trim its exact visible text, restore one change or all changes, search/filter the window, and watch the next-request token estimate update. Tool calls and outputs are paired by default, while system, developer, reasoning, and encrypted items are protected unless the advanced override is explicitly enabled. The larger Trajectory studio remains one click away for the complete emitted timeline through the final response.
+
+The companion is deliberately lightweight: it reads the exact live proxy snapshot instead of rescanning rollout history, lazy-renders long card lists, and polls a tiny revision/status response when nothing changed. A full context payload and DOM update happen only for a new model request or one of your edits.
 
 Context overlays apply at the shared request boundary, so they remain active across ordinary accounts, pools, quota failover, manual account switching, Responses requests, and native or custom compaction requests. A change affects the next request; it cannot alter one already in flight or undo actions the model has already taken. `-Direct` deliberately bypasses Deck's route, so its completed rollout remains viewable but it has no authoritative live-edit boundary.
 
-### Efficiency analytics (separate opt-in)
+### Efficiency analytics (separate feature)
 
-**Efficiency analytics is an independent feature**, enabled separately in Settings and opened from the Studio bar, tray menu, or **Y** in the terminal dashboard. Its PrismoDev-inspired analysis scans a bounded number of local rollouts for exact token totals where Codex recorded them, cache use, repeated commands and paths, oversized tool results, tool frequency, compactions, and token distribution by account, project, and model. It then ranks concrete opportunities to reduce repeated discovery or noisy output.
+**Efficiency analytics is an independent feature**, enabled by default but separately switchable in Settings. Open it with **Deck Analysis** in the panel, the tray menu, or **Y** in the terminal dashboard. When Trajectory is disabled, interactive `codex-auth` launches Efficiency automatically; when both are enabled, the automatically opened Trajectory page links to it. Its PrismoDev-inspired analysis scans a bounded number of local rollouts for exact token totals where Codex recorded them, cache use, repeated commands and paths, oversized tool results, tool frequency, compactions, and token distribution by account, project, and model. It then ranks concrete opportunities to reduce repeated discovery or noisy output.
 
 The analytics feature does not enable, depend on, or modify Trajectory or the context manager. The two additions share only a low-level local rollout parser/index so Deck does not perform the same filesystem work twice.
 

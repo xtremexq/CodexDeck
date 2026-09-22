@@ -1166,6 +1166,23 @@ try {
         if ($deckSettings.AutoStart) { Start-DeckCompanion $suiteRoot }
     }
 } catch { Write-Warning "Codex Deck could not attach: $($_.Exception.Message)" }
+$deckInteractiveConversation = $codexConversation -and (-not $CodexArgs -or $CodexArgs[0] -notin @('exec','e'))
+if ($deckInteractiveConversation -and $deckSettings -and $deckSettings.AutoCompactLaunchEnabled) { $AutoCompact=$true }
+function Open-DeckLaunchInspector {
+    if (-not $deckInteractiveConversation -or -not $deckSettings) { return }
+    try {
+        if($deckSettings.TrajectoryEnabled -and $deckSettings.ContextManagerEnabled -and $failoverProxy -and $failoverProxy.ContextUrl){
+            [void](Open-DeckInspector $suiteRoot 'Trajectory' -Companion -SessionPath $deckSession)
+            Write-Host 'Codex Deck Live Context companion opened for this conversation.'
+        }elseif($deckSettings.TrajectoryEnabled){
+            [void](Open-DeckInspector $suiteRoot 'Trajectory')
+            Write-Host 'Codex Deck Trajectory opened for this conversation.'
+        }elseif($deckSettings.EfficiencyAnalyticsEnabled){
+            [void](Open-DeckInspector $suiteRoot 'Efficiency')
+            Write-Host 'Codex Deck Efficiency Analytics opened for this conversation.'
+        }else{return}
+    } catch { Write-Warning "Codex Deck inspector could not open: $($_.Exception.Message)" }
+}
 $failoverProxy = $null
 $failoverSessions = @()
 $codexExitCode = -1
@@ -1216,6 +1233,7 @@ try {
             }
             $env:CODEX_DECK_SESSION_URL = $failoverProxy.BaseUrl
         }
+        Open-DeckLaunchInspector
         $postConfigArgs = @($globalRuleArgs)
         if ($failoverProxy) { $postConfigArgs += @(Get-DeckSessionRoutingArguments $failoverProxy ([bool]$poolEntry)) }
         if ($postConfigArgs.Count) {
@@ -1280,10 +1298,12 @@ try {
             }
         }
         $env:CODEX_DECK_SESSION_URL = $failoverProxy.BaseUrl
+        Open-DeckLaunchInspector
         $launchArgs = @($sharedArgs) + @($nativeAutoCompactArgs) + @($CodexArgs) + @($globalRuleArgs) + @(Get-DeckSessionRoutingArguments $failoverProxy ([bool]$poolEntry))
         Invoke-DeckCodex $launchArgs
         $codexExitCode = $LASTEXITCODE
     } else {
+        Open-DeckLaunchInspector
         $launchArgs=@($sharedArgs)+@($nativeAutoCompactArgs)+@($CodexArgs)+@($globalRuleArgs)
         Invoke-DeckCodex $launchArgs
         $codexExitCode = $LASTEXITCODE

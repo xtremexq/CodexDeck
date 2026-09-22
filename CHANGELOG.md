@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.6.0 - 2026-09-22
 
+- Made enabled inspection features discoverable on every interactive account/dashboard launch: context-managed sessions now open an exact-session slim live editor with revision-only idle polling and lazy cards, while Deck otherwise opens Trajectory or standalone Efficiency, selects the newest managed context, tails active rollouts, and never blocks Codex on inspector failures.
+- Simplified both desktop layouts to always show all account profiles, subject only to the existing plan filter, and converted the former connected/all switch into a non-interactive account/connection/terminal status surface.
+- Collapsed the desktop panel's two action rows into one fast toolbar for adding accounts, opening Deck Analysis, toggling the shared next-launch auto-compact state, and opening Configs. The dashboard **C** control and panel toggle now stay synchronized, while efficiency analytics defaults on for new settings.
 - Added an opt-in local trajectory studio with streamed session timelines plus a separately enabled live context manager that can suppress, restore, or edit the next request's model-visible projection across Deck routing, failover and compaction without rewriting raw history.
-- Added independently opt-in, PrismoDev-inspired efficiency analytics for exact recorded tokens, cache use, repeated commands and paths, oversized tool results, compactions, tools, accounts, projects and models; it shares only the low-level rollout index with Trajectory.
+- Added independently configurable, PrismoDev-inspired efficiency analytics for exact recorded tokens, cache use, repeated commands and paths, oversized tool results, compactions, tools, accounts, projects and models; it shares only the low-level rollout index with Trajectory.
 - Changed the default auto-compaction threshold to 55% context remaining and strengthened the custom handoff prompt to preserve the references, paths and function names needed to continue without re-investigation.
 - Added `codex-auth resume <conversation-id>` to locate a conversation's owning account or pool and resume it through the complete Deck launch path, including configured routing, failover and optional auto-compaction.
 - Added hold-to-adjust in 5% steps for the terminal dashboard's **C** shortcut and one-time percentage overrides such as `codex-auth account1 -AutoCompact 50%`. Auto-compact percentages now consistently mean free context remaining, so 55% triggers at 45% used.

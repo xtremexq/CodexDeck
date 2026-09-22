@@ -6,7 +6,7 @@ $tick=$ast.Find({param($node) $node -is [Management.Automation.Language.Function
 Invoke-Expression $tick.Extent.Text
 function Get-DeckSessions { [pscustomobject]@{Account='work-main'} }
 function Get-DeckAccounts { 'work-main'; 1..12 | ForEach-Object {"account$_"} }
-function Get-DeckVisibleAccounts { if($allProfiles){Get-DeckAccounts}else{Get-DeckSessions | ForEach-Object Account | Select-Object -Unique} }
+function Get-DeckVisibleAccounts { @($visibleAccounts) }
 function Update-DeckPicker {}
 function Sync-DeckUsageCache {}
 function Save-DeckDesktopUsageCache {}
@@ -25,7 +25,7 @@ $root=Join-Path $env:TEMP ('deck-scheduler-'+[guid]::NewGuid().ToString('N'))
 $suite=$PSScriptRoot; $settings=Get-DeckDefaults; $tasks=@{}; $manualChecks=@{}; $nextCheck=@{}
 $cache=@{}; $history=@{}; $resets=@{}; $batchAccounts=@(); $batchUntil=[DateTimeOffset]::MinValue
 $StatusButton=[pscustomobject]@{IsEnabled=$true}
-$allProfiles=$false; $widget=$false; $started=@(); $failStarts=@(); $scheduleRepairStarts=0
+$visibleAccounts=@('work-main'); $widget=$false; $started=@(); $failStarts=@(); $scheduleRepairStarts=0
 Invoke-DeckTick; Assert ($started.Count -eq 0) 'Disabled auto-check started a request'
 Assert ($scheduleRepairStarts -eq 1) 'Initial background schedule repair was not requested'
 $settings.AutoCheck=$true
@@ -36,7 +36,7 @@ $tasks['work-main'].Out.IsCompleted=$false
 Invoke-DeckTick; Assert ($tasks.ContainsKey('work-main') -and -not $cache.ContainsKey('work-main')) 'UI read unfinished worker output'
 $tasks['work-main'].Out.IsCompleted=$true
 Invoke-DeckTick; Assert ($tasks.Count -eq 0 -and $cache['work-main'].Status -eq 'available') 'Completion or polling deadline failed'
-$allProfiles=$true
+$visibleAccounts=@(Get-DeckAccounts)
 Invoke-DeckTick; Assert ($tasks.Count -eq 8) 'Full list must launch eight checks together'
 Invoke-DeckTick; Assert ($tasks.Count -eq 8 -and $started.Count -eq 9) 'Concurrency cap or duplicate prevention failed'
 foreach($worker in $tasks.Values){$worker.Process.HasExited=$true}
@@ -61,7 +61,7 @@ $failStarts=@()
 
 # Automatic warm-up belongs exclusively to the short-lived headless worker. The
 # GUI must not become a second executor merely because the setting is enabled.
-$tasks=@{}; $started=@(); $manualChecks=@{}; $nextCheck=@{}; $allProfiles=$false
+$tasks=@{}; $started=@(); $manualChecks=@{}; $nextCheck=@{}; $visibleAccounts=@(Get-DeckAccounts)
 $settings.AutoCheck=$false; $settings.WarmupEnabled=$true; $settings.WarmupAccounts='account3'
 Invoke-DeckTick
 Assert ($started.Count -eq 0 -and $tasks.Count -eq 0) 'GUI duplicated the headless automatic warm-up worker'

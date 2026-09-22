@@ -37,10 +37,10 @@ function Get-DeckDefaults {
         WarmupResetEnabled=$true; WarmupTimedEnabled=$false; WarmupTimes=''
         WarmupStartAtLogin=$true
         FailoverEnabled=$false; FailoverMode='Ordered'; FailoverAccounts=''
-        AutoCompactMode='Native'; AutoCompactThresholdPercent=55
+        AutoCompactLaunchEnabled=$false; AutoCompactMode='Native'; AutoCompactThresholdPercent=55
         AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.'
         TrajectoryEnabled=$false; ContextManagerEnabled=$false; ContextManagerProtected=$false
-        EfficiencyAnalyticsEnabled=$false; EfficiencySessionLimit=200
+        EfficiencyAnalyticsEnabled=$true; EfficiencySessionLimit=200
     }
 }
 function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
@@ -151,6 +151,12 @@ function Write-DeckJson([string]$Path, $Value) {
         if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temp, $Path, [System.Management.Automation.Language.NullString]::Value) }
         else { [IO.File]::Move($temp, $Path) }
     } finally { if ([IO.File]::Exists($temp)) { [IO.File]::Delete($temp) } }
+}
+function Set-DeckAutoCompactLaunch([string]$Root, [bool]$Enabled) {
+    $settings=Get-DeckSettings $Root
+    $settings.AutoCompactLaunchEnabled=$Enabled
+    Write-DeckJson (Join-Path $Root 'settings.json') $settings
+    return Get-DeckSettings $Root
 }
 function Get-DeckSettings([string]$Root) {
     $settings = Get-DeckDefaults
@@ -273,7 +279,29 @@ function Start-DeckCompanion([string]$SuiteRoot, [switch]$OpenSettings) {
         $process.Dispose()
     }
 }
-function Open-DeckInspector([string]$SuiteRoot, [ValidateSet('Trajectory','Efficiency')][string]$Mode, [switch]$NoOpen) {
+function Get-DeckInspectorMarkerId([string]$SessionPath) {
+    if(-not $SessionPath){return $null}
+    $full=[IO.Path]::GetFullPath($SessionPath)
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try{$hash=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($full))}finally{$sha.Dispose()}
+    return (($hash | ForEach-Object {$_.ToString('x2')}) -join '').Substring(0,24)
+}
+function Start-DeckInspectorAppWindow([string]$Url) {
+    $candidates=@()
+    if(${env:ProgramFiles(x86)}){$candidates+=Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'}
+    if($env:ProgramFiles){$candidates+=Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'}
+    if($env:ProgramFiles){$candidates+=Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'}
+    if(${env:ProgramFiles(x86)}){$candidates+=Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'}
+    $browser=@($candidates | Where-Object {$_ -and (Test-Path -LiteralPath $_ -PathType Leaf)} | Select-Object -First 1)
+    if(-not $browser){Start-Process $Url;return}
+    $info=[Diagnostics.ProcessStartInfo]::new()
+    $info.FileName=$browser[0]
+    $info.Arguments=(@("--app=$Url",'--window-size=480,800','--no-first-run') | ForEach-Object {ConvertTo-DeckProcessArgument ([string]$_)}) -join ' '
+    $info.UseShellExecute=$true
+    $process=[Diagnostics.Process]::Start($info)
+    if($process){$process.Dispose()}
+}
+function Open-DeckInspector([string]$SuiteRoot, [ValidateSet('Trajectory','Efficiency')][string]$Mode, [switch]$NoOpen, [switch]$Companion, [string]$SessionPath) {
     $deckRoot=Join-Path $SuiteRoot 'deck'
     $current=Get-DeckSettings $deckRoot
     $enabled=if($Mode -eq 'Trajectory'){[bool]$current.TrajectoryEnabled}else{[bool]$current.EfficiencyAnalyticsEnabled}
@@ -307,9 +335,14 @@ function Open-DeckInspector([string]$SuiteRoot, [ValidateSet('Trajectory','Effic
         }while(-not $baseUrl -and [DateTimeOffset]::UtcNow -lt $deadline)
         if(-not $baseUrl){throw 'Deck Inspector did not become ready.'}
     }
-    $url=$baseUrl+$Mode.ToLowerInvariant()
+    if($Companion){
+        if($Mode -ne 'Trajectory' -or -not $current.ContextManagerEnabled){throw 'The live context companion is disabled. Enable Trajectory and Live context manager in Deck Settings first.'}
+        $markerId=Get-DeckInspectorMarkerId $SessionPath
+        if(-not $markerId){throw 'The live context companion needs an attached conversation session.'}
+        $url=$baseUrl+'context?live='+[Uri]::EscapeDataString($markerId)
+    }else{$url=$baseUrl+$Mode.ToLowerInvariant()}
     if($NoOpen){return $url}
-    Start-Process $url
+    if($Companion){Start-DeckInspectorAppWindow $url}else{Start-Process $url}
 }
 function Test-DeckWarmup($Settings, $Record, $PreviousReset, $History, [long]$Now) {
     if (-not $Settings.WarmupEnabled -or $Settings.WarmupResetEnabled -eq $false) { return $false }

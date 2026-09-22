@@ -14,12 +14,29 @@ try {
     $invalidCheckAllExit=$LASTEXITCODE
 } finally { $ErrorActionPreference=$savedErrorPreference }
 if($invalidCheckAllExit -eq 0 -or ($invalidCheckAll -join "`n") -notmatch 'only works with the plain codex-auth dashboard command'){throw 'codex-auth -a accepted a non-plain command'}
-foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Get-AccountDirectories','Find-DeckConversationOwner','Normalize-AccountName','Ensure-FreeAccountDefaults','Read-TextFile','Write-TextFile','Normalize-Newlines','ConvertTo-DeckWindowsArgument','Invoke-DeckCodex','Write-DeckSessionExit','Get-DeckSessionRoutingArguments','ConvertFrom-DeckTomlScalar','Get-DeckTomlTopLevelValue','Get-DeckCodexArgumentSetting','Get-DeckNativeAutoCompactConfiguration') {
+foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Get-AccountDirectories','Find-DeckConversationOwner','Normalize-AccountName','Ensure-FreeAccountDefaults','Read-TextFile','Write-TextFile','Normalize-Newlines','ConvertTo-DeckWindowsArgument','Invoke-DeckCodex','Write-DeckSessionExit','Get-DeckSessionRoutingArguments','ConvertFrom-DeckTomlScalar','Get-DeckTomlTopLevelValue','Get-DeckCodexArgumentSetting','Get-DeckNativeAutoCompactConfiguration','Open-DeckLaunchInspector') {
     $definition=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $true)
     . ([scriptblock]::Create($definition.Extent.Text))
 }
 . (Join-Path $PSScriptRoot 'Deck.Failover.ps1')
 . (Join-Path $PSScriptRoot 'Deck.Environments.ps1')
+$script:openedInspectors=@()
+function Open-DeckInspector([string]$SuiteRoot,[string]$Mode,[switch]$Companion,[string]$SessionPath) {$script:openedInspectors += [pscustomobject]@{Mode=$Mode;Companion=[bool]$Companion;SessionPath=$SessionPath}; return 'http://127.0.0.1/test'}
+$suiteRoot='C:\synthetic-suite'; $deckInteractiveConversation=$true; $deckSession='C:\synthetic-suite\deck\sessions\live.json'
+$failoverProxy=[pscustomobject]@{ContextUrl='http://127.0.0.1:12345/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/_deck/context'}
+$deckSettings=[pscustomobject]@{TrajectoryEnabled=$true;ContextManagerEnabled=$true;EfficiencyAnalyticsEnabled=$true}
+Open-DeckLaunchInspector
+if($script:openedInspectors.Count -ne 1 -or $script:openedInspectors[0].Mode -ne 'Trajectory' -or -not $script:openedInspectors[0].Companion -or $script:openedInspectors[0].SessionPath -ne $deckSession){throw 'Context-managed interactive launch did not open its exact-session compact companion'}
+$deckSettings=[pscustomobject]@{TrajectoryEnabled=$true;ContextManagerEnabled=$false;EfficiencyAnalyticsEnabled=$true}
+Open-DeckLaunchInspector
+if($script:openedInspectors.Count -ne 2 -or $script:openedInspectors[1].Mode -ne 'Trajectory' -or $script:openedInspectors[1].Companion){throw 'Interactive launch did not fall back to full Trajectory while keeping Efficiency independent'}
+$deckSettings=[pscustomobject]@{TrajectoryEnabled=$false;ContextManagerEnabled=$false;EfficiencyAnalyticsEnabled=$true}
+Open-DeckLaunchInspector
+if($script:openedInspectors.Count -ne 3 -or $script:openedInspectors[2].Mode -ne 'Efficiency' -or $script:openedInspectors[2].Companion){throw 'Standalone Efficiency analytics did not open for an interactive launch'}
+$deckInteractiveConversation=$false
+Open-DeckLaunchInspector
+if($script:openedInspectors.Count -ne 3){throw 'Non-interactive launch opened the inspector'}
+if(([regex]::Matches($sourceText,'(?m)^\s*Open-DeckLaunchInspector\s*$')).Count -ne 3){throw 'Inspector opener must run once in each mutually exclusive conversation launch path'}
 $syntheticProxy=@{BaseUrl='http://127.0.0.1:12345/capability'}
 $ordinaryRoute=@(Get-DeckSessionRoutingArguments $syntheticProxy $false)
 $pooledRoute=@(Get-DeckSessionRoutingArguments $syntheticProxy $true)

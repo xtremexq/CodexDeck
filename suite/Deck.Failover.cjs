@@ -100,6 +100,7 @@ function contextText(value) {
   if (!value || typeof value !== 'object') return '';
   if (typeof value.text === 'string') return value.text;
   if (typeof value.output === 'string') return value.output;
+  if (typeof value.arguments === 'string') return value.arguments;
   if (typeof value.content === 'string') return value.content;
   if (Array.isArray(value.content)) return value.content.map(contextText).filter(Boolean).join('\n');
   return '';
@@ -117,7 +118,7 @@ function contextEntries(parsed) {
     const callId = object.call_id || object.callId || null;
     const content = contextText(item);
     const protectedItem = ['system','developer'].includes(role) || type === 'reasoning' || Boolean(object.encrypted_content);
-    const editable = typeof item === 'string' || type === 'message' || typeof object.output === 'string' ||
+    const editable = typeof item === 'string' || type === 'message' || typeof object.output === 'string' || typeof object.arguments === 'string' ||
       typeof object.content === 'string' || (Array.isArray(object.content) && object.content.some(part => part && typeof part.text === 'string'));
     return { key:`${hash}:${occurrence}`, index, type, role, name:object.name || null, callId, text:content,
       preview:content.slice(0, 420), chars:content.length || serialized.length, tokens:Math.ceil((content.length || serialized.length) / 4),
@@ -128,10 +129,11 @@ function replaceContextText(item, replacement) {
   if (typeof item === 'string') return replacement;
   const copy = JSON.parse(JSON.stringify(item));
   if (typeof copy.output === 'string') copy.output = replacement;
+  else if (typeof copy.arguments === 'string') copy.arguments = replacement;
   else if (typeof copy.content === 'string') copy.content = replacement;
   else if (Array.isArray(copy.content)) {
-    const part = copy.content.find(value => value && typeof value.text === 'string');
-    if (part) part.text = replacement;
+    const parts = copy.content.filter(value => value && typeof value.text === 'string');
+    if (parts.length) { parts[0].text = replacement; for (const part of parts.slice(1)) part.text = ''; }
   }
   return copy;
 }
@@ -191,7 +193,21 @@ async function createProxy(config, dependencies = {}) {
   const contextEnabled = config.contextManager === true;
   const allowProtected = config.contextManagerProtected === true;
   const contextRules = new Map();
-  let contextSnapshot = { version:1, enabled:contextEnabled, protectedChanges:allowProtected, capturedAt:null, requestPath:null, raw:[], effective:[], rawTokens:0, effectiveTokens:0, savedTokens:0, rules:[] };
+  let contextSnapshot = { version:1, revision:0, enabled:contextEnabled, protectedChanges:allowProtected, capturedAt:null, requestPath:null, raw:[], effective:[], rawTokens:0, effectiveTokens:0, savedTokens:0, rules:[] };
+  const refreshContextSnapshot = () => {
+    const raw=contextSnapshot.raw.map(entry => {
+      const rule=contextRules.get(entry.key), usable=!rule || !entry.protected || allowProtected;
+      return {...entry,suppressed:Boolean(usable&&rule?.action==='suppress'),edited:Boolean(usable&&rule?.action==='edit')};
+    });
+    const effective=raw.filter(entry=>!entry.suppressed).map(entry=>{
+      const rule=contextRules.get(entry.key);
+      if(!entry.edited||typeof rule?.text!=='string')return entry;
+      const chars=rule.text.length,tokens=Math.ceil(chars/4);
+      return {...entry,text:rule.text,preview:rule.text.slice(0,420),chars,tokens};
+    });
+    const rawTokens=raw.reduce((sum,entry)=>sum+entry.tokens,0),effectiveTokens=effective.reduce((sum,entry)=>sum+entry.tokens,0);
+    contextSnapshot={...contextSnapshot,revision:contextSnapshot.revision+1,raw,effective,rawTokens,effectiveTokens,savedTokens:Math.max(0,rawTokens-effectiveTokens)};
+  };
   const excluded = new Set();
   const retryAt = new Map();
   const resetProbes = new Set();
@@ -233,8 +249,8 @@ async function createProxy(config, dependencies = {}) {
   const server = http.createServer(async (req, res) => {
     // A capability URL, exact Host and no browser Origin prevent unauthenticated LAN/browser access.
     if (req.headers.host !== `127.0.0.1:${server.address().port}` || req.headers.origin || !req.url.startsWith('/' + secret + '/')) return reply(res, 403, 'Forbidden.');
-    const route = req.url.slice(secret.length + 1);
-    if (route === '/_deck/account') {
+    const route = req.url.slice(secret.length + 1), queryAt=route.indexOf('?'), routePath=queryAt<0?route:route.slice(0,queryAt), routeQuery=new URLSearchParams(queryAt<0?'':route.slice(queryAt+1));
+    if (routePath === '/_deck/account') {
       if (req.method === 'GET') return replyJson(res, status());
       if (req.method !== 'POST') return reply(res, 404, 'Unsupported failover route.');
       if ((req.headers['content-encoding'] || 'identity') !== 'identity') return reply(res, 415, 'The account control request must not be compressed.');
@@ -254,9 +270,14 @@ async function createProxy(config, dependencies = {}) {
         return replyJson(res, status());
       } catch { return reply(res, 400, 'Expected a small JSON account request.'); }
     }
-    if (route === '/_deck/context') {
+    if (routePath === '/_deck/context') {
       if (!contextEnabled) return reply(res, 404, 'The context manager is disabled for this conversation.');
-      if (req.method === 'GET') return replyJson(res, { ...contextSnapshot, busy:activeRequests > 0, rules:[...contextRules.entries()].map(([key,rule]) => ({key,...rule})) });
+      if (req.method === 'GET') {
+        const since=Number(routeQuery.get('since'));
+        const account=config.environment || current;
+        if(routeQuery.has('since')&&Number.isInteger(since)&&since===contextSnapshot.revision)return replyJson(res,{version:1,revision:contextSnapshot.revision,unchanged:true,busy:activeRequests>0,account});
+        return replyJson(res, { ...contextSnapshot, account, busy:activeRequests > 0, rules:[...contextRules.entries()].map(([key,rule]) => ({key,...rule})) });
+      }
       if (req.method !== 'POST' || (req.headers['content-encoding'] || 'identity') !== 'identity') return reply(res, 404, 'Unsupported context control request.');
       try {
         const request = JSON.parse((await collect(req, 64 * 1024)).toString('utf8'));
@@ -273,10 +294,10 @@ async function createProxy(config, dependencies = {}) {
             contextRules.set(entry.key, {action:'edit', text:request.text});
           } else return reply(res, 400, 'Expected suppress, edit, restore or clear.');
         }
+        refreshContextSnapshot();
         return replyJson(res, { ok:true, rules:[...contextRules.entries()].map(([key,rule]) => ({key,...rule})), appliesTo:'next request' });
       } catch { return reply(res, 400, 'Expected a small JSON context control request.'); }
     }
-    const queryAt = route.indexOf('?'), routePath = queryAt < 0 ? route : route.slice(0, queryAt);
     // Codex extensions can use provider-relative auxiliary endpoints in
     // addition to Responses and Models. Forward GET/POST routes to the fixed
     // Codex upstream, but reserve Deck's namespace and never accept a caller-
@@ -302,7 +323,7 @@ async function createProxy(config, dependencies = {}) {
           const projection = projectContext(parsed, contextRules, allowProtected);
           parsed = projection.output;
           body = Buffer.from(JSON.stringify(parsed));
-          contextSnapshot = { version:1, enabled:true, protectedChanges:allowProtected, capturedAt:new Date(now()).toISOString(), requestPath:routePath,
+          contextSnapshot = { version:1, revision:contextSnapshot.revision+1, enabled:true, protectedChanges:allowProtected, capturedAt:new Date(now()).toISOString(), requestPath:routePath,
             raw:projection.entries.map(({raw,...entry}) => entry), effective:projection.effective.map(({raw,...entry}) => entry),
             rawTokens:projection.rawTokens, effectiveTokens:projection.effectiveTokens, savedTokens:Math.max(0, projection.rawTokens - projection.effectiveTokens), rules:[] };
         }

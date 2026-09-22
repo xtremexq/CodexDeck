@@ -6,9 +6,14 @@ $fixture=Join-Path ([IO.Path]::GetTempPath()) ('codex-deck-test-'+[guid]::NewGui
 $settings=Get-DeckSettings $fixture
 Assert ($settings.AutoCompactMode -eq 'Native') 'Auto-compact implementation must default to Codex native'
 Assert ($settings.AutoCompactThresholdPercent -eq 55) 'Auto-compact threshold must default to 55%'
+Assert (-not $settings.AutoCompactLaunchEnabled) 'Auto-compact launches must default off'
 Assert ($settings.AutoCompactHandoffPrompt -match 'DECK_HANDOFF') 'Default handoff prompt must require the checkpoint marker'
 Assert ($settings.AutoCompactHandoffPrompt -eq 'Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.') 'Default handoff prompt is incorrect'
-Assert (-not $settings.TrajectoryEnabled -and -not $settings.ContextManagerEnabled -and -not $settings.EfficiencyAnalyticsEnabled) 'Inspection features must remain opt-in'
+Assert (-not $settings.TrajectoryEnabled -and -not $settings.ContextManagerEnabled -and $settings.EfficiencyAnalyticsEnabled) 'Trajectory/context must remain opt-in and efficiency analytics must default on'
+Assert ((Get-DeckInspectorMarkerId 'C:\synthetic\marker.json') -eq 'bbb109b158ae51aad899ea44') 'Inspector marker IDs must match the Node inspector session identity'
+$settings=Set-DeckAutoCompactLaunch $fixture $true
+Assert ($settings.AutoCompactLaunchEnabled -and (Get-DeckSettings $fixture).AutoCompactLaunchEnabled) 'Shared auto-compact launch toggle was not persisted'
+$settings=Set-DeckAutoCompactLaunch $fixture $false
 $checkNow=[DateTimeOffset]::UtcNow
 $manual=@{account7=$checkNow;account8=$checkNow.AddSeconds(60)}
 $scheduled=@{account7=$checkNow.AddMinutes(10);account8=$checkNow.AddMinutes(-1)}

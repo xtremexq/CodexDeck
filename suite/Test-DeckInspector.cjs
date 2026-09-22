@@ -34,23 +34,37 @@ async function main() {
     assert.deepEqual(summary.usage,{input:1200,cached:300,output:200,reasoning:50,total:1400,exact:true});
     assert.equal(summary.commands[command],2);assert.ok(summary.largest[0].chars>50000);
     const timeline=await timelineChunk(found[0]);assert.equal(timeline.done,true);assert.equal(timeline.items.at(-1).kind,'tokens');
+    const tailFile=path.join(root,'active-rollout.jsonl'),tailFirst=JSON.stringify(rows[2]),tailSecond=JSON.stringify(rows[3]),split=Math.floor(tailSecond.length/2);
+    fs.writeFileSync(tailFile,tailFirst+'\n'+tailSecond.slice(0,split),'utf8');
+    const firstTail=await timelineChunk({file:tailFile});assert.equal(firstTail.items.length,1);assert.equal(firstTail.done,false,'An incomplete rollout line must remain unread until it is complete');
+    fs.appendFileSync(tailFile,tailSecond.slice(split)+'\n','utf8');
+    const secondTail=await timelineChunk({file:tailFile},firstTail.next);assert.equal(secondTail.items.length,1);assert.equal(secondTail.items[0].kind,'function_call');assert.equal(secondTail.done,true);
     const report=await efficiency(root,20);assert.equal(report.totals.sessions,1);assert.equal(report.totals.exactSessions,1);
     assert.ok(report.recommendations.some(item=>item.title==='Repeated shell work'));assert.ok(report.recommendations.some(item=>item.title==='Large tool output'));
 
+    const liveDirectory=path.join(deck,'sessions');fs.mkdirSync(liveDirectory,{recursive:true});
+    fs.writeFileSync(path.join(liveDirectory,'older.json'),JSON.stringify({ProcessId:process.pid,Account:'account1',Folder:'C:\\work\\project',StartedAt:'2026-09-22T11:59:00Z'}),'utf8');
+    fs.writeFileSync(path.join(liveDirectory,'newer.json'),JSON.stringify({ProcessId:process.pid,Account:'account1',Folder:'C:\\work\\project',StartedAt:'2026-09-22T12:00:00Z'}),'utf8');
     const inspector=await createInspector(root,stateFile);server=inspector.server;
     assert.equal((await fetch(inspector.baseUrl+'health')).status,200);
-    let response=await fetch(inspector.baseUrl+'trajectory');assert.equal(response.status,200);assert.match(await response.text(),/Trajectory \+ Context/);
+    let response=await fetch(inspector.baseUrl+'trajectory');assert.equal(response.status,200);const trajectoryHtml=await response.text();assert.match(trajectoryHtml,/Trajectory \+ Context/);
+    assert.match(trajectoryHtml,/managed\[0\]/,'Trajectory must prefer the newest managed live context');assert.match(trajectoryHtml,/pollTimeline/,'Trajectory must tail active rollouts');assert.match(trajectoryHtml,/setInterval\([^]*1000\)/,'Live views must poll while Codex is working');assert.match(trajectoryHtml,/state\.protectedChanges/,'Protected context controls must honor the advanced setting');
     response=await fetch(inspector.baseUrl+'efficiency');assert.equal(response.status,200);assert.match(await response.text(),/Efficiency Analytics/);
-    const sessionResponse=await (await fetch(inspector.baseUrl+'api/sessions')).json();assert.equal(sessionResponse.sessions.length,1);assert.equal('file' in sessionResponse.sessions[0],false);
+    const sessionResponse=await (await fetch(inspector.baseUrl+'api/sessions')).json();assert.equal(sessionResponse.sessions.length,1);assert.equal('file' in sessionResponse.sessions[0],false);assert.equal(sessionResponse.live[0].startedAt,'2026-09-22T12:00:00Z','Newest live launch must be selected first');assert.equal(sessionResponse.sessions[0].live.startedAt,'2026-09-22T12:00:00Z','A historical session must bind to its newest matching live launch');
     const apiReport=await (await fetch(inspector.baseUrl+'api/efficiency')).json();assert.equal(apiReport.totals.total,1400);assert.equal('file' in apiReport.sessions[0],false);
     assert.equal((await fetch(inspector.baseUrl+'api/context?id=missing')).status,403,'Context management has its own opt-in gate');
+    assert.equal((await fetch(inspector.baseUrl+'context?live=aaaaaaaaaaaaaaaaaaaaaaaa')).status,403,'The compact companion must share the live-context opt-in gate');
     assert.equal((await fetch(inspector.baseUrl+'health',{headers:{origin:'https://example.com'}})).status,403);
+
+    writeSettings({TrajectoryEnabled:true,ContextManagerEnabled:true,ContextManagerProtected:false,EfficiencyAnalyticsEnabled:true,EfficiencySessionLimit:20});
+    response=await fetch(inspector.baseUrl+'context?live=aaaaaaaaaaaaaaaaaaaaaaaa');assert.equal(response.status,200);const companionHtml=await response.text();
+    assert.match(companionHtml,/Live Context/);assert.match(companionHtml,/Full studio/);assert.match(companionHtml,/content-visibility:auto/);assert.match(companionHtml,/&since=/);assert.match(companionHtml,/Suppress this item from the next request/);assert.match(companionHtml,/Edit model-visible content/);
 
     writeSettings({TrajectoryEnabled:false,ContextManagerEnabled:false,EfficiencyAnalyticsEnabled:true,EfficiencySessionLimit:20});
     assert.equal((await fetch(inspector.baseUrl+'trajectory')).status,403);assert.equal((await fetch(inspector.baseUrl+'efficiency')).status,200,'Efficiency analytics must remain independently available');
     writeSettings({TrajectoryEnabled:true,ContextManagerEnabled:false,EfficiencyAnalyticsEnabled:false,EfficiencySessionLimit:20});
     assert.equal((await fetch(inspector.baseUrl+'trajectory')).status,200);assert.equal((await fetch(inspector.baseUrl+'efficiency')).status,403,'Trajectory must remain independently available');
-    console.log('PASS: local trajectory indexing, paged timeline, exact usage, independent efficiency analytics, opt-in gates and inspector access controls.');
+    console.log('PASS: local trajectory indexing, compact live-context companion, safe live tailing, newest-live selection, exact usage, independent efficiency analytics, opt-in gates and inspector access controls.');
   } finally {
     if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
     fs.rmSync(root,{recursive:true,force:true});

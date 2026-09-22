@@ -162,7 +162,7 @@ function Show-DeckTerminal {
     $cache = Get-DeckTerminalCache $root
     $profiles = @{}; $tasks = @{}; $pending = [Collections.Generic.Queue[string]]::new()
     $names=@(); $sessions=@(); $warmHistory=@{}; $stateRefreshAt=[DateTimeOffset]::MinValue
-    $selected = 0; $filter = ''; $notice = 'Ready. Cached usage is shown; press R or A for fresh checks.'; $mask = $true; $autoCompact = $false
+    $selected = 0; $filter = ''; $notice = 'Ready. Cached usage is shown; press R or A for fresh checks.'; $mask = $true; $autoCompact = [bool]$warmSettings.AutoCompactLaunchEnabled
     $queueAll=$CheckAll.IsPresent
     $compactAdjusting=$false; $compactDraft=[int]$warmSettings.AutoCompactThresholdPercent
     $interactive = -not $Snapshot -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
@@ -178,6 +178,7 @@ function Show-DeckTerminal {
             $loopNow=[DateTimeOffset]::UtcNow
             if($loopNow -ge $stateRefreshAt){
                 $warmSettings=Get-DeckSettings $root
+                $autoCompact=[bool]$warmSettings.AutoCompactLaunchEnabled
                 $warmHistory=@{}; foreach($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $root 'warmup.json')))){if($entry.Account){$warmHistory[$entry.Account]=$entry}}
                 # Refresh disk-backed state at a human-scale cadence; worker
                 # completion remains responsive without reparsing it twice a second.
@@ -304,7 +305,8 @@ function Show-DeckTerminal {
                         $compactAdjusting=$true
                         $notice='Adjust the free-context threshold in 5% steps, then press Enter to save.'
                     }else{
-                        $autoCompact = -not $autoCompact
+                        $warmSettings=Set-DeckAutoCompactLaunch $root (-not $autoCompact)
+                        $autoCompact = [bool]$warmSettings.AutoCompactLaunchEnabled
                         $notice = if($autoCompact){'Auto-compact enabled for account and pool launches ('+$warmSettings.AutoCompactMode+').'}else{'Auto-compact disabled.'}
                     }
                 }
