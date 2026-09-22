@@ -147,6 +147,263 @@ function ConvertTo-DeckCodexArguments([string[]]$Arguments) {
         else { $argument }
     }
 }
+
+# Optional managed integrations. Deck owns only the adapter and receipt; upstream
+# packages are downloaded into versioned folders after an explicit enable/update.
+function Get-DeckIntegrationCatalog([string]$SuiteRoot) {
+    $path=Join-Path $SuiteRoot 'Deck.Integrations.json'
+    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw 'Deck integration manifest is missing. Reinstall Codex Deck.'}
+    $catalog=[IO.File]::ReadAllText($path) | ConvertFrom-Json
+    if($catalog.schema -ne 1){throw 'Unsupported Deck integration manifest.'}
+    return $catalog
+}
+function Get-DeckIntegrationState([string]$SuiteRoot) {
+    $path=Join-Path $SuiteRoot 'integrations/state.json'
+    if(Test-Path -LiteralPath $path -PathType Leaf){
+        try{return [IO.File]::ReadAllText($path) | ConvertFrom-Json}catch{}
+    }
+    return [pscustomobject]@{schema=1;components=[pscustomobject]@{}}
+}
+function Write-DeckIntegrationState([string]$SuiteRoot,$State) {
+    $path=Join-Path $SuiteRoot 'integrations/state.json'; $directory=Split-Path -Parent $path
+    [void][IO.Directory]::CreateDirectory($directory)
+    $temporary=Join-Path $directory ([guid]::NewGuid().ToString('N')+'.tmp')
+    try{
+        [IO.File]::WriteAllText($temporary,(ConvertTo-Json -InputObject $State -Depth 12),[Text.UTF8Encoding]::new($false))
+        if([IO.File]::Exists($path)){[IO.File]::Replace($temporary,$path,[System.Management.Automation.Language.NullString]::Value)}else{[IO.File]::Move($temporary,$path)}
+    }finally{if([IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}}
+}
+function Get-DeckIntegrationComponent([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness')][string]$Name) {
+    $catalog=Get-DeckIntegrationCatalog $SuiteRoot
+    $component=$catalog.components.$Name
+    if(-not $component){throw "Unknown Deck integration: $Name"}
+    return $component
+}
+function Get-DeckIntegrationStatus([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness')][string]$Name) {
+    $component=Get-DeckIntegrationComponent $SuiteRoot $Name
+    if($Name -eq 'browser_harness'){
+        $command=Get-Command browser-harness -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        $executable=if($command){[string]$command.Source}else{''}
+        $version=''
+        if($executable){
+            $cachePath=Join-Path $SuiteRoot 'integrations/browser-harness-detection.json'
+            $file=Get-Item -LiteralPath $executable -ErrorAction SilentlyContinue
+            if($file){
+                try{
+                    if(Test-Path -LiteralPath $cachePath -PathType Leaf){
+                        $cached=[IO.File]::ReadAllText($cachePath) | ConvertFrom-Json
+                        if($cached.executable -eq $executable -and $cached.length -eq $file.Length -and $cached.modifiedUtcTicks -eq $file.LastWriteTimeUtc.Ticks -and $cached.version -match '^\d+(?:\.\d+){1,3}$'){$version=[string]$cached.version}
+                    }
+                }catch{}
+                if(-not $version){
+                    try{$reported=(& $executable --version 2>$null | Select-Object -First 1);if($reported -match '(\d+(?:\.\d+){1,3})'){$version=$Matches[1]}}catch{}
+                    if($version){
+                        try{
+                            [void][IO.Directory]::CreateDirectory((Split-Path -Parent $cachePath))
+                            [IO.File]::WriteAllText($cachePath,(ConvertTo-Json -Compress -InputObject @{executable=$executable;length=$file.Length;modifiedUtcTicks=$file.LastWriteTimeUtc.Ticks;version=$version}),[Text.UTF8Encoding]::new($false))
+                        }catch{}
+                    }
+                }
+            }
+        }
+        $valid=[bool]($executable -and $version)
+        return [pscustomobject]@{Name=$Name;DisplayName=$component.displayName;Installed=$valid;Valid=$valid;Version=$version;Executable=$executable;Versions=@();ProjectUrl=$component.projectUrl;License=$component.license;External=$true}
+    }
+    $state=Get-DeckIntegrationState $SuiteRoot
+    $entry=$state.components.$Name
+    $path=if($entry -and $entry.version){Join-Path $SuiteRoot ("integrations/packages/{0}/{1}/{2}" -f $Name,$entry.version,$component.executable)}else{$null}
+    $valid=[bool]($path -and (Test-Path -LiteralPath $path -PathType Leaf))
+    if($valid -and $entry.sha256){$valid=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -eq [string]$entry.sha256}
+    if($valid -and $Name -eq 'codegraph'){$valid=Test-Path -LiteralPath (Join-Path (Split-Path -Parent $path) 'onnxruntime.dll') -PathType Leaf}
+    $versions=@(Get-ChildItem -LiteralPath (Join-Path $SuiteRoot "integrations/packages/$Name") -Directory -ErrorAction SilentlyContinue | Where-Object {$_.Name -notlike '.stage-*'} | Sort-Object LastWriteTimeUtc -Descending | ForEach-Object Name)
+    return [pscustomobject]@{Name=$Name;DisplayName=$component.displayName;Installed=$valid;Valid=$valid;Version=if($entry){[string]$entry.version}else{''};Executable=$path;Versions=$versions;ProjectUrl=$component.projectUrl;License=$component.license}
+}
+function Get-DeckIntegrationExpectedHash([string]$ChecksumPath,[string]$AssetName) {
+    $text=[IO.File]::ReadAllText($ChecksumPath)
+    $escaped=[regex]::Escape($AssetName)
+    if($text -match "(?im)^\s*([a-f0-9]{64})\s+(?:\*|\s)?$escaped\s*$"){return $Matches[1].ToUpperInvariant()}
+    if($text -match '(?im)^\s*([a-f0-9]{64})\s*$'){return $Matches[1].ToUpperInvariant()}
+    throw "Published checksum did not contain $AssetName."
+}
+function Invoke-DeckIntegrationDownload([string]$Uri,[string]$Path) {
+    Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Path -Headers @{'User-Agent'='CodexDeck-managed-integrations';'Accept'='application/octet-stream'} -TimeoutSec 90
+}
+function Resolve-DeckGithubRelease([string]$Repository) {
+    Invoke-RestMethod -UseBasicParsing -Uri ("https://api.github.com/repos/{0}/releases/latest" -f $Repository) -Headers @{'User-Agent'='CodexDeck-managed-integrations';'Accept'='application/vnd.github+json'} -TimeoutSec 30
+}
+function Get-DeckBrowserHarnessLatestVersion {
+    $release=Invoke-RestMethod -UseBasicParsing -Uri 'https://pypi.org/pypi/browser-harness/json' -TimeoutSec 30
+    $version=[string]$release.info.version
+    if($version -notmatch '^\d+(?:\.\d+){1,3}$'){throw 'PyPI returned an unsupported Browser Harness version.'}
+    return $version
+}
+function Install-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness')][string]$Name,[switch]$Update) {
+    $component=Get-DeckIntegrationComponent $SuiteRoot $Name
+    if($Name -eq 'browser_harness'){
+        $existing=Get-DeckIntegrationStatus $SuiteRoot $Name
+        if($existing.Valid -and -not $Update){return $existing}
+        $uv=Get-Command uv -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if(-not $uv){throw 'Browser Harness installation requires uv on PATH.'}
+        $arguments=@('tool','install','--python','3.12')
+        if($existing.Valid){$arguments+=@('--upgrade','--force')}
+        $arguments+='browser-harness'
+        & $uv.Source @arguments | Out-Null
+        if($LASTEXITCODE -ne 0){throw 'uv could not install Browser Harness.'}
+        $installed=Get-DeckIntegrationStatus $SuiteRoot $Name
+        if(-not $installed.Valid){throw 'Browser Harness CLI was not found on PATH after installation. Open a new terminal and retry.'}
+        if($Update -and $existing.Valid){Sync-DeckBrowserHarnessSkillSource $SuiteRoot -Refresh | Out-Null}
+        return $installed
+    }
+    $packages=Join-Path $SuiteRoot "integrations/packages/$Name"; [void][IO.Directory]::CreateDirectory($packages)
+    $version=''; $downloads=@{}
+    if($component.provider -eq 'github'){
+        $release=Resolve-DeckGithubRelease $component.repository
+        $version=([string]$release.tag_name).TrimStart('v')
+        foreach($asset in $release.assets){$downloads[[string]$asset.name]=[string]$asset.browser_download_url}
+        foreach($required in @($component.asset,$component.checksumAsset,$component.supportAsset,$component.supportChecksumAsset | Where-Object {$_})){
+            if(-not $downloads.ContainsKey([string]$required)){throw "Release $version is missing $required."}
+        }
+    }else{
+        $release=Invoke-RestMethod -UseBasicParsing -Uri ("https://pypi.org/pypi/{0}/json" -f $component.package) -TimeoutSec 30
+        $version=[string]$release.info.version
+        $wheel=@($release.urls | Where-Object {$_.packagetype -eq 'bdist_wheel' -and $_.filename.EndsWith([string]$component.wheelPattern,[StringComparison]::OrdinalIgnoreCase)}) | Select-Object -First 1
+        if(-not $wheel){throw "Headroom $version does not publish the expected signed Windows wheel."}
+    }
+    if($version -notmatch '^\d+(?:\.\d+){1,3}(?:[-+][a-zA-Z0-9.-]+)?$'){throw 'Upstream returned an unsafe version identifier.'}
+    $final=Join-Path $packages $version
+    if((Test-Path -LiteralPath $final -PathType Container) -and
+       -not (Test-Path -LiteralPath (Join-Path $final $component.executable) -PathType Leaf)){
+        Remove-Item -LiteralPath $final -Recurse -Force
+    }
+    if(-not (Test-Path -LiteralPath $final -PathType Container)){
+        $stage=Join-Path $packages ('.stage-'+[guid]::NewGuid().ToString('N')); [void][IO.Directory]::CreateDirectory($stage)
+        try{
+            if($Name -eq 'rtk'){
+                $archive=Join-Path $stage $component.asset; $checksum=Join-Path $stage $component.checksumAsset
+                Invoke-DeckIntegrationDownload $downloads[[string]$component.asset] $archive; Invoke-DeckIntegrationDownload $downloads[[string]$component.checksumAsset] $checksum
+                $expected=Get-DeckIntegrationExpectedHash $checksum $component.asset
+                if((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected){throw 'RTK download failed checksum verification.'}
+                $expanded=Join-Path $stage 'expanded'; Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+                $binary=Get-ChildItem -LiteralPath $expanded -Filter rtk.exe -File -Recurse | Select-Object -First 1
+                if(-not $binary){throw 'RTK archive did not contain rtk.exe.'}
+                Copy-Item -LiteralPath $binary.FullName -Destination (Join-Path $stage 'rtk.exe')
+            }elseif($Name -eq 'codegraph'){
+                foreach($pair in @(@($component.asset,$component.checksumAsset,'codegraph-server.exe'),@($component.supportAsset,$component.supportChecksumAsset,'onnxruntime.dll'))){
+                    $source=Join-Path $stage $pair[0]; $checksum=Join-Path $stage $pair[1]
+                    Invoke-DeckIntegrationDownload $downloads[[string]$pair[0]] $source; Invoke-DeckIntegrationDownload $downloads[[string]$pair[1]] $checksum
+                    if((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne (Get-DeckIntegrationExpectedHash $checksum $pair[0])){throw "CodeGraph download failed checksum verification for $($pair[0])."}
+                    if($pair[0] -ne $pair[2]){Move-Item -LiteralPath $source -Destination (Join-Path $stage $pair[2])}
+                }
+            }else{
+                $wheelPath=Join-Path $stage $wheel.filename
+                Invoke-DeckIntegrationDownload $wheel.url $wheelPath
+                if((Get-FileHash -LiteralPath $wheelPath -Algorithm SHA256).Hash -ne ([string]$wheel.digests.sha256).ToUpperInvariant()){throw 'Headroom wheel failed PyPI checksum verification.'}
+                $python=$null
+                foreach($candidate in @('py.exe','python.exe')){try{$python=(Get-Command $candidate -ErrorAction Stop).Source;break}catch{}}
+                if(-not $python){throw 'Headroom MCP requires Python 3.10 or newer.'}
+                # Windows console entry points embed the venv path. Build at its
+                # permanent location so activation survives the download stage.
+                [void][IO.Directory]::CreateDirectory($final)
+                $venv=Join-Path $final 'venv'
+                if([IO.Path]::GetFileName($python) -ieq 'py.exe'){& $python -3 -m venv $venv}else{& $python -m venv $venv}
+                if($LASTEXITCODE -ne 0){throw 'Could not create the private Headroom environment.'}
+                $venvPython=Join-Path $venv 'Scripts/python.exe'
+                & $venvPython -m pip install --disable-pip-version-check --no-input ($wheelPath+'[mcp]')
+                if($LASTEXITCODE -ne 0){throw 'Headroom MCP dependency installation failed.'}
+                Remove-Item -LiteralPath $wheelPath -Force
+            }
+            $expectedExecutable=Join-Path $(if($Name -eq 'headroom'){$final}else{$stage}) $component.executable
+            if(-not (Test-Path -LiteralPath $expectedExecutable -PathType Leaf)){throw "$($component.displayName) executable was not installed."}
+            if($Name -ne 'headroom'){[IO.Directory]::Move($stage,$final); $stage=$null}
+        }catch{
+            if($Name -eq 'headroom' -and [IO.Directory]::Exists($final)){[IO.Directory]::Delete($final,$true)}
+            throw
+        }finally{if($stage -and [IO.Directory]::Exists($stage)){[IO.Directory]::Delete($stage,$true)}}
+    }
+    $executable=Join-Path $final $component.executable
+    if(-not (Test-Path -LiteralPath $executable -PathType Leaf)){throw "$($component.displayName) $version is incomplete."}
+    $old=Get-DeckIntegrationState $SuiteRoot; $components=[ordered]@{}
+    foreach($property in @($old.components.PSObject.Properties)){$components[$property.Name]=$property.Value}
+    $previous=@(); if($components.Contains($Name)){$previous=@($components[$Name].history)+@([string]$components[$Name].version) | Where-Object {$_ -and $_ -ne $version} | Select-Object -Unique}
+    $components[$Name]=[ordered]@{version=$version;sha256=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash;installedAt=[DateTimeOffset]::UtcNow.ToString('o');history=@($previous)}
+    Write-DeckIntegrationState $SuiteRoot ([ordered]@{schema=1;components=$components})
+    return Get-DeckIntegrationStatus $SuiteRoot $Name
+}
+function Restore-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness')][string]$Name) {
+    if($Name -eq 'browser_harness'){throw 'Browser Harness is installed outside Deck; use its own package manager to roll back.'}
+    $status=Get-DeckIntegrationStatus $SuiteRoot $Name; $state=Get-DeckIntegrationState $SuiteRoot; $entry=$state.components.$Name
+    $target=@($entry.history | Where-Object {$_ -and $_ -ne $entry.version -and (Test-Path -LiteralPath (Join-Path $SuiteRoot "integrations/packages/$Name/$_") -PathType Container)}) | Select-Object -First 1
+    if(-not $target){throw 'No earlier installed version is available.'}
+    $component=Get-DeckIntegrationComponent $SuiteRoot $Name; $executable=Join-Path $SuiteRoot "integrations/packages/$Name/$target/$($component.executable)"
+    if(-not (Test-Path -LiteralPath $executable -PathType Leaf)){throw 'The earlier installation is incomplete.'}
+    $entry.history=@(@([string]$entry.version)+@($entry.history | Where-Object {$_ -ne $target}) | Select-Object -Unique); $entry.version=[string]$target; $entry.sha256=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash
+    Write-DeckIntegrationState $SuiteRoot $state
+    return Get-DeckIntegrationStatus $SuiteRoot $Name
+}
+function Ensure-DeckIntegrationSelection([string]$SuiteRoot,$Settings) {
+    $names=@(); if($Settings.ContextOptimizer -eq 'RTK'){$names+='rtk'}elseif($Settings.ContextOptimizer -eq 'Headroom'){$names+='headroom'}; if($Settings.CodeGraphEnabled){$names+='codegraph'}; if($Settings.BrowserHarnessEnabled){$names+='browser_harness'}
+    foreach($name in $names){if(-not (Get-DeckIntegrationStatus $SuiteRoot $name).Valid){Install-DeckIntegration $SuiteRoot $name | Out-Null}}
+}
+function Get-DeckIntegrationWorkerCode([string]$SuiteRoot,[string[]]$Names,[switch]$Update) {
+    $core=(Join-Path $SuiteRoot 'Deck.Core.ps1').Replace("'","''")
+    $root=$SuiteRoot.Replace("'","''")
+    $namesLiteral=@($Names | ForEach-Object { "'"+$_.Replace("'","''")+"'" }) -join ','
+    $updateLiteral=if($Update){'$true'}else{'$false'}
+    return "`$ErrorActionPreference='Stop'`n. '$core'`nforeach(`$name in @($namesLiteral)){Install-DeckIntegration '$root' `$name -Update:$updateLiteral | Out-Null}"
+}
+function Get-DeckBrowserHarnessVersionWorkerCode([string]$SuiteRoot) {
+    $core=(Join-Path $SuiteRoot 'Deck.Core.ps1').Replace("'","''")
+    return "`$ErrorActionPreference='Stop'`n. '$core'`nGet-DeckBrowserHarnessLatestVersion"
+}
+function Sync-DeckBrowserHarnessSkillSource([string]$SuiteRoot,[switch]$Refresh) {
+    $source=Join-Path $SuiteRoot 'integrations/skills/browser-harness/SKILL.md'
+    if((Test-Path -LiteralPath $source -PathType Leaf) -and -not $Refresh){return $source}
+    $status=Get-DeckIntegrationStatus $SuiteRoot browser_harness
+    if(-not $status.Valid){throw 'Browser Harness CLI is unavailable.'}
+    $content=(& $status.Executable skill 2>$null) -join "`n"
+    if($LASTEXITCODE -ne 0 -or $content -notmatch '(?m)^name:\s*browser-harness\s*$'){throw 'Browser Harness did not return a valid skill.'}
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $source))
+    $temporary=$source+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
+    try{
+        [IO.File]::WriteAllText($temporary,$content+"`n",[Text.UTF8Encoding]::new($false))
+        if([IO.File]::Exists($source)){[IO.File]::Replace($temporary,$source,[System.Management.Automation.Language.NullString]::Value)}else{[IO.File]::Move($temporary,$source)}
+    }finally{if([IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}}
+    return $source
+}
+function Sync-DeckBrowserHarnessSkill([string]$SuiteRoot,[string]$AccountDirectory,[bool]$Enabled) {
+    $target=Join-Path $AccountDirectory 'skills/browser-harness'
+    $sourceDirectory=Join-Path $SuiteRoot 'integrations/skills/browser-harness'
+    $managed=Test-DeckBundledSkillLink $target $sourceDirectory
+    if(-not $Enabled){if($managed){[IO.Directory]::Delete($target)};return}
+    if(Test-Path -LiteralPath $target){return}
+    $source=Sync-DeckBrowserHarnessSkillSource $SuiteRoot
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $target))
+    [void](New-Item -ItemType Junction -Path $target -Target (Split-Path -Parent $source))
+}
+function Get-DeckIntegrationLaunch([string]$SuiteRoot,$Settings) {
+    $arguments=@(); $sections=@(); $environment=@{}
+    if($Settings.ContextOptimizer -eq 'RTK'){
+        $status=Get-DeckIntegrationStatus $SuiteRoot rtk; if(-not $status.Valid){throw 'RTK is enabled but not installed. Open Deck Settings and install it.'}
+        $node=(Get-Command node.exe -ErrorAction Stop).Source; $hook=Join-Path $SuiteRoot 'Deck.RtkHook.cjs'
+        $command='"'+$node+'" "'+$hook+'"'; $hookConfig=@(@{matcher='^Bash$';hooks=@(@{type='command';command=$command;command_windows=$command;timeout=5;statusMessage='Optimizing shell output with RTK'})})
+        $arguments+=@('-c','features.hooks=true','-c',('hooks.PreToolUse='+(ConvertTo-DeckTomlValue $hookConfig)))
+        $environment.CODEX_DECK_RTK_EXE=$status.Executable; $environment.RTK_TELEMETRY_DISABLED='1'
+    }elseif($Settings.ContextOptimizer -eq 'Headroom'){
+        $status=Get-DeckIntegrationStatus $SuiteRoot headroom; if(-not $status.Valid){throw 'Headroom MCP is enabled but not installed. Open Deck Settings and install it.'}
+        $workspace=Join-Path $SuiteRoot 'integrations/headroom-workspaces'; [void][IO.Directory]::CreateDirectory($workspace)
+        $definition=@{command=$status.Executable;args=@('mcp','serve');env=@{HEADROOM_WORKSPACE_DIR=$workspace};startup_timeout_sec=20;tool_timeout_sec=120}
+        $arguments+=@('-c',('mcp_servers.deck_headroom='+(ConvertTo-DeckTomlValue $definition)))
+        $sections+='Deck Context Optimizer: For large tool output or data that would otherwise fill the prompt, use deck_headroom compression and retain the returned retrieval ID. Retrieve exact source material when fidelity is needed.'
+    }
+    if($Settings.CodeGraphEnabled){
+        $status=Get-DeckIntegrationStatus $SuiteRoot codegraph; if(-not $status.Valid){throw 'CodeGraph is enabled but not installed. Open Deck Settings and install it.'}
+        $profile=if($Settings.CodeGraphProfile -in @('core','graph','all')){$Settings.CodeGraphProfile}else{'core'}
+        $definition=@{command=$status.Executable;args=@('--mcp','--profile',$profile);startup_timeout_sec=30;tool_timeout_sec=120}
+        $arguments+=@('-c',('mcp_servers.deck_codegraph='+(ConvertTo-DeckTomlValue $definition)))
+        $sections+='Deck Code Intelligence: Prefer deck_codegraph for repository discovery and relationship queries when it avoids broad file reads or repeated searches. Verify exact source before editing.'
+    }
+    return [pscustomobject]@{Arguments=@($arguments);InstructionSections=@($sections);Environment=$environment}
+}
 function Get-DeckMcpDefinition([string]$Directory, [string]$Server) {
     # Codex parses its own TOML; no lossy regular-expression parsing or extra TOML dependency.
     $previous = $env:CODEX_HOME

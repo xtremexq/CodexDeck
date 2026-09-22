@@ -1118,12 +1118,7 @@ if (Test-Path -LiteralPath $commandsModule) {
 Use-CodexNodePath
 $sharedArgs = @(Get-DeckSharedArguments $runtimeRoot $accountName)
 $globalRuleArgs=@()
-if(Test-Path -LiteralPath (Join-Path $runtimeRoot 'Deck.GlobalRules.ps1')){
-    . (Join-Path $runtimeRoot 'Deck.GlobalRules.ps1')
-    if(-not $CodexArgs -or $CodexArgs[0] -notin @('login','logout','mcp','mcp-server','completion','features','debug','app-server','--help','-h','--version','-V')){
-        $globalRuleArgs=@(Get-DeckGlobalRuleArguments $runtimeRoot $accountDir (@($sharedArgs)+@($CodexArgs)))
-    }
-}
+$integrationLaunch=$null
 if ($poolEntry -and $CodexArgs -and $CodexArgs[0] -in @('login','logout')) { throw 'Pooled environments do not own logins. Sign in to a member account instead.' }
 $codexConversation = -not $CodexArgs -or $CodexArgs[0] -notin @('login','logout','mcp','mcp-server','completion','features','debug','app-server','cloud','apply','sandbox','doctor','update','--help','-h','--version','-V')
 $poolConversation = $poolEntry -and $codexConversation
@@ -1152,6 +1147,8 @@ $useRoutingProxy = $codexConversation -and $failoverChoice -and @($failoverChoic
 $originalCodexHome = $env:CODEX_HOME
 $originalDeckSessionUrl = $env:CODEX_DECK_SESSION_URL
 $originalDeckSessionPath = $env:CODEX_DECK_SESSION_PATH
+$originalDeckRtkExe = $env:CODEX_DECK_RTK_EXE
+$originalRtkTelemetryDisabled = $env:RTK_TELEMETRY_DISABLED
 $env:CODEX_HOME = $accountDir
 Remove-Item Env:CODEX_DECK_SESSION_PATH -ErrorAction SilentlyContinue
 if ($Direct) { Remove-Item Env:CODEX_DECK_SESSION_URL -ErrorAction SilentlyContinue }
@@ -1169,6 +1166,29 @@ try {
         if ($deckSettings.AutoStart) { Start-DeckCompanion $suiteRoot }
     }
 } catch { Write-Warning "Codex Deck could not attach: $($_.Exception.Message)" }
+$instructionSections=@()
+try{
+    if($codexConversation -and $deckSettings){
+        $integrationLaunch=Get-DeckIntegrationLaunch $runtimeRoot $deckSettings
+        $sharedArgs+=@($integrationLaunch.Arguments)
+        $instructionSections=@($integrationLaunch.InstructionSections)
+        foreach($entry in $integrationLaunch.Environment.GetEnumerator()){[Environment]::SetEnvironmentVariable([string]$entry.Key,[string]$entry.Value,'Process')}
+    }
+if(Test-Path -LiteralPath (Join-Path $runtimeRoot 'Deck.GlobalRules.ps1')){
+    . (Join-Path $runtimeRoot 'Deck.GlobalRules.ps1')
+    if($codexConversation){
+        if($deckSettings){
+            try{Sync-DeckBrowserHarnessSkill $runtimeRoot $accountDir ([bool]$deckSettings.BrowserHarnessEnabled)}
+            catch{Write-Warning "Browser Harness skill could not be attached: $($_.Exception.Message)"}
+        }
+        $globalRuleArgs=@(Get-DeckGlobalRuleArguments $runtimeRoot $accountDir (@($sharedArgs)+@($CodexArgs)) $instructionSections)
+    }
+}
+}catch{
+    $env:CODEX_HOME=$originalCodexHome; $env:CODEX_DECK_SESSION_URL=$originalDeckSessionUrl; $env:CODEX_DECK_SESSION_PATH=$originalDeckSessionPath
+    $env:CODEX_DECK_RTK_EXE=$originalDeckRtkExe; $env:RTK_TELEMETRY_DISABLED=$originalRtkTelemetryDisabled
+    throw
+}
 $deckInteractiveConversation = $codexConversation -and (-not $CodexArgs -or $CodexArgs[0] -notin @('exec','e'))
 if ($deckInteractiveConversation -and $deckSettings -and $deckSettings.AutoCompactLaunchEnabled) { $AutoCompact=$true }
 function Open-DeckLaunchInspector {
@@ -1315,6 +1335,8 @@ try {
     $env:CODEX_HOME = $originalCodexHome
     $env:CODEX_DECK_SESSION_URL = $originalDeckSessionUrl
     $env:CODEX_DECK_SESSION_PATH = $originalDeckSessionPath
+    $env:CODEX_DECK_RTK_EXE = $originalDeckRtkExe
+    $env:RTK_TELEMETRY_DISABLED = $originalRtkTelemetryDisabled
     $proxyExitedEarly = $false
     $proxyExitCode = $null
     $activeAccount = $accountName

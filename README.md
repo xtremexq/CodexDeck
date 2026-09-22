@@ -43,7 +43,7 @@ Always optional; Deck is free and open source.
 
 **Requires Windows, Windows PowerShell 5.1, and Codex CLI available as `codex`.** The desktop companion uses WPF and the Windows system tray. Linux and macOS are not supported. No administrator account is required.
 
-Download **[CodexDeck-1.6.1.zip](https://github.com/xtremexq/CodexDeck/releases/download/v1.6.1/CodexDeck-1.6.1.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
+Download **[CodexDeck-1.7.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/v1.7.0/CodexDeck-1.7.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
@@ -191,6 +191,14 @@ automatic failover is Off. Their `CODEX_HOME`, saved conversation, and files sta
 with the account used to launch the session; only subsequent API requests switch.
 
 Each profile has a separate `CODEX_HOME`. New profiles can inherit local configuration, rules and skills; authentication remains separate. Deletion keeps a recovery copy and refuses an account with a tracked connected terminal.
+
+### Optional managed integrations
+
+**Settings → Integrations** can enable one context optimizer—**RTK** or **Headroom MCP**—and independently enable **CodeGraph** repository intelligence and **Browser Harness** browser automation. Fresh Deck installs include only small adapters and a trusted source manifest: no upstream package is downloaded while these options are off. Saving an enabled option installs a missing package on demand. **Check & update** checks for a new version only when requested, and **Roll back** reactivates an earlier retained RTK, Headroom, or CodeGraph version. Deck recognizes an existing Browser Harness installation without replacing it; its update button requires a second click after showing the available version.
+
+Deck stores these tools under `.codex-loop/integrations/packages/<tool>/<version>` and injects their hook/MCP configuration only at launch. It does not rewrite account `config.toml` or `AGENTS.md`, so account and pool isolation remains intact. The selected integrations follow every Deck conversation path, including dashboard/account launches, pools, failover, routing and both auto-compaction modes. RTK and Headroom are deliberately exclusive because both optimize context; CodeGraph can run with either. Prefix a single shell command with `NO_RTK=1 ` to bypass RTK rewriting for that command.
+
+The default Global Rules contain usage-efficiency guidance. The debug-swarm rule appears only when that skill is installed for the account; Browser Harness guidance appears only when the integration is enabled and installed. Custom Global Rules remain editable. Browser Harness remains in its existing `uv` tool environment, and Deck preserves any user-owned Browser Harness skill.
 
 Deck keeps credentials, configuration, databases and histories isolated. Once a week, background storage maintenance leaves active account homes untouched, removes curated-plugin staging directories older than 24 hours from inactive homes, and hard-links verified-identical sandbox executables and managed plugin-cache files of at least 1 MiB. Each account retains its expected paths and Windows sandbox boundary; only immutable duplicate file contents share disk blocks. The result is recorded in `.codex-loop/deck/storage-maintenance.json`, and skipped active homes are retried later.
 

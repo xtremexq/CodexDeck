@@ -652,15 +652,20 @@ function Show-DeckSettings {
         Details=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
         Compaction=@('AutoCompactMode','AutoCompactThresholdPercent','AutoCompactHandoffPrompt')
+        Integrations=@('ContextOptimizer','CodeGraphEnabled','CodeGraphProfile','BrowserHarnessEnabled')
         Trajectory=@('TrajectoryEnabled','ContextManagerEnabled','ContextManagerAutoOpen','ContextManagerProtected')
         Efficiency=@('EfficiencyAnalyticsEnabled','EfficiencySessionLimit')
         'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupPlanTypes','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
     }
-    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Compaction='Press C in the codex-auth dashboard to opt in for a launch. Native uses Codex automatic compaction. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 55% means compaction starts at 45% used. Account, pool and failover conversations are supported.';Trajectory='Opt-in local trajectory inspection. The context manager is a related live control surface: it filters the next model request through Deck''s normal loopback route, including failover and auto-compaction. Raw rollout history stays unchanged. Direct launches remain view-only.';Efficiency='Independent opt-in efficiency analysis inspired by PrismoDev. It measures repeated commands and paths, large tool results, token/cache patterns and compaction activity. It does not enable or depend on the trajectory/context manager.';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
+    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Compaction='Press C in the codex-auth dashboard to opt in for a launch. Native uses Codex automatic compaction. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 55% means compaction starts at 45% used. Account, pool and failover conversations are supported.';Integrations='Optional, Deck-managed tools. Nothing is downloaded until you enable and save it or press Install. RTK and Headroom are exclusive optimizer modes; CodeGraph is independent. Updates are explicit, versioned and reversible.';Trajectory='Opt-in local trajectory inspection. The context manager is a related live control surface: it filters the next model request through Deck''s normal loopback route, including failover and auto-compaction. Raw rollout history stays unchanged. Direct launches remain view-only.';Efficiency='Independent opt-in efficiency analysis inspired by PrismoDev. It measures repeated commands and paths, large tool results, token/cache patterns and compaction activity. It does not enable or depend on the trajectory/context manager.';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
     $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupPlanTypes='Account types (select one or more)';WarmupAccounts='Specific accounts (optional with account types; select one or more)';WarmupModel='Paid-plan model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
     $labels.AutoCompactMode='Auto-compact implementation'
     $labels.AutoCompactThresholdPercent='Auto-compact when context remaining (%)'
     $labels.AutoCompactHandoffPrompt='Pre-compaction handoff request'
+    $labels.ContextOptimizer='Context optimizer'
+    $labels.CodeGraphEnabled='Enable CodeGraph repository intelligence'
+    $labels.CodeGraphProfile='CodeGraph tool profile'
+    $labels.BrowserHarnessEnabled='Enable Browser Harness for new conversations'
     $labels.TrajectoryEnabled='Enable local trajectory viewer'
     $labels.ContextManagerEnabled='Enable live context suppression and editing for new conversations'
     $labels.ContextManagerAutoOpen='Automatically open Live Context when opening accounts'
@@ -761,6 +766,8 @@ function Show-DeckSettings {
                 [void]$control.Children.Add($membership); [void]$control.Children.Add($members)
                 $control.Resources['Membership']=$membership; $control.Resources['Members']=$members
             }elseif($key -eq 'AutoCompactMode'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('Native','Custom')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]; $control.ToolTip='Native uses Codex compaction. Custom uses Deck''s handoff, compact and replay workflow.'
+            }elseif($key -eq 'ContextOptimizer'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('Off','RTK','Headroom')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]; $control.ToolTip='Choose at most one automatic optimizer. RTK transparently rewrites supported shell commands; Headroom exposes reversible MCP compression.'
+            }elseif($key -eq 'CodeGraphProfile'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('core','graph','all')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]; $control.ToolTip='Core keeps the tool surface small; Graph adds relationship tools; All exposes the complete upstream tool set.'
             }elseif($key -eq 'FailoverMode'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('Ordered','Best')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]
             }elseif($key -eq 'ViewMode'){$control=[Windows.Controls.ComboBox]::new(); foreach($mode in @('Panel','Widget','Tray')){[void]$control.Items.Add($mode)}; $control.SelectedItem=$settings[$key]}else{$control=[Windows.Controls.TextBox]::new(); $control.Text=[string]$settings[$key]}
             if($key -eq 'AutoCompactHandoffPrompt'){$control.AcceptsReturn=$true; $control.TextWrapping='Wrap'; $control.VerticalScrollBarVisibility='Auto'; $control.MinHeight=148; $control.ToolTip='Edit the message sent before compaction. Keep DECK_HANDOFF so Deck can recognize the handoff.'}
@@ -775,9 +782,80 @@ function Show-DeckSettings {
     }.GetNewClosure()
     $controls.AutoCompactMode.Add_SelectionChanged({& $updateCompactModeVisibility}.GetNewClosure())
     & $updateCompactModeVisibility
+    $integrationUI=@{}
+    foreach($integrationName in @('rtk','headroom','codegraph','browser_harness')){
+        $component=Get-DeckIntegrationComponent $suite $integrationName
+        $card=[Windows.Controls.Border]::new(); $card.Padding='12'; $card.Margin='0,2,10,12'; $card.CornerRadius='7'; $card.Background='#171C1F'; $card.BorderBrush='#2B343A'; $card.BorderThickness='1'
+        $body=[Windows.Controls.StackPanel]::new(); $card.Child=$body
+        $title=New-DeckText ([string]$component.displayName) '#A9E8D5' 14; [void]$body.Children.Add($title)
+        $statusText=New-DeckText '' '#929CA4'; $statusText.Margin='0,4,0,9'; [void]$body.Children.Add($statusText)
+        $row=[Windows.Controls.WrapPanel]::new(); [void]$body.Children.Add($row)
+        $install=[Windows.Controls.Button]::new(); $install.Padding='10,6'; $install.Margin='0,0,8,0'; [void]$row.Children.Add($install)
+        $rollback=[Windows.Controls.Button]::new(); $rollback.Content='Roll back'; $rollback.Padding='10,6'; if($integrationName -ne 'browser_harness'){[void]$row.Children.Add($rollback)}
+        $refresh={
+            $local=Get-DeckIntegrationStatus $suite $integrationName
+            $statusText.Text=if($local.Valid){"Installed $($local.Version) · $($local.License) · updates only on request"}else{'Not installed · no files are downloaded while disabled'}
+            $install.Content=if($local.Valid){if($integrationName -eq 'browser_harness'){'Check for updates'}else{'Check & update'}}else{'Install now'}
+            $rollback.IsEnabled=@($local.Versions).Count -gt 1
+        }.GetNewClosure()
+        $install.Add_Click({
+            $worker=$null
+            try{
+                $install.IsEnabled=$false;$install.Content='Working…'
+                if($integrationName -eq 'browser_harness' -and (Get-DeckIntegrationStatus $suite $integrationName).Valid -and -not $install.Tag){
+                    $statusText.Text='Checking the latest version…'
+                    $worker=Start-DeckTask (Get-DeckBrowserHarnessVersionWorkerCode $suite) 'IntegrationVersion' $integrationName
+                    $timer=[Windows.Threading.DispatcherTimer]::new();$timer.Interval=[TimeSpan]::FromMilliseconds(200)
+                    $timer.Add_Tick({
+                        if(-not (Test-DeckTaskReady $worker)){return}
+                        $timer.Stop()
+                        try{
+                            if($worker.Process.ExitCode -ne 0){throw (($worker.Err.Result -split "`r?`n" | Where-Object {$_}) | Select-Object -First 1)}
+                            $available=($worker.Out.Result -split "`r?`n" | Where-Object {$_ -match '^\d+(?:\.\d+){1,3}$'} | Select-Object -Last 1)
+                            if(-not $available){throw 'No version was returned by PyPI.'}
+                            $current=(Get-DeckIntegrationStatus $suite $integrationName).Version
+                            if([Version]$available -gt [Version]$current){$install.Tag=$available;$statusText.Text="Version $available available. Choose Update to install it.";$install.Content="Update to $available"}
+                            else{$statusText.Text="Installed $current · already current";$install.Content='Check for updates'}
+                        }catch{$statusText.Text='Update check failed: '+$_.Exception.Message;$install.Content='Check for updates'}
+                        finally{$install.IsEnabled=$true;Dispose-DeckTask $worker}
+                    }.GetNewClosure())
+                    $timer.Start()
+                    return
+                }
+                $worker=Start-DeckTask (Get-DeckIntegrationWorkerCode $suite @($integrationName) -Update) 'Integration' $integrationName
+                $timer=[Windows.Threading.DispatcherTimer]::new();$timer.Interval=[TimeSpan]::FromMilliseconds(200)
+                $timer.Add_Tick({
+                    if(-not (Test-DeckTaskReady $worker)){return}
+                    $timer.Stop()
+                    try{
+                        if($worker.Process.ExitCode -ne 0){throw (($worker.Err.Result -split "`r?`n" | Where-Object {$_}) | Select-Object -First 1)}
+                        $install.Tag=$null;& $refresh
+                    }catch{$statusText.Text='Install failed: '+$_.Exception.Message}
+                    finally{$install.IsEnabled=$true;Dispose-DeckTask $worker}
+                }.GetNewClosure())
+                $timer.Start()
+            }
+            catch{$statusText.Text='Install failed: '+$_.Exception.Message}
+            finally{if(-not $worker){$install.IsEnabled=$true}}
+        }.GetNewClosure())
+        $rollback.Add_Click({
+            try{$rollback.IsEnabled=$false;$result=Restore-DeckIntegration $suite $integrationName;$statusText.Text="Restored $($result.Version)."}
+            catch{$statusText.Text='Rollback failed: '+$_.Exception.Message}
+            finally{$rollback.IsEnabled=$true}
+        }.GetNewClosure())
+        & $refresh; [void]$panels.Integrations.Children.Add($card)
+        $integrationUI[$integrationName]=@{Status=$statusText;Install=$install;Rollback=$rollback}
+    }
     . (Join-Path $suite 'Deck.SettingsExtras.ps1')
     $settingsError=New-DeckText '' '#F17D8D'; $settingsError.Margin='0,10,0,0'; $settingsError.FontWeight='SemiBold'; [Windows.Controls.DockPanel]::SetDock($settingsError,'Bottom'); $dock.Children.Insert(0,$settingsError)
+    $finishSettingsSave={param($updated)
+        Write-DeckJson (Join-Path $root 'settings.json') $updated
+        if(-not $SmokeTest){Sync-DeckWarmupStartup $suite $updated; if($updated.WarmupEnabled){Start-DeckWarmupScheduler $suite}}
+        Set-DeckSavedSettings (Get-DeckSettings $root)
+        $dialog.Close()
+    }.GetNewClosure()
     $save.Add_Click({
+        $worker=$null
         try {
             $settingsError.Text=''; $save.Content='Save settings'; $save.IsEnabled=$false
             $updated=Get-DeckDefaults
@@ -792,7 +870,7 @@ function Show-DeckSettings {
                     if($membership.SelectedIndex -notin 0..3){throw 'Choose failover quota accounts.'}
                     $updated[$key]=if($membership.SelectedIndex -eq 3){@($members.SelectedItems | ForEach-Object {[string]$_}) -join ','}else{@('*','*free','*paid')[$membership.SelectedIndex]}
                 }
-                elseif ($key -in @('WarmupModel','ViewMode','FailoverMode','AutoCompactMode')) { $updated[$key]=[string]$controls[$key].SelectedItem }
+                elseif ($key -in @('WarmupModel','ViewMode','FailoverMode','AutoCompactMode','ContextOptimizer','CodeGraphProfile')) { $updated[$key]=[string]$controls[$key].SelectedItem }
                 elseif ($settings[$key] -is [int]) { $updated[$key]=[int]$controls[$key].Text }
                 else { $updated[$key]=$controls[$key].Text.Trim() }
             }
@@ -806,6 +884,8 @@ function Show-DeckSettings {
             if ($updated.WarmupModel -notmatch '^gpt-[a-zA-Z0-9.-]+$') { throw 'Enter a model ID, e.g. gpt-5.6-luna.' }
             if ($updated.ViewMode -notin @('Panel','Widget','Tray')) { throw 'View Mode must be Panel, Widget, or Tray.' }
             if ($updated.AutoCompactMode -notin @('Native','Custom')) { throw 'Choose Native or Custom auto-compaction.' }
+            if ($updated.ContextOptimizer -notin @('Off','RTK','Headroom')) { throw 'Choose Off, RTK, or Headroom as the context optimizer.' }
+            if ($updated.CodeGraphProfile -notin @('core','graph','all')) { throw 'Choose core, graph, or all as the CodeGraph profile.' }
             if ($updated.AutoCompactThresholdPercent -lt 30 -or $updated.AutoCompactThresholdPercent -gt 90) { throw 'Auto-compact remaining-context threshold must be 30-90%.' }
             if ($updated.EfficiencySessionLimit -lt 10 -or $updated.EfficiencySessionLimit -gt 1000) { throw 'Efficiency sessions to analyze must be 10-1000.' }
             if ($updated.AutoCompactMode -eq 'Custom' -and ([string]::IsNullOrWhiteSpace($updated.AutoCompactHandoffPrompt) -or $updated.AutoCompactHandoffPrompt.Length -gt 4000 -or -not $updated.AutoCompactHandoffPrompt.Contains('DECK_HANDOFF'))) { throw 'The handoff request must be at most 4000 characters and include DECK_HANDOFF.' }
@@ -820,14 +900,35 @@ function Show-DeckSettings {
             & $saveDeckSkills -ValidateOnly
             & $saveEnvironments
             & $saveDeckSkills
-            Write-DeckJson (Join-Path $root 'settings.json') $updated
-            if(-not $SmokeTest){Sync-DeckWarmupStartup $suite $updated; if($updated.WarmupEnabled){Start-DeckWarmupScheduler $suite}}
-            Set-DeckSavedSettings (Get-DeckSettings $root)
-            $dialog.Close()
+            $needed=@()
+            if(-not $SmokeTest){
+                if($updated.ContextOptimizer -eq 'RTK'){$needed+='rtk'}elseif($updated.ContextOptimizer -eq 'Headroom'){$needed+='headroom'}
+                if($updated.CodeGraphEnabled){$needed+='codegraph'}
+                if($updated.BrowserHarnessEnabled){$needed+='browser_harness'}
+                $needed=@($needed | Where-Object {-not (Get-DeckIntegrationStatus $suite $_).Valid})
+            }
+            if($needed.Count){
+                $save.Content='Installing integrations…'
+                $settingsError.Text='Installing selected integrations in the background. Settings will save when installation finishes.'
+                $worker=Start-DeckTask (Get-DeckIntegrationWorkerCode $suite $needed) 'Integration' ''
+                $timer=[Windows.Threading.DispatcherTimer]::new();$timer.Interval=[TimeSpan]::FromMilliseconds(200)
+                $timer.Add_Tick({
+                    if(-not (Test-DeckTaskReady $worker)){return}
+                    $timer.Stop()
+                    try{
+                        if($worker.Process.ExitCode -ne 0){throw (($worker.Err.Result -split "`r?`n" | Where-Object {$_}) | Select-Object -First 1)}
+                        & $finishSettingsSave $updated
+                    }catch{$settingsError.Text='Settings were not saved: '+$_.Exception.Message;$save.Content='Save settings'}
+                    finally{$save.IsEnabled=$true;Dispose-DeckTask $worker}
+                }.GetNewClosure())
+                $timer.Start()
+                return
+            }
+            & $finishSettingsSave $updated
         } catch { $settingsError.Text='Settings were not saved: '+$_.Exception.Message; $settingsError.BringIntoView(); $save.Content='Save settings' }
-        finally {$save.IsEnabled=$true}
+        finally {if(-not $worker){$save.IsEnabled=$true}}
     }.GetNewClosure())
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState}}}
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState}}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -1579,7 +1680,7 @@ try{
         Write-DeckJson (Join-Path $settingsFixture 'accounts/account1/auth.json') @{}
         Write-DeckJson (Join-Path $settingsFixture 'accounts/account2/auth.json') @{}
         Set-DeckPoolEntry $settingsFixture pool @('*') Ordered | Out-Null
-        foreach($file in @('Deck.EnvironmentSettings.ps1','Deck.SkillSettings.ps1','Deck.BundledSkills.ps1','Deck.SettingsExtras.ps1','Deck.Terminal.ps1','Deck.Failover.ps1')){Copy-Item -LiteralPath (Join-Path $suite $file) -Destination $settingsFixture}
+        foreach($file in @('Deck.EnvironmentSettings.ps1','Deck.SkillSettings.ps1','Deck.BundledSkills.ps1','Deck.SettingsExtras.ps1','Deck.Terminal.ps1','Deck.Failover.ps1','Deck.Integrations.json','Deck.DefaultGlobalRules.md')){Copy-Item -LiteralPath (Join-Path $suite $file) -Destination $settingsFixture}
         Copy-Item -LiteralPath (Join-Path $suite 'skills') -Destination (Join-Path $settingsFixture 'skills') -Recurse
         try{
             $script:suite=$settingsFixture;$script:root=Join-Path $settingsFixture 'deck'

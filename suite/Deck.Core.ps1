@@ -39,6 +39,7 @@ function Get-DeckDefaults {
         FailoverEnabled=$false; FailoverMode='Ordered'; FailoverAccounts=''
         AutoCompactLaunchEnabled=$false; AutoCompactMode='Native'; AutoCompactThresholdPercent=55
         AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.'
+        ContextOptimizer='Off'; CodeGraphEnabled=$false; CodeGraphProfile='core'; BrowserHarnessEnabled=$false
         TrajectoryEnabled=$false; ContextManagerEnabled=$false; ContextManagerAutoOpen=$false; ContextManagerProtected=$false
         EfficiencyAnalyticsEnabled=$true; EfficiencySessionLimit=1000; EfficiencyLimitVersion=2
     }
@@ -198,6 +199,8 @@ function Get-DeckSettings([string]$Root) {
     $settings.AutoCompactThresholdPercent = [Math]::Min(90, [Math]::Max(30, $settings.AutoCompactThresholdPercent))
     $settings.EfficiencySessionLimit = [Math]::Min(1000, [Math]::Max(10, $settings.EfficiencySessionLimit))
     if ($settings.AutoCompactMode -notin @('Native','Custom')) { $settings.AutoCompactMode='Native' }
+    if ($settings.ContextOptimizer -notin @('Off','RTK','Headroom')) { $settings.ContextOptimizer='Off' }
+    if ($settings.CodeGraphProfile -notin @('core','graph','all')) { $settings.CodeGraphProfile='core' }
     $oldHandoff='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information.'
     if ($settings.AutoCompactHandoffPrompt -eq $oldHandoff) {
         # Preserve user-edited prompts, but migrate Deck's previous stock prompt.

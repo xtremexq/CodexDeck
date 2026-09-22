@@ -1,0 +1,13 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {handle}=require('./Deck.RtkHook.cjs');
+const event=command=>({hook_event_name:'PreToolUse',tool_name:'Bash',tool_input:{command,timeout_ms:1000}});
+assert.equal(handle({hook_event_name:'PostToolUse',tool_name:'Bash'},()=>''),null);
+assert.equal(handle(event('Get-ChildItem'),()=>''),null);
+assert.equal(handle(event('rtk git status'),()=>{throw Error('recursive')}),null);
+const rewritten=handle(event('git status'),value=>value==='git status'?'rtk git status':'');
+assert.equal(rewritten.hookSpecificOutput.updatedInput.command,'rtk git status');
+assert.equal(rewritten.hookSpecificOutput.updatedInput.timeout_ms,1000);
+const escaped=handle(event('NO_RTK=1 git status'),()=>{throw Error('escaped')});
+assert.equal(escaped.hookSpecificOutput.updatedInput.command,'git status');
+console.log('PASS: RTK hook filtering, rewrite, field preservation and escape hatch.');

@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "components": {
+    "rtk": {
+      "displayName": "RTK",
+      "provider": "github",
+      "repository": "rtk-ai/rtk",
+      "asset": "rtk-x86_64-pc-windows-msvc.zip",
+      "checksumAsset": "checksums.txt",
+      "executable": "rtk.exe",
+      "license": "Apache-2.0",
+      "projectUrl": "https://github.com/rtk-ai/rtk"
+    },
+    "headroom": {
+      "displayName": "Headroom MCP",
+      "provider": "pypi",
+      "package": "headroom-ai",
+      "wheelPattern": "-cp310-abi3-win_amd64.whl",
+      "executable": "venv/Scripts/headroom.exe",
+      "license": "Apache-2.0",
+      "projectUrl": "https://github.com/headroomlabs-ai/headroom"
+    },
+    "codegraph": {
+      "displayName": "CodeGraph",
+      "provider": "github",
+      "repository": "codegraph-ai/CodeGraph",
+      "asset": "codegraph-server-win32-x64.exe",
+      "checksumAsset": "codegraph-server-win32-x64.exe.sha256",
+      "supportAsset": "onnxruntime.dll",
+      "supportChecksumAsset": "onnxruntime.dll.sha256",
+      "executable": "codegraph-server.exe",
+      "license": "Apache-2.0",
+      "projectUrl": "https://github.com/codegraph-ai/CodeGraph"
+    },
+    "browser_harness": {
+      "displayName": "Browser Harness",
+      "provider": "uv-tool",
+      "package": "browser-harness",
+      "executable": "browser-harness.exe",
+      "license": "MIT",
+      "projectUrl": "https://github.com/browser-use/browser-harness"
+    }
+  }
+}

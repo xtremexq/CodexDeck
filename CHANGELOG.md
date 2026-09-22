@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.0 - 2026-09-22
+
+- Added opt-in, on-demand managed RTK, Headroom MCP and CodeGraph integrations. Deck installs nothing while they are disabled, verifies upstream release checksums, keeps packages in versioned local directories and retains earlier versions for one-click rollback.
+- Added an exclusive context-optimizer selector for RTK or Headroom and an independent CodeGraph toggle/profile, all injected at launch without rewriting per-account `config.toml` or `AGENTS.md` files.
+- Added transparent RTK `PreToolUse` command rewriting with fail-open behavior, telemetry forced off and a portable `NO_RTK=1` per-command escape hatch.
+- Routed managed integrations through ordinary accounts, pooled environments, failover, the routing proxy and native/custom auto-compaction, while merging MCP usage guidance with existing developer instructions.
+- Added opt-in Browser Harness detection and installation controls. Existing installations and user-owned skills are preserved, and update checks run in the background.
+- Made usage efficiency the default Global Rules text, with debug-swarm and Browser Harness paragraphs included only when their capabilities are available.
+
 ## 1.6.0 - 2026-09-22
 
 - Made enabled inspection features discoverable on every interactive account/dashboard launch: context-managed sessions now open an exact-session slim live editor with revision-only idle polling and lazy cards, while Deck otherwise opens Trajectory or standalone Efficiency, selects the newest managed context, tails active rollouts, and never blocks Codex on inspector failures.

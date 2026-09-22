@@ -82,4 +82,24 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
         Assert ($parsed.transport.command -eq 'synthetic-mcp' -and $parsed.transport.args[0] -eq 'hello world') 'MCP override quoting changed values.'
     } finally { $env:CODEX_HOME=$savedHome; $ErrorActionPreference=$savedErrors }
 }
-Write-Output 'PASS: pooled membership, ordering, default isolation, live resource sharing, private restoration, instructions, MCP overrides and path guards.'
+# Managed integrations are inert until selected and produce only launch-time
+# overrides; no account config is rewritten.
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Deck.Integrations.json') -Destination $fixture
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Deck.RtkHook.cjs') -Destination $fixture
+$components=[ordered]@{}
+foreach($integrationName in @('rtk','headroom','codegraph')){
+    $component=Get-DeckIntegrationComponent $fixture $integrationName
+    $executable=Join-Path $fixture "integrations/packages/$integrationName/1.2.3/$($component.executable)"
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $executable)); [IO.File]::WriteAllText($executable,'synthetic')
+    if($integrationName -eq 'codegraph'){[IO.File]::WriteAllText((Join-Path (Split-Path -Parent $executable) 'onnxruntime.dll'),'synthetic')}
+    $components[$integrationName]=[ordered]@{version='1.2.3';sha256=(Get-FileHash -LiteralPath $executable).Hash;history=@()}
+}
+Write-DeckIntegrationState $fixture ([ordered]@{schema=1;components=$components})
+$rtkLaunch=Get-DeckIntegrationLaunch $fixture ([pscustomobject]@{ContextOptimizer='RTK';CodeGraphEnabled=$true;CodeGraphProfile='core'})
+Assert ($rtkLaunch.Environment.CODEX_DECK_RTK_EXE -match 'rtk\.exe$') 'RTK hook environment was not isolated to the managed binary.'
+Assert (($rtkLaunch.Arguments -join ' ') -match 'hooks\.PreToolUse=' -and ($rtkLaunch.Arguments -join ' ') -match 'mcp_servers\.deck_codegraph=') 'RTK and CodeGraph launch overrides were not composed.'
+Assert (@($rtkLaunch.InstructionSections).Count -eq 1) 'CodeGraph launch guidance was not merged once.'
+$headroomLaunch=Get-DeckIntegrationLaunch $fixture ([pscustomobject]@{ContextOptimizer='Headroom';CodeGraphEnabled=$false;CodeGraphProfile='core'})
+Assert (($headroomLaunch.Arguments -join ' ') -match 'mcp_servers\.deck_headroom=' -and ($headroomLaunch.Arguments -join ' ') -notmatch 'hooks\.PreToolUse=') 'Headroom was not exclusive with RTK.'
+Assert (-not (Test-Path -LiteralPath (Join-Path $fixture 'accounts/account3/config.toml'))) 'Managed integrations rewrote account configuration.'
+Write-Output 'PASS: pooled membership, ordering, isolation, sharing, MCP overrides, path guards and managed integration composition.'

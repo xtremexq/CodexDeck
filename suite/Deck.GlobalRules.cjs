@@ -58,8 +58,10 @@ async function profileInstructions(request,cwd) {
 }
 async function ruleArguments(request) {
   request.args=(request.args||[]).filter(arg=>typeof arg==='string');
-  const rules=fs.existsSync(request.rulesPath)?fs.readFileSync(request.rulesPath,'utf8').replace(/^\uFEFF/,'').trim():'';
-  if(!rules)return [];
+  const rules=typeof request.rulesText==='string'?request.rulesText.trim():(fs.existsSync(request.rulesPath)?fs.readFileSync(request.rulesPath,'utf8').replace(/^\uFEFF/,'').trim():'');
+  const sections=(request.sections||[]).filter(value=>typeof value==='string'&&value.trim()).map(value=>value.trim());
+  if(rules)sections.unshift('Global Rules (Codex Deck):\n'+rules);
+  if(!sections.length)return [];
   let cwd=request.cwd;
   for(let i=0;i<request.args.length;i++){
     if(request.args[i]==='--')break;
@@ -69,7 +71,7 @@ async function ruleArguments(request) {
   }
   const hasProfile=configArguments(request.args).some(arg=>arg==='-p'||arg==='--profile'||arg.startsWith('--profile=')||/^-p.+/.test(arg));
   const existing=hasProfile?await profileInstructions(request,cwd):(await readConfig(request.executable,request.prefix,request.args,cwd,request.codexHome)).developer_instructions;
-  const combined=[existing || '', 'Global Rules (Codex Deck):\n'+rules].filter(Boolean).join('\n\n');
+  const combined=[existing || '', ...sections].filter(Boolean).join('\n\n');
   return ['-c','developer_instructions='+JSON.stringify(combined)];
 }
 module.exports={ruleArguments,configArguments};

@@ -1,0 +1,1 @@
+Usage efficiency: Except when more context or feedback is genuinely needed to understand the task, avoid unnecessary model/tool round trips. Batch independent read-only checks, related edits, and proportionate verification into coherent passes. Do not repeatedly alternate tiny command, inspection, edit, and test steps when a safe batch is possible.
