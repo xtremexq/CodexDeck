@@ -4,7 +4,7 @@ const {AutoCompactController,HANDOFF,HANDOFF_REQUEST,replayPrompt,parseArgs,tran
 const {ThreadObserver,optionsFromArgs} = require('./Deck.AutoCompact.Sidecar.cjs');
 
 async function main() {
-  assert.equal(HANDOFF_REQUEST,"Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you're currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information.",'Default handoff request is incorrect');
+  assert.equal(HANDOFF_REQUEST,"Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you're currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will \"definitely\" be useful/necessary for continuing, as to avoid the need for re-investigation.",'Default handoff request is incorrect');
   let serial=0;
   const calls=[];
   const rpc=async(method,params)=>{
@@ -66,7 +66,8 @@ async function main() {
   assert.equal(compactFails.done,true,'one-shot worker must exit if compaction fails');
   assert.equal(compactFails.failed,true,'failed compaction must not report success');
   assert.throws(()=>parseArgs(['--codex-exe','codex','--threshold','91']),/30-90/);
-  assert.equal(parseArgs(['--codex-exe','codex']).threshold,70);
+  assert.equal(parseArgs(['--codex-exe','codex']).threshold,55);
+  assert.equal(optionsFromArgs(['--codex-exe','codex','--handoff-base64',Buffer.from(HANDOFF_REQUEST).toString('base64')]).threshold,55);
   const custom='Begin with DECK_HANDOFF and include exact files and next actions.';
   const encoded=list=>Buffer.from(JSON.stringify(list)).toString('base64');
   const settings=parseArgs(['--codex-exe','codex','--cwd',process.cwd(),'--handoff-base64',Buffer.from(custom).toString('base64'),

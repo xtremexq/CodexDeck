@@ -90,6 +90,70 @@ function accountBound(value) {
   if (value.previous_response_id || value.file_id || value.type === 'item_reference') return true;
   return Object.values(value).some(v => typeof v === 'object' && accountBound(v));
 }
+function stableJson(value) {
+  if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']';
+  if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stableJson(value[key])).join(',') + '}';
+  return JSON.stringify(value);
+}
+function contextText(value) {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return '';
+  if (typeof value.text === 'string') return value.text;
+  if (typeof value.output === 'string') return value.output;
+  if (typeof value.content === 'string') return value.content;
+  if (Array.isArray(value.content)) return value.content.map(contextText).filter(Boolean).join('\n');
+  return '';
+}
+function contextEntries(parsed) {
+  const input = Array.isArray(parsed?.input) ? parsed.input : parsed?.input == null ? [] : [parsed.input];
+  const seen = new Map();
+  return input.map((item, index) => {
+    const serialized = stableJson(item);
+    const hash = crypto.createHash('sha256').update(serialized).digest('hex').slice(0, 24);
+    const occurrence = seen.get(hash) || 0; seen.set(hash, occurrence + 1);
+    const object = item && typeof item === 'object' ? item : {};
+    const role = typeof object.role === 'string' ? object.role : null;
+    const type = typeof object.type === 'string' ? object.type : typeof item === 'string' ? 'input_text' : 'item';
+    const callId = object.call_id || object.callId || null;
+    const content = contextText(item);
+    const protectedItem = ['system','developer'].includes(role) || type === 'reasoning' || Boolean(object.encrypted_content);
+    const editable = typeof item === 'string' || type === 'message' || typeof object.output === 'string' ||
+      typeof object.content === 'string' || (Array.isArray(object.content) && object.content.some(part => part && typeof part.text === 'string'));
+    return { key:`${hash}:${occurrence}`, index, type, role, name:object.name || null, callId, text:content,
+      preview:content.slice(0, 420), chars:content.length || serialized.length, tokens:Math.ceil((content.length || serialized.length) / 4),
+      protected:protectedItem, editable, raw:item };
+  });
+}
+function replaceContextText(item, replacement) {
+  if (typeof item === 'string') return replacement;
+  const copy = JSON.parse(JSON.stringify(item));
+  if (typeof copy.output === 'string') copy.output = replacement;
+  else if (typeof copy.content === 'string') copy.content = replacement;
+  else if (Array.isArray(copy.content)) {
+    const part = copy.content.find(value => value && typeof value.text === 'string');
+    if (part) part.text = replacement;
+  }
+  return copy;
+}
+function projectContext(parsed, rules, allowProtected) {
+  const entries = contextEntries(parsed);
+  const projected = [];
+  for (const entry of entries) {
+    const rule = rules.get(entry.key);
+    const usable = !rule || !entry.protected || allowProtected;
+    entry.suppressed = Boolean(usable && rule?.action === 'suppress');
+    entry.edited = Boolean(usable && rule?.action === 'edit');
+    if (entry.suppressed) continue;
+    projected.push(entry.edited ? replaceContextText(entry.raw, rule.text) : entry.raw);
+  }
+  const output = JSON.parse(JSON.stringify(parsed));
+  if (Array.isArray(parsed.input)) output.input = projected;
+  else if (parsed.input != null) output.input = projected[0] ?? '';
+  const effective = contextEntries(output);
+  const rawTokens = entries.reduce((sum, entry) => sum + entry.tokens, 0);
+  const effectiveTokens = effective.reduce((sum, entry) => sum + entry.tokens, 0);
+  return { output, entries, effective, rawTokens, effectiveTokens };
+}
 async function collect(stream, max) {
   const parts = []; let size = 0;
   for await (const part of stream) {
@@ -124,6 +188,10 @@ async function createProxy(config, dependencies = {}) {
   // Production never accepts an upstream address from configuration or a request.
   const upstream = dependencies.upstream || 'https://chatgpt.com/backend-api/codex';
   const now = dependencies.now || Date.now;
+  const contextEnabled = config.contextManager === true;
+  const allowProtected = config.contextManagerProtected === true;
+  const contextRules = new Map();
+  let contextSnapshot = { version:1, enabled:contextEnabled, protectedChanges:allowProtected, capturedAt:null, requestPath:null, raw:[], effective:[], rawTokens:0, effectiveTokens:0, savedTokens:0, rules:[] };
   const excluded = new Set();
   const retryAt = new Map();
   const resetProbes = new Set();
@@ -158,7 +226,8 @@ async function createProxy(config, dependencies = {}) {
     version: 1,
     environment: { name:config.environment || null, pooled:environmentPool.length > 0, accounts:environmentPool },
     failover: { automatic, mode:config.mode, accounts:pool, active:current, unavailable:[...excluded], lastRequestAccount, lastRequestRoute },
-    busy: activeRequests > 0
+    busy: activeRequests > 0,
+    contextManager: { enabled:contextEnabled, protectedChanges:allowProtected }
     });
   };
   const server = http.createServer(async (req, res) => {
@@ -185,6 +254,28 @@ async function createProxy(config, dependencies = {}) {
         return replyJson(res, status());
       } catch { return reply(res, 400, 'Expected a small JSON account request.'); }
     }
+    if (route === '/_deck/context') {
+      if (!contextEnabled) return reply(res, 404, 'The context manager is disabled for this conversation.');
+      if (req.method === 'GET') return replyJson(res, { ...contextSnapshot, busy:activeRequests > 0, rules:[...contextRules.entries()].map(([key,rule]) => ({key,...rule})) });
+      if (req.method !== 'POST' || (req.headers['content-encoding'] || 'identity') !== 'identity') return reply(res, 404, 'Unsupported context control request.');
+      try {
+        const request = JSON.parse((await collect(req, 64 * 1024)).toString('utf8'));
+        if (request.action === 'clear') contextRules.clear();
+        else {
+          const entry = contextSnapshot.raw.find(value => value.key === request.key);
+          if (!entry) return reply(res, 409, 'That context item is no longer in the latest request.');
+          if (entry.protected && !allowProtected) return reply(res, 403, 'Protected system, developer and reasoning items require the advanced setting.');
+          const targets = entry.callId && request.pair !== false ? contextSnapshot.raw.filter(value => value.callId === entry.callId) : [entry];
+          if (request.action === 'restore') for (const target of targets) contextRules.delete(target.key);
+          else if (request.action === 'suppress') for (const target of targets) contextRules.set(target.key, {action:'suppress'});
+          else if (request.action === 'edit') {
+            if (!entry.editable || typeof request.text !== 'string' || request.text.length > 250000) return reply(res, 400, 'This item cannot be edited or the replacement is too large.');
+            contextRules.set(entry.key, {action:'edit', text:request.text});
+          } else return reply(res, 400, 'Expected suppress, edit, restore or clear.');
+        }
+        return replyJson(res, { ok:true, rules:[...contextRules.entries()].map(([key,rule]) => ({key,...rule})), appliesTo:'next request' });
+      } catch { return reply(res, 400, 'Expected a small JSON context control request.'); }
+    }
     const queryAt = route.indexOf('?'), routePath = queryAt < 0 ? route : route.slice(0, queryAt);
     // Codex extensions can use provider-relative auxiliary endpoints in
     // addition to Responses and Models. Forward GET/POST routes to the fixed
@@ -207,6 +298,14 @@ async function createProxy(config, dependencies = {}) {
       let bound = false;
       if (conversation) {
         let parsed; try { parsed = JSON.parse(body); } catch { return reply(res, 400, 'Expected JSON request.'); }
+        if (contextEnabled) {
+          const projection = projectContext(parsed, contextRules, allowProtected);
+          parsed = projection.output;
+          body = Buffer.from(JSON.stringify(parsed));
+          contextSnapshot = { version:1, enabled:true, protectedChanges:allowProtected, capturedAt:new Date(now()).toISOString(), requestPath:routePath,
+            raw:projection.entries.map(({raw,...entry}) => entry), effective:projection.effective.map(({raw,...entry}) => entry),
+            rawTokens:projection.rawTokens, effectiveTokens:projection.effectiveTokens, savedTokens:Math.max(0, projection.rawTokens - projection.effectiveTokens), rules:[] };
+        }
         bound = accountBound(parsed);
       }
       // Let the active account validate server-stored references it owns. A 429
@@ -218,7 +317,17 @@ async function createProxy(config, dependencies = {}) {
         if (excluded.has(current)) {
           const next = automatic ? choices()[0] : null;
           if (next) { current = next; report(current); }
-          else return reply(res, 429, 'Selected account quota is exhausted until its reset. Retry later or choose another account.');
+          else if (automatic) return reply(res, 429, 'Selected account quota is exhausted until its reset. Retry later or choose another account.');
+          else {
+            // A reset credit can restore usage before the reset timestamp that
+            // accompanied the previous 429. In a manual-only session there is
+            // no other account to rotate to, so let each explicit new request
+            // make one live probe instead of manufacturing a stale local 429.
+            // maxAttempts remains one, so the request is never replayed.
+            excluded.delete(current);
+            retryAt.delete(current);
+            resetProbes.add(current);
+          }
         }
         const used = current, auth = getCredentials(used);
         lastRequestAccount = used;
@@ -279,9 +388,10 @@ async function createProxy(config, dependencies = {}) {
   server.on('upgrade', (_req, socket) => socket.end('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'));
   server.on('clientError', (_err, socket) => socket.destroy());
   await new Promise((resolve,reject) => { server.once('error',reject); server.listen(0, '127.0.0.1', resolve); });
-  return { server, baseUrl:`http://127.0.0.1:${server.address().port}/${secret}`, account:current };
+  const baseUrl = `http://127.0.0.1:${server.address().port}/${secret}`;
+  return { server, baseUrl, contextUrl:contextEnabled ? baseUrl + '/_deck/context' : null, account:current };
 }
-module.exports = { createProxy, rank, quotaRejected, quotaRetryAt, accountBound, credentials };
+module.exports = { createProxy, rank, quotaRejected, quotaRetryAt, accountBound, credentials, contextEntries, projectContext };
 if (require.main === module) {
   if (Number(process.versions.node.split('.')[0]) < 18) { process.stderr.write('Deck failover requires Node.js 18 or newer.\n'); process.exit(1); }
   // Private inherited stdin supplies startup configuration and acts as a parent-lifetime pipe.
@@ -295,7 +405,7 @@ if (require.main === module) {
     started = true;
     try {
       const proxy = await createProxy(JSON.parse(input.slice(0,newline).replace(/^\uFEFF/, '')));
-      process.stdout.write(JSON.stringify({ baseUrl:proxy.baseUrl, account:proxy.account }) + '\n');
+      process.stdout.write(JSON.stringify({ baseUrl:proxy.baseUrl, contextUrl:proxy.contextUrl, account:proxy.account }) + '\n');
     } catch (error) {
       const detail = error instanceof Error ? error.message.replace(/[\r\n]+/g, ' ') : 'Unknown startup error.';
       process.stderr.write('Deck failover could not start: ' + detail + '\n'); process.exit(1);

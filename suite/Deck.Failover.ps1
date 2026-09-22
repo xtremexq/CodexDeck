@@ -40,7 +40,7 @@ function Resolve-DeckFailoverPool([string]$SuiteRoot, [string]$Pool, [string]$Mo
     }
     return @{ Pool=$names; Account=$initial }
 }
-function Start-DeckFailover([string]$SuiteRoot, [string[]]$Pool, [string]$Mode, [string]$Account, [string]$Environment = '', [string[]]$EnvironmentPool = @(), [bool]$Automatic = $true) {
+function Start-DeckFailover([string]$SuiteRoot, [string[]]$Pool, [string]$Mode, [string]$Account, [string]$Environment = '', [string[]]$EnvironmentPool = @(), [bool]$Automatic = $true, [bool]$ContextManagerEnabled = $false, [bool]$ContextManagerProtected = $false) {
     $node = (Get-Command node.exe -ErrorAction Stop).Source
     $scriptPath = Join-Path $SuiteRoot 'Deck.Failover.cjs'
     if (-not (Test-Path -LiteralPath $scriptPath)) { throw 'Failover proxy missing. Reinstall Codex Deck.' }
@@ -55,7 +55,7 @@ function Start-DeckFailover([string]$SuiteRoot, [string[]]$Pool, [string]$Mode, 
         # Write BOM-free UTF-8 regardless of the host console encoding.
         $writer = [IO.StreamWriter]::new($process.StandardInput.BaseStream, [Text.UTF8Encoding]::new($false))
         $normalizedEnvironmentPool = @($EnvironmentPool | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        $writer.WriteLine((@{ root=$SuiteRoot; pool=@($Pool); mode=$Mode; owner=$Account; environment=$Environment; environmentPool=$normalizedEnvironmentPool; automatic=$Automatic } | ConvertTo-Json -Compress))
+        $writer.WriteLine((@{ root=$SuiteRoot; pool=@($Pool); mode=$Mode; owner=$Account; environment=$Environment; environmentPool=$normalizedEnvironmentPool; automatic=$Automatic; contextManager=$ContextManagerEnabled; contextManagerProtected=$ContextManagerProtected } | ConvertTo-Json -Compress))
         $writer.Flush()
         $ready = $process.StandardOutput.ReadLineAsync()
         if (-not $ready.Wait(10000) -or -not $ready.Result) {
@@ -66,9 +66,10 @@ function Start-DeckFailover([string]$SuiteRoot, [string[]]$Pool, [string]$Mode, 
         }
         $result = $ready.Result | ConvertFrom-Json
         if ($result.baseUrl -notmatch '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}$' -or $result.account -ne $Account) { throw 'Invalid proxy startup response.' }
+        if ($ContextManagerEnabled -and $result.contextUrl -notmatch '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/_deck/context$') { throw 'Invalid context manager startup response.' }
         # Retain the writer: disposing it is the parent-lifetime signal that
         # intentionally stops the proxy when Codex exits.
-        return @{ Process=$process; BaseUrl=$result.baseUrl; InputWriter=$writer; ErrorRead=$errorRead }
+        return @{ Process=$process; BaseUrl=$result.baseUrl; ContextUrl=$result.contextUrl; InputWriter=$writer; ErrorRead=$errorRead }
     } catch {
         if ($process.Id -and -not $process.HasExited) { $process.Kill() }
         $process.Dispose(); throw

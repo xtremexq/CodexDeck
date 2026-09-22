@@ -870,7 +870,11 @@ function Get-DeckTomlTopLevelValue([string]$Path, [string]$Name) {
 
 function Get-DeckCodexArgumentSetting([string[]]$Arguments, [string]$Name) {
     $value=$null
-    for($index=0;$index -lt @($Arguments).Count;$index++){
+    # PowerShell 7 treats @($null) as a one-item array here. Consuming the
+    # optional auto-compact percentage leaves no native Codex arguments, so
+    # handle that valid empty remainder before indexing it.
+    if($null -eq $Arguments){return $null}
+    for($index=0;$index -lt $Arguments.Count;$index++){
         $argument=[string]$Arguments[$index]
         if($Name -eq 'model'){
             if($argument -in @('-m','--model') -and $index+1 -lt $Arguments.Count){$value=[string]$Arguments[++$index];continue}
@@ -1150,6 +1154,7 @@ $originalDeckSessionUrl = $env:CODEX_DECK_SESSION_URL
 $env:CODEX_HOME = $accountDir
 if ($Direct) { Remove-Item Env:CODEX_DECK_SESSION_URL -ErrorAction SilentlyContinue }
 $deckSession = $null
+$deckSettings = $null
 try {
     $suiteRoot = Split-Path -Parent $accountsRoot
     $deckCore = Join-Path $suiteRoot 'Deck.Core.ps1'
@@ -1157,7 +1162,8 @@ try {
         . $deckCore
         $deckRoot = Join-Path $suiteRoot 'deck'
         $deckSession = Register-DeckSession $deckRoot $accountName (Get-Location).Path
-        if ((Get-DeckSettings $deckRoot).AutoStart) { Start-DeckCompanion $suiteRoot }
+        $deckSettings = Get-DeckSettings $deckRoot
+        if ($deckSettings.AutoStart) { Start-DeckCompanion $suiteRoot }
     }
 } catch { Write-Warning "Codex Deck could not attach: $($_.Exception.Message)" }
 $failoverProxy = $null
@@ -1169,7 +1175,7 @@ $nativeAutoCompactArgs=@()
 $compactSettings=$null
 $threshold=$null
 if($AutoCompact){
-    $compactSettings=Get-DeckSettings (Join-Path $runtimeRoot 'deck')
+    $compactSettings=if($deckSettings){$deckSettings}else{Get-DeckSettings (Join-Path $runtimeRoot 'deck')}
     $threshold=if($null -ne $autoCompactThresholdOverride){$autoCompactThresholdOverride}else{$compactSettings.AutoCompactThresholdPercent}
     $deckCustomAutoCompact=$compactSettings.AutoCompactMode -eq 'Custom'
     if(-not $deckCustomAutoCompact){
@@ -1199,10 +1205,13 @@ try {
         }
         if ($useRoutingProxy) {
             $environmentMembers = if ($poolConversation) { @($members) } else { @() }
-            $failoverProxy = Start-DeckFailover -SuiteRoot $suiteRoot -Pool $failoverChoice.Pool -Mode $routeMode -Account $failoverChoice.Account -Environment $accountName -EnvironmentPool $environmentMembers -Automatic:$automaticFailover
+            $failoverProxy = Start-DeckFailover -SuiteRoot $suiteRoot -Pool $failoverChoice.Pool -Mode $routeMode -Account $failoverChoice.Account -Environment $accountName -EnvironmentPool $environmentMembers -Automatic:$automaticFailover -ContextManagerEnabled:$deckSettings.ContextManagerEnabled -ContextManagerProtected:$deckSettings.ContextManagerProtected
+            Set-DeckSessionContext $deckSession $failoverProxy.ContextUrl
             if ($automaticFailover -or $poolConversation) {
                 foreach ($poolAccount in $failoverChoice.Pool) {
-                    $failoverSessions += Register-DeckSession (Join-Path $suiteRoot 'deck') $poolAccount (Get-Location).Path
+                    $poolSession=Register-DeckSession (Join-Path $suiteRoot 'deck') $poolAccount (Get-Location).Path
+                    Set-DeckSessionContext $poolSession $failoverProxy.ContextUrl
+                    $failoverSessions += $poolSession
                 }
             }
             $env:CODEX_DECK_SESSION_URL = $failoverProxy.BaseUrl
@@ -1261,10 +1270,13 @@ try {
         }
     } elseif ($useRoutingProxy) {
         $environmentMembers = if ($poolConversation) { @($members) } else { @() }
-        $failoverProxy = Start-DeckFailover -SuiteRoot $suiteRoot -Pool $failoverChoice.Pool -Mode $routeMode -Account $failoverChoice.Account -Environment $accountName -EnvironmentPool $environmentMembers -Automatic:$automaticFailover
+        $failoverProxy = Start-DeckFailover -SuiteRoot $suiteRoot -Pool $failoverChoice.Pool -Mode $routeMode -Account $failoverChoice.Account -Environment $accountName -EnvironmentPool $environmentMembers -Automatic:$automaticFailover -ContextManagerEnabled:$deckSettings.ContextManagerEnabled -ContextManagerProtected:$deckSettings.ContextManagerProtected
+        Set-DeckSessionContext $deckSession $failoverProxy.ContextUrl
         if ($automaticFailover -or $poolConversation) {
             foreach ($poolAccount in $failoverChoice.Pool) {
-                $failoverSessions += Register-DeckSession (Join-Path $suiteRoot 'deck') $poolAccount (Get-Location).Path
+                $poolSession=Register-DeckSession (Join-Path $suiteRoot 'deck') $poolAccount (Get-Location).Path
+                Set-DeckSessionContext $poolSession $failoverProxy.ContextUrl
+                $failoverSessions += $poolSession
             }
         }
         $env:CODEX_DECK_SESSION_URL = $failoverProxy.BaseUrl

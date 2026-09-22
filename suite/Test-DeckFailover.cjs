@@ -30,6 +30,7 @@ async function main() {
   const send=(url,body={},headers={})=>fetch(url+'/responses',{method:'POST',body:JSON.stringify(body),headers:{'content-type':'application/json',...headers}});
   const compact=(url,body={})=>fetch(url+'/responses/compact',{method:'POST',body:JSON.stringify(body)});
   const select=(url,account,headers={})=>fetch(url+'/_deck/account',{method:'POST',body:JSON.stringify({account}),headers:{'content-type':'application/json',...headers}});
+  const context=(url,body)=>fetch(url+'/_deck/context',{method:body?'POST':'GET',headers:body?{'content-type':'application/json'}:{},body:body?JSON.stringify(body):undefined});
   try {
     behavior=(req,res)=> { if(req.headers['chatgpt-account-id']==='a') {res.writeHead(429);res.end(quota);} else {res.writeHead(200,{'content-type':'text/event-stream'});res.end('data: success\n\n');} };
     let url=await start(); let result=await send(url,{input:'synthetic'},{authorization:'Bearer client-secret',cookie:'private', 'x-account-id':'wrong'});
@@ -60,11 +61,9 @@ async function main() {
     const resetsAt=Math.ceil((clock+5000)/1000);
     behavior=(_req,res)=>{res.writeHead(429);res.end(JSON.stringify({error:{type:'usage_limit_reached',resets_at:resetsAt}}));};
     result=await send(url);assert.equal(result.status,429);assert.deepEqual(seen.map(r=>r.account),['b','b'],'Manual-only routing must not automatically replay a rejected request');
-    assert.equal((await compact(url)).status,429);assert.equal(seen.length,2,'A compact retry before reset must remain locally bounded');
-    clock+=7000;
     behavior=(_req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end('{"output":[]}');};
-    assert.equal((await compact(url)).status,200);assert.equal(seen.length,3,'The same open session must probe upstream after the quota reset');
-    state=await (await fetch(url+'/_deck/account')).json();assert.deepEqual(state.failover.unavailable,[],'Reset accounts must leave the unavailable set');
+    assert.equal((await compact(url)).status,200);assert.equal(seen.length,3,'A manual reset must be detected by one live probe even before the cached reset time');
+    state=await (await fetch(url+'/_deck/account')).json();assert.deepEqual(state.failover.unavailable,[],'Successful manual reset probes must clear the stale unavailable state');
     behavior=(req,res)=> { if(req.headers['chatgpt-account-id']==='a') {res.writeHead(429);res.end(quota);} else {res.writeHead(200,{'content-type':'text/event-stream'});res.end('data: success\n\n');} };
     url=await start(); result=await send(url,{input:[{encrypted_content:'portable-history'}]});
     assert.equal(result.status,200); assert.deepEqual(seen.map(r=>r.account),['a','b'],'Encrypted stateless history must rotate after quota rejection');
@@ -119,6 +118,31 @@ async function main() {
     behavior=(_req,res)=>{res.writeHead(429);res.end(quota);};
     url=await start(); assert.equal((await compact(url,{input:[{encrypted_content:'portable'}]})).status,429);
     assert.equal(seen.length,3,'Encrypted compact history must try the configured pool');
+    const contextBody={input:[
+      {type:'message',role:'system',content:[{type:'input_text',text:'protected system instructions'}]},
+      {type:'message',role:'user',content:[{type:'input_text',text:'remember this user detail'}]},
+      {type:'function_call',call_id:'call_1',name:'exec_command',arguments:'{"cmd":"dir"}'},
+      {type:'function_call_output',call_id:'call_1',output:'large paired tool output'}
+    ]};
+    behavior=(_req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end('{"output":[]}');};
+    url=await start({contextManager:true});
+    await (await send(url,contextBody)).text();
+    state=await (await fetch(url+'/_deck/account')).json();assert.equal(state.contextManager.enabled,true);
+    let contextState=await (await context(url)).json();assert.equal(contextState.raw.length,4);assert.equal(contextState.effective.length,4);
+    const systemItem=contextState.raw.find(item=>item.role==='system'), userItem=contextState.raw.find(item=>item.role==='user'), toolItem=contextState.raw.find(item=>item.callId==='call_1');
+    assert.ok(systemItem && userItem && toolItem,'The live context snapshot must expose stable item identities');
+    assert.equal((await context(url,{action:'suppress',key:systemItem.key})).status,403,'Protected context must require the advanced setting');
+    assert.equal((await context(url,{action:'suppress',key:toolItem.key})).status,200);
+    await (await send(url,contextBody)).text();
+    let projected=JSON.parse(seen.at(-1).body);assert.deepEqual(projected.input.map(item=>item.type),['message','message'],'Tool calls and outputs must be suppressed as a pair');
+    contextState=await (await context(url)).json();assert.ok(contextState.savedTokens>0);assert.equal(contextState.rules.length,2);
+    assert.equal((await context(url,{action:'edit',key:userItem.key,text:'replacement visible next call'})).status,200);
+    await (await compact(url,contextBody)).text();
+    projected=JSON.parse(seen.at(-1).body);assert.equal(projected.input[1].content[0].text,'replacement visible next call','Edits must apply to compact requests as well as Responses requests');
+    assert.deepEqual(projected.input.map(item=>item.type),['message','message']);
+    assert.equal((await context(url,{action:'clear'})).status,200);
+    await (await send(url,contextBody)).text();assert.equal(JSON.parse(seen.at(-1).body).input.length,4,'Clearing overlays must restore the immutable raw request projection');
+    url=await start();assert.equal((await context(url)).status,404,'The context route must not exist unless explicitly enabled');
     const concurrency=4;
     let pending=[];
     behavior=(req,res)=>{
@@ -146,7 +170,7 @@ async function main() {
     behavior=(_req,res)=>{res.writeHead(200);res.end('ok');}; await (await send(url)).text();
     assert.equal(seen.at(-1).account,'b','A switch during an accepted stream must apply to the next request');
     state=await (await fetch(url+'/_deck/account')).json(); assert.equal(state.failover.lastRequestAccount,'b');
-    console.log('PASS: failover routing, concurrent requests, live account control, fresh ranking, bounded quota retries, affinity protection, credential isolation, stream interruption, transport errors, access controls and cancellation.');
+    console.log('PASS: failover routing, concurrent requests, live account and context control, fresh ranking, bounded quota retries, affinity protection, credential isolation, stream interruption, transport errors, access controls and cancellation.');
   } finally {
     for(const server of [...proxies,upstream]) { server.closeAllConnections(); server.close(); }
   }

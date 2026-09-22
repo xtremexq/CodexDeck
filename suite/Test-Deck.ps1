@@ -5,9 +5,10 @@ $fixture=Join-Path ([IO.Path]::GetTempPath()) ('codex-deck-test-'+[guid]::NewGui
 [void][IO.Directory]::CreateDirectory($fixture)
 $settings=Get-DeckSettings $fixture
 Assert ($settings.AutoCompactMode -eq 'Native') 'Auto-compact implementation must default to Codex native'
-Assert ($settings.AutoCompactThresholdPercent -eq 70) 'Auto-compact threshold must default to 70%'
+Assert ($settings.AutoCompactThresholdPercent -eq 55) 'Auto-compact threshold must default to 55%'
 Assert ($settings.AutoCompactHandoffPrompt -match 'DECK_HANDOFF') 'Default handoff prompt must require the checkpoint marker'
-Assert ($settings.AutoCompactHandoffPrompt -eq "Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you're currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information.") 'Default handoff prompt is incorrect'
+Assert ($settings.AutoCompactHandoffPrompt -eq 'Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.') 'Default handoff prompt is incorrect'
+Assert (-not $settings.TrajectoryEnabled -and -not $settings.ContextManagerEnabled -and -not $settings.EfficiencyAnalyticsEnabled) 'Inspection features must remain opt-in'
 $checkNow=[DateTimeOffset]::UtcNow
 $manual=@{account7=$checkNow;account8=$checkNow.AddSeconds(60)}
 $scheduled=@{account7=$checkNow.AddMinutes(10);account8=$checkNow.AddMinutes(-1)}

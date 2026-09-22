@@ -32,6 +32,11 @@ jobs:
           ./suite/Test-CodexLoopUsage.ps1
       - name: Failover proxy regression tests
         run: node ./suite/Test-DeckFailover.cjs
+      - name: Trajectory and efficiency inspector regression tests
+        run: node ./suite/Test-DeckInspector.cjs
+      - name: PowerShell 7 account-wrapper regression tests
+        shell: pwsh
+        run: ./suite/Test-CodexAuth.ps1
       - name: Auto-compact state machine tests
         run: node ./suite/Test-DeckAutoCompact.cjs
       - name: WPF smoke test
@@ -45,6 +50,7 @@ jobs:
           if (!(Test-Path "$destination/.codex-loop/Deck.Storage.ps1")) { throw 'Missing installed storage maintenance' }
           if (!(Test-Path "$destination/.codex-loop/Deck.AutoCompact.cjs")) { throw 'Missing installed auto-compact client' }
           if (!(Test-Path "$destination/.codex-loop/Deck.AutoCompact.Sidecar.cjs")) { throw 'Missing installed native auto-compact sidecar' }
+          if (!(Test-Path "$destination/.codex-loop/Deck.Inspector.cjs")) { throw 'Missing installed trajectory and efficiency inspector' }
           if (!(Test-Path "$destination/.codex-loop/accounts/pool/skills/debug-swarm/SKILL.md")) { throw 'Missing globally enabled Deck skill' }
           foreach ($name in 'account','pool','usage','delay','schedule','check','deck') {
             if (!(Test-Path "$destination/.local/bin/$name.cmd")) { throw "Missing installed local shell command: $name" }

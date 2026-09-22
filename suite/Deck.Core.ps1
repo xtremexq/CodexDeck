@@ -37,8 +37,10 @@ function Get-DeckDefaults {
         WarmupResetEnabled=$true; WarmupTimedEnabled=$false; WarmupTimes=''
         WarmupStartAtLogin=$true
         FailoverEnabled=$false; FailoverMode='Ordered'; FailoverAccounts=''
-        AutoCompactMode='Native'; AutoCompactThresholdPercent=70
-        AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information.'
+        AutoCompactMode='Native'; AutoCompactThresholdPercent=55
+        AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.'
+        TrajectoryEnabled=$false; ContextManagerEnabled=$false; ContextManagerProtected=$false
+        EfficiencyAnalyticsEnabled=$false; EfficiencySessionLimit=200
     }
 }
 function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
@@ -185,7 +187,13 @@ function Get-DeckSettings([string]$Root) {
     $settings.WidgetWidth = [Math]::Min(600, [Math]::Max(238, $settings.WidgetWidth))
     $settings.WidgetHeight = [Math]::Min(800, [Math]::Max(0, $settings.WidgetHeight))
     $settings.AutoCompactThresholdPercent = [Math]::Min(90, [Math]::Max(30, $settings.AutoCompactThresholdPercent))
+    $settings.EfficiencySessionLimit = [Math]::Min(1000, [Math]::Max(10, $settings.EfficiencySessionLimit))
     if ($settings.AutoCompactMode -notin @('Native','Custom')) { $settings.AutoCompactMode='Native' }
+    $oldHandoff='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information.'
+    if ($settings.AutoCompactHandoffPrompt -eq $oldHandoff) {
+        # Preserve user-edited prompts, but migrate Deck's previous stock prompt.
+        $settings.AutoCompactHandoffPrompt=(Get-DeckDefaults).AutoCompactHandoffPrompt
+    }
     if ([string]::IsNullOrWhiteSpace($settings.AutoCompactHandoffPrompt) -or $settings.AutoCompactHandoffPrompt.Length -gt 4000 -or -not $settings.AutoCompactHandoffPrompt.Contains('DECK_HANDOFF')) {
         $settings.AutoCompactHandoffPrompt=(Get-DeckDefaults).AutoCompactHandoffPrompt
     }
@@ -234,6 +242,13 @@ function ConvertTo-DeckProcessArgument([AllowEmptyString()][string]$Value) {
     [void]$quoted.Append('"')
     return $quoted.ToString()
 }
+function Set-DeckSessionContext([string]$Path, [string]$ContextUrl) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf) -or $ContextUrl -notmatch '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/_deck/context$') { return }
+    $entry=Read-DeckJson $Path
+    if (-not $entry) { return }
+    $entry | Add-Member -NotePropertyName ContextUrl -NotePropertyValue $ContextUrl -Force
+    Write-DeckJson $Path $entry
+}
 function Get-DeckBackgroundPowerShellArguments([string]$ScriptPath, [string[]]$Arguments, [switch]$Sta) {
     $parts=@('-NoLogo','-NoProfile','-NonInteractive','-WindowStyle','Hidden')
     if($Sta){$parts+='-STA'}
@@ -257,6 +272,44 @@ function Start-DeckCompanion([string]$SuiteRoot, [switch]$OpenSettings) {
         $process=Start-DeckBackgroundPowerShell $scriptPath @($launchMode) -Sta
         $process.Dispose()
     }
+}
+function Open-DeckInspector([string]$SuiteRoot, [ValidateSet('Trajectory','Efficiency')][string]$Mode, [switch]$NoOpen) {
+    $deckRoot=Join-Path $SuiteRoot 'deck'
+    $current=Get-DeckSettings $deckRoot
+    $enabled=if($Mode -eq 'Trajectory'){[bool]$current.TrajectoryEnabled}else{[bool]$current.EfficiencyAnalyticsEnabled}
+    if(-not $enabled){throw "$Mode is disabled. Enable it in Codex Deck Settings first."}
+    $scriptPath=Join-Path $SuiteRoot 'Deck.Inspector.cjs'
+    if(-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)){throw 'Deck Inspector is not installed.'}
+    $statePath=Join-Path $deckRoot 'inspector.json'
+    $baseUrl=$null
+    $state=Read-DeckJson $statePath
+    if($state -and [string]$state.BaseUrl -match '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/$'){
+        try{
+            $health=Invoke-RestMethod -Uri ($state.BaseUrl+'health') -UseBasicParsing -TimeoutSec 1
+            if($health.ok){$baseUrl=[string]$state.BaseUrl}
+        }catch{}
+    }
+    if(-not $baseUrl){
+        if(Test-Path -LiteralPath $statePath -PathType Leaf){Remove-Item -LiteralPath $statePath -Force}
+        $node=(Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+        $info=[Diagnostics.ProcessStartInfo]::new()
+        $info.FileName=$node
+        $info.Arguments=(@($scriptPath,'--root',$SuiteRoot,'--state',$statePath) | ForEach-Object {ConvertTo-DeckProcessArgument ([string]$_)}) -join ' '
+        $info.UseShellExecute=$false; $info.CreateNoWindow=$true; $info.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
+        $process=[Diagnostics.Process]::Start($info); if(-not $process){throw 'Deck Inspector could not start.'}; $process.Dispose()
+        $deadline=[DateTimeOffset]::UtcNow.AddSeconds(6)
+        do{
+            Start-Sleep -Milliseconds 100
+            $state=Read-DeckJson $statePath
+            if($state -and [string]$state.BaseUrl -match '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/$'){
+                try{$health=Invoke-RestMethod -Uri ($state.BaseUrl+'health') -UseBasicParsing -TimeoutSec 1;if($health.ok){$baseUrl=[string]$state.BaseUrl}}catch{}
+            }
+        }while(-not $baseUrl -and [DateTimeOffset]::UtcNow -lt $deadline)
+        if(-not $baseUrl){throw 'Deck Inspector did not become ready.'}
+    }
+    $url=$baseUrl+$Mode.ToLowerInvariant()
+    if($NoOpen){return $url}
+    Start-Process $url
 }
 function Test-DeckWarmup($Settings, $Record, $PreviousReset, $History, [long]$Now) {
     if (-not $Settings.WarmupEnabled -or $Settings.WarmupResetEnabled -eq $false) { return $false }

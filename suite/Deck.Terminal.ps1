@@ -51,7 +51,7 @@ function Get-DeckTerminalHealth($Record) {
     if ($Record.Status -ne 'available') { return 'Unavailable' }
     return 'Ready'
 }
-function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 70, [bool]$CompactAdjusting = $false, [string]$CompactMode = 'Native') {
+function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 55, [bool]$CompactAdjusting = $false, [string]$CompactMode = 'Native') {
     $lines = [Collections.Generic.List[object]]::new()
     function Add-Line([string]$Text, [string]$Color = 'Gray', [string]$Background = 'Black') {
         $lines.Add(@{ Text = (ConvertTo-DeckTerminalText $Text ([Math]::Max(1,$Width - 1))); Color = $Color; Background = $Background })
@@ -106,8 +106,8 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     }else{
         Add-Line ('  NAVIGATE Enter launch  / search  B best  Q quit  C compact [{0}] {1} {2}% free (hold C to adjust)' -f $(if($AutoCompact){'x'}else{' '}),$CompactMode,$CompactThreshold) 'Gray'
     }
-    Add-Line '  MANAGE   R refresh  A all  H history  F2 rename  L login  N new' 'DarkGray'
-    Add-Line '  DISPLAY  D desktop  S settings  G global  I instructions  E memories  K skills  M mask' 'DarkGray'
+    Add-Line '  MANAGE R refresh  A all  H history  F2 rename  L login  N new  G global  M mask' 'DarkGray'
+    Add-Line '  DISPLAY D desktop  S settings  V trajectory  Y efficiency  I instructions  E memories  K skills' 'DarkGray'
     return $lines.ToArray()
 }
 function Read-DeckTerminalInput([string]$Prompt, [int]$MaxLength = 40) {
@@ -342,6 +342,8 @@ function Show-DeckTerminal {
                 'I' { if($name){Open-DeckAccountInstructions $SuiteRoot $name;$notice="$name account instructions opened."} }
                 'E' { if($name){Open-DeckMemories $SuiteRoot $name;$notice="$name memories editor opened."} }
                 'K' { if($name){Open-DeckSkillsFolder $SuiteRoot $name;$notice="$name skills folder opened."} }
+                'V' { try{[void](Open-DeckInspector $SuiteRoot 'Trajectory');$notice='Trajectory viewer opened.'}catch{$notice=$_.Exception.Message} }
+                'Y' { try{[void](Open-DeckInspector $SuiteRoot 'Efficiency');$notice='Efficiency analytics opened.'}catch{$notice=$_.Exception.Message} }
                 'S' { Start-DeckCompanion $SuiteRoot -OpenSettings; $notice='Desktop Settings opened.' }
                 'D' { Start-DeckCompanion $SuiteRoot; $notice = 'Desktop Deck opened; use its settings for scheduling and warm-up.' }
                 default {

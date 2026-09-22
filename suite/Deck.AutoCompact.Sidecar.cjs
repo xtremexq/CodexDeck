@@ -5,7 +5,7 @@ const net = require('node:net');
 const {AutoCompactController, HANDOFF} = require('./Deck.AutoCompact.cjs');
 
 function optionsFromArgs(args) {
-  const options = {threshold:70, cwd:process.cwd(), codexExe:null, codexEntry:null, handoffRequest:null, serverConfig:[]};
+  const options = {threshold:55, cwd:process.cwd(), codexExe:null, codexEntry:null, handoffRequest:null, serverConfig:[]};
   const names = {'--threshold':'threshold','--cwd':'cwd','--codex-exe':'codexExe','--codex-entry':'codexEntry'};
   for(let i=0;i<args.length;i++) {
     const name=args[i];

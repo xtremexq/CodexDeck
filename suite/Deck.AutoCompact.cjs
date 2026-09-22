@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const HANDOFF = 'DECK_HANDOFF';
-const HANDOFF_REQUEST = `Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with ${HANDOFF}: with what you're currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information.`;
+const HANDOFF_REQUEST = `Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with ${HANDOFF}: with what you're currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.`;
 const textInput = text => [{type:'text',text,text_elements:[]}];
 const replayPrompt = handoff => `${JSON.stringify(handoff)}\n\nPlease go on.`;
 
@@ -198,7 +198,7 @@ function translateLaunchArgs(rawArgs, defaultCwd) {
 }
 
 function parseArgs(argv) {
-  const options={threshold:70,cwd:process.cwd(),once:false,prompt:null,codexExe:null,codexEntry:null,configArgs:[],postConfigArgs:[],launchArgs:[],handoffRequest:HANDOFF_REQUEST};
+  const options={threshold:55,cwd:process.cwd(),once:false,prompt:null,codexExe:null,codexEntry:null,configArgs:[],postConfigArgs:[],launchArgs:[],handoffRequest:HANDOFF_REQUEST};
   for(let i=0;i<argv.length;i++) {
     const arg=argv[i]; if(arg==='--') { options.configArgs=argv.slice(i+1); break; }
     if(arg==='--once') { options.once=true; continue; }

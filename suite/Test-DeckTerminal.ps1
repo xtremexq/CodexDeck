@@ -26,7 +26,8 @@ Assert (($frame.Text -join "`n") -match '> account40') 'Selection not paged into
 Assert (($frame.Text -join "`n") -match 'E memories') 'Per-account memories shortcut missing'
 Assert (($frame.Text -join "`n") -match 'I instructions') 'Per-account instructions shortcut missing'
 Assert (($frame.Text -join "`n") -match 'K skills') 'Per-account skills shortcut missing'
-Assert (($frame.Text -join "`n") -match 'C compact \[ \] Native 70%') 'Native auto-compact shortcut or default threshold missing'
+Assert (($frame.Text -join "`n") -match 'C compact \[ \] Native 55%') 'Native auto-compact shortcut or default threshold missing'
+Assert (($frame.Text -join "`n") -match 'V trajectory' -and ($frame.Text -join "`n") -match 'Y efficiency') 'Independent inspector shortcuts missing'
 Assert (($frame.Text -join "`n") -notmatch 'person@example.com') 'Email not masked by default'
 Assert ($frame.Count -le 24) 'Frame overflows terminal height'
 $empty = @(Get-DeckTerminalFrame @() @{} @{} @() @{} 0 60 25 '' 'Ready')

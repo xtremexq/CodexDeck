@@ -2,11 +2,16 @@
 
 ## Unreleased
 
+- Added an opt-in local trajectory studio with streamed session timelines plus a separately enabled live context manager that can suppress, restore, or edit the next request's model-visible projection across Deck routing, failover and compaction without rewriting raw history.
+- Added independently opt-in, PrismoDev-inspired efficiency analytics for exact recorded tokens, cache use, repeated commands and paths, oversized tool results, compactions, tools, accounts, projects and models; it shares only the low-level rollout index with Trajectory.
+- Changed the default auto-compaction threshold to 55% context remaining and strengthened the custom handoff prompt to preserve the references, paths and function names needed to continue without re-investigation.
 - Added `codex-auth resume <conversation-id>` to locate a conversation's owning account or pool and resume it through the complete Deck launch path, including configured routing, failover and optional auto-compaction.
-- Added hold-to-adjust in 5% steps for the terminal dashboard's **C** shortcut and one-time percentage overrides such as `codex-auth account1 -AutoCompact 50%`. Auto-compact percentages now consistently mean free context remaining, so 70% triggers at 30% used.
+- Added hold-to-adjust in 5% steps for the terminal dashboard's **C** shortcut and one-time percentage overrides such as `codex-auth account1 -AutoCompact 50%`. Auto-compact percentages now consistently mean free context remaining, so 55% triggers at 45% used.
 - Made Codex's native token-threshold compaction the default auto-compact implementation for accounts, pools, resumed conversations, manual account switching, configured failover and `exec`; Settings can switch back to Deck's existing custom handoff/compact/replay workflow, whose handoff controls are hidden in Native mode.
 - Kept auto-compact dashboard sessions in the same CLI conversation history as direct `codex-auth accountX` launches by preserving the ordinary account's provider identity across both the hosted app-server and native TUI, and by observing new threads without resuming them under a separate client.
 - Updated the Windows workflow to the Node 24-based `actions/checkout` release and made the expected invalid-argument stderr assertion reliable under GitHub Actions PowerShell.
+- Made native auto-compact percentage parsing safe under PowerShell 7 when the percentage is the only trailing argument, and added PowerShell 7 wrapper coverage.
+- Stopped ordinary running sessions from manufacturing a cached local 429 after usage was restored; each explicit new prompt now makes one bounded live probe and clears stale quota state on success.
 - Allowed manually retrying a quota-rejected account in a running session after its usage resets; a fresh request verifies eligibility and rejected accounts rotate away again.
 - Made quota exclusions expire at the reported or cached reset time, with a bounded fallback probe, so an open session can recover and run remote compaction after usage becomes available again.
 - Added globally available, centrally maintained Deck skills with per-account/pool controls, safe user-skill collision handling, launch-time synchronization, and the bundled `debug-swarm` workflow for independent Codex terminal investigations.

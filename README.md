@@ -85,6 +85,8 @@ The installer adds command wrappers to your user PATH and preserves existing acc
 | **L** | Log in to the selected account |
 | **N** | Create a new profile and log in |
 | **D** | Open the desktop companion |
+| **V** | Open the opt-in trajectory viewer and live context manager |
+| **Y** | Open the independently opt-in efficiency analytics |
 | **G** | Edit rules that apply globally |
 | **I** | Read or edit the selected account or pool's global `AGENTS.md` instructions |
 | **E** | Read or edit the selected account or pool's memory files |
@@ -101,9 +103,9 @@ The selected account's details show its model, reasoning effort, last check and 
 
 For a non-interactive view, use **`codex-auth status`**. It prints cached data without network requests. Redirecting the bare command's input or output also selects snapshot mode.
 
-Auto-compaction is opt-in. Press **C** before entering an account or pool, or run `codex-auth account16 -AutoCompact` or `codex-auth pool -AutoCompact` directly. Hold **C** in the dashboard to focus the saved threshold, adjust it by 5% with **↑/↓**, and press **Enter** to save it. For a one-time command-line override, include the percent sign: `codex-auth account16 -AutoCompact 50%`. The threshold is the percentage of model context still free, so the 70% default triggers when 30% is used; a 75% override triggers when 25% is used.
+Auto-compaction is opt-in. Press **C** before entering an account or pool, or run `codex-auth account16 -AutoCompact` or `codex-auth pool -AutoCompact` directly. Hold **C** in the dashboard to focus the saved threshold, adjust it by 5% with **↑/↓**, and press **Enter** to save it. For a one-time command-line override, include the percent sign: `codex-auth account16 -AutoCompact 50%`. The threshold is the percentage of model context still free, so the 55% default triggers when 45% is used; a 75% override triggers when 25% is used.
 
-**Settings → Context** selects the implementation. **Native** is the default: Deck converts the free-context percentage into Codex's native token threshold for the selected model's effective context window, then launches the normal Codex TUI. It works through ordinary accounts, pools, configured quota failover, manual `!account` switching, resumed conversations and one-shot `exec` commands because the setting travels with the complete Deck launch. **Custom** preserves Deck's existing observer workflow: when context reaches the threshold, Deck requests a visible `DECK_HANDOFF`, compacts the thread, and sends the handoff back quoted with “Please go on.” Its multiline handoff setting appears only while Custom is selected. `-Direct` still keeps an exact account without routing.
+**Settings → Compaction** selects the implementation. **Native** is the default: Deck converts the free-context percentage into Codex's native token threshold for the selected model's effective context window, then launches the normal Codex TUI. It works through ordinary accounts, pools, configured quota failover, manual `!account` switching, resumed conversations and one-shot `exec` commands because the setting travels with the complete Deck launch. **Custom** preserves Deck's existing observer workflow: when context reaches the threshold, Deck requests a visible `DECK_HANDOFF`, compacts the thread, and sends the handoff back quoted with “Please go on.” Its multiline handoff setting appears only while Custom is selected. `-Direct` still keeps an exact account without routing.
 
 ## Desktop companion
 
@@ -120,6 +122,20 @@ Run **`codex-deck`**, or press **D** in the terminal dashboard.
 - Closing the window normally hides it to the tray. **Quit** stops the Deck UI and ordinary live checks without closing your Codex terminals; explicitly enabled background warm-up continues invisibly through the clearly named **CodexDeck Warmup Scheduling** Windows task.
 
 Desktop automatic checks are off by default. Enable them in Settings if you want continued polling. Terminal startup checks and desktop polling are separate controls.
+
+### Trajectory and live context control (opt-in)
+
+Enable **Trajectory** in Settings to get a fast local timeline of sessions across Deck accounts: requests, messages, tool calls and results, token-usage records, compactions, subagent/session metadata, and live sessions. Open it from the desktop Studio bar, tray menu, or the terminal dashboard's **V** shortcut. Rollout files are indexed locally, large histories are streamed in bounded pages, and raw paths are not exposed to the browser frontend.
+
+The **Live context manager** is a second opt-in inside the Trajectory settings. For conversations launched through Deck's loopback route, it shows both immutable raw history and the effective context for the next model request. You can suppress an item, restore it, or replace its model-visible text without rewriting the rollout. Tool calls and outputs are paired by default, while system, developer, reasoning, and encrypted items are protected unless the advanced override is explicitly enabled.
+
+Context overlays apply at the shared request boundary, so they remain active across ordinary accounts, pools, quota failover, manual account switching, Responses requests, and native or custom compaction requests. A change affects the next request; it cannot alter one already in flight or undo actions the model has already taken. `-Direct` deliberately bypasses Deck's route, so its completed rollout remains viewable but it has no authoritative live-edit boundary.
+
+### Efficiency analytics (separate opt-in)
+
+**Efficiency analytics is an independent feature**, enabled separately in Settings and opened from the Studio bar, tray menu, or **Y** in the terminal dashboard. Its PrismoDev-inspired analysis scans a bounded number of local rollouts for exact token totals where Codex recorded them, cache use, repeated commands and paths, oversized tool results, tool frequency, compactions, and token distribution by account, project, and model. It then ranks concrete opportunities to reduce repeated discovery or noisy output.
+
+The analytics feature does not enable, depend on, or modify Trajectory or the context manager. The two additions share only a low-level local rollout parser/index so Deck does not perform the same filesystem work twice.
 
 ### Optional warm-up
 

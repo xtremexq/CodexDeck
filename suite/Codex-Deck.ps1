@@ -111,7 +111,7 @@ public static class DeckTaskbarIdentity {
 $script:window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
 $script:appIcon=[Windows.Media.Imaging.BitmapImage]::new([uri](Join-Path $root 'assets/codex-deck.png'))
 $window.Icon=$appIcon; $window.FindName('AppLogo').Source=$appIcon
-foreach ($name in 'AccountPicker','SettingsButton','LaunchButton','ConfigButton','NewButton','Summary','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','Brand','Subtitle','LayoutRoot','Disclaimer','Header','SummaryButton','FilterButton','StatusButton','CardScroll') {
+foreach ($name in 'AccountPicker','SettingsButton','LaunchButton','ConfigButton','NewButton','Summary','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','StudioBar','TrajectoryButton','EfficiencyButton','Brand','Subtitle','LayoutRoot','Disclaimer','Header','SummaryButton','FilterButton','StatusButton','CardScroll') {
     Set-Variable -Name $name -Value $window.FindName($name) -Scope Script
 }
 # Native caption hit testing covers the top padding, logo, text and gaps too.
@@ -383,7 +383,7 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
     $script:widget=$Mode -ne 'Panel'; $settings.ViewMode=$Mode
     $window.ShowInTaskbar=-not $widget
     $visibility=if($widget){'Collapsed'}else{'Visible'}
-    foreach($control in @($LaunchBar,$Subtitle,$SettingsButton,$MinimizeButton)){$control.Visibility=$visibility}
+    foreach($control in @($LaunchBar,$StudioBar,$Subtitle,$SettingsButton,$MinimizeButton)){$control.Visibility=$visibility}
     $window.MinWidth=if($widget){238}else{476}; $window.MinHeight=100
     $window.Width=if($widget){$settings.WidgetWidth}else{[Math]::Max($window.MinWidth,$settings.Width)}
     $savedHeight=if($widget){$settings.WidgetHeight}else{$settings.Height}
@@ -408,6 +408,10 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
     if(-not $SmokeTest -and -not $Demo){Write-DeckJson (Join-Path $root 'settings.json') $settings}
     if($Mode -eq 'Tray'){$window.Hide()}elseif(-not $Initial){Show-DeckWindow}
 }
+function Update-DeckStudioControls {
+    $TrajectoryButton.ToolTip=if($settings.TrajectoryEnabled){'Open the local trajectory viewer'+$(if($settings.ContextManagerEnabled){' and live context manager'}else{''})}else{'Enable Trajectory in Deck Settings first'}
+    $EfficiencyButton.ToolTip=if($settings.EfficiencyAnalyticsEnabled){'Open independent local efficiency analytics'}else{'Enable Efficiency Analytics in Deck Settings first'}
+}
 function Set-DeckSavedSettings($Saved) {
     # Settings click handlers use GetNewClosure so TestUI can invoke them after
     # Show-DeckSettings returns. Assigning $script:settings inside that closure
@@ -415,6 +419,7 @@ function Set-DeckSavedSettings($Saved) {
     # unchanged; Set-DeckMode then persisted the old values over the new file.
     $wasCompact=[bool]$script:settings.Compact
     $script:settings=$Saved
+    Update-DeckStudioControls
     foreach($account in @($nextCheck.Keys)){
         if($cache[$account].CheckedAt){$nextCheck[$account]=Get-DeckNextCheck $settings $cache[$account] ([DateTimeOffset]$cache[$account].CheckedAt)}
     }
@@ -639,15 +644,21 @@ function Show-DeckSettings {
         Appearance=@('ViewMode','Compact','AlwaysOnTop','CloseToTray','AutoStart','OpacityPercent','FontSize','DefaultFolder','AlwaysAskFolder')
         Details=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
-        Context=@('AutoCompactMode','AutoCompactThresholdPercent','AutoCompactHandoffPrompt')
+        Compaction=@('AutoCompactMode','AutoCompactThresholdPercent','AutoCompactHandoffPrompt')
+        Trajectory=@('TrajectoryEnabled','ContextManagerEnabled','ContextManagerProtected')
+        Efficiency=@('EfficiencyAnalyticsEnabled','EfficiencySessionLimit')
         'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupPlanTypes','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
     }
-    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
+    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Compaction='Press C in the codex-auth dashboard to opt in for a launch. Native uses Codex automatic compaction. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 55% means compaction starts at 45% used. Account, pool and failover conversations are supported.';Trajectory='Opt-in local trajectory inspection. The context manager is a related live control surface: it filters the next model request through Deck''s normal loopback route, including failover and auto-compaction. Raw rollout history stays unchanged. Direct launches remain view-only.';Efficiency='Independent opt-in efficiency analysis inspired by PrismoDev. It measures repeated commands and paths, large tool results, token/cache patterns and compaction activity. It does not enable or depend on the trajectory/context manager.';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
     $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupPlanTypes='Account types (select one or more)';WarmupAccounts='Specific accounts (optional with account types; select one or more)';WarmupModel='Paid-plan model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
     $labels.AutoCompactMode='Auto-compact implementation'
     $labels.AutoCompactThresholdPercent='Auto-compact when context remaining (%)'
     $labels.AutoCompactHandoffPrompt='Pre-compaction handoff request'
-    $descriptions.Context='Press C in the codex-auth dashboard to opt in. Native uses Codex automatic compaction and is the default. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 70% means compaction starts at 30% used. Account, pool and failover conversations are supported.'
+    $labels.TrajectoryEnabled='Enable local trajectory viewer'
+    $labels.ContextManagerEnabled='Enable live context suppression and editing for new conversations'
+    $labels.ContextManagerProtected='Advanced: allow overlays on protected items'
+    $labels.EfficiencyAnalyticsEnabled='Enable independent efficiency analytics'
+    $labels.EfficiencySessionLimit='Sessions to analyze (10–1000)'
     $panels=@{}; $controls=@{}
     foreach($group in $groups.Keys){
         $tab=[Windows.Controls.TabItem]::new(); $tab.Header=$group
@@ -788,6 +799,7 @@ function Show-DeckSettings {
             if ($updated.ViewMode -notin @('Panel','Widget','Tray')) { throw 'View Mode must be Panel, Widget, or Tray.' }
             if ($updated.AutoCompactMode -notin @('Native','Custom')) { throw 'Choose Native or Custom auto-compaction.' }
             if ($updated.AutoCompactThresholdPercent -lt 30 -or $updated.AutoCompactThresholdPercent -gt 90) { throw 'Auto-compact remaining-context threshold must be 30-90%.' }
+            if ($updated.EfficiencySessionLimit -lt 10 -or $updated.EfficiencySessionLimit -gt 1000) { throw 'Efficiency sessions to analyze must be 10-1000.' }
             if ($updated.AutoCompactMode -eq 'Custom' -and ([string]::IsNullOrWhiteSpace($updated.AutoCompactHandoffPrompt) -or $updated.AutoCompactHandoffPrompt.Length -gt 4000 -or -not $updated.AutoCompactHandoffPrompt.Contains('DECK_HANDOFF'))) { throw 'The handoff request must be at most 4000 characters and include DECK_HANDOFF.' }
             foreach ($name in @($updated.WarmupAccounts -split '[,;\s]+' | Where-Object { $_ })) {
                 if ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -notin @(Get-DeckAccounts)) { throw "Unknown warm-up account: $name" }
@@ -1140,6 +1152,13 @@ $AccountPicker.Add_DropDownOpened({
     }
 })
 $LaunchButton.Add_Click({Open-DeckTerminal ([string]$AccountPicker.SelectedValue)})
+function Invoke-DeckInspector([string]$Mode) {
+    try { [void](Open-DeckInspector $suite $Mode) }
+    catch { [void][Windows.MessageBox]::Show($_.Exception.Message,'Codex Deck',[Windows.MessageBoxButton]::OK,[Windows.MessageBoxImage]::Information) }
+}
+$TrajectoryButton.Add_Click({Invoke-DeckInspector 'Trajectory'})
+$EfficiencyButton.Add_Click({Invoke-DeckInspector 'Efficiency'})
+Update-DeckStudioControls
 $configMenu=[Windows.Controls.ContextMenu]::new()
 $configMenu.Resources=$window.Resources
 $accountConfigItem=[Windows.Controls.MenuItem]::new(); $accountConfigItem.Header='Account config'
@@ -1217,8 +1236,10 @@ $NewButton.Add_Click({
 })
 $deckIcon=[Drawing.Icon]::new((Join-Path $root 'assets/codex-deck.ico'),32,32)
 $tray=[Windows.Forms.NotifyIcon]::new(); $tray.Icon=$deckIcon; $tray.Text='Codex Deck'; $tray.Visible=$true
-$menu=[Windows.Forms.ContextMenuStrip]::new(); $openDeckItem=$menu.Items.Add('Open Deck'); $openSettingsItem=$menu.Items.Add('Open Settings'); $quitDeckItem=$menu.Items.Add('Quit Deck'); $tray.ContextMenuStrip=$menu
+$menu=[Windows.Forms.ContextMenuStrip]::new(); $openDeckItem=$menu.Items.Add('Open Deck'); $openTrajectoryItem=$menu.Items.Add('Open Trajectory'); $openEfficiencyItem=$menu.Items.Add('Open Efficiency'); $openSettingsItem=$menu.Items.Add('Open Settings'); $quitDeckItem=$menu.Items.Add('Quit Deck'); $tray.ContextMenuStrip=$menu
 $openDeckItem.Add_Click({Show-DeckWindow})
+$openTrajectoryItem.Add_Click({Invoke-DeckInspector 'Trajectory'})
+$openEfficiencyItem.Add_Click({Invoke-DeckInspector 'Efficiency'})
 $openSettingsItem.Add_Click({Show-DeckWindow; Show-DeckSettings})
 $tray.Add_DoubleClick({Show-DeckWindow})
 $quitDeckItem.Add_Click({$script:quit=$true; $window.Close()})
@@ -1261,7 +1282,7 @@ try{
     if($SmokeTest -or $Demo){Invoke-DeckTick}
     if($SmokeTest){
         $trayLabels=@($menu.Items | ForEach-Object Text)
-        if($trayLabels.Count -ne 3 -or ($trayLabels -join '|') -ne 'Open Deck|Open Settings|Quit Deck'){throw 'Tray menu labels or ordering are incorrect.'}
+        if($trayLabels.Count -ne 5 -or ($trayLabels -join '|') -ne 'Open Deck|Open Trajectory|Open Efficiency|Open Settings|Quit Deck'){throw 'Tray menu labels or ordering are incorrect.'}
         $script:supportTestPath=Join-Path ([IO.Path]::GetTempPath()) ('deck-support-test-'+[guid]::NewGuid().ToString('N')+'.json')
         $settingsTest=Show-DeckSettings -TestUI
         $failoverAccounts=$settingsTest.Controls.FailoverAccounts; $failoverMembership=$failoverAccounts.Resources['Membership']; $failoverMembers=$failoverAccounts.Resources['Members']
@@ -1271,6 +1292,9 @@ try{
         $failoverMembership.SelectedIndex=3
         $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
         if ($headers -notcontains 'Environments') { throw 'Environment sharing Settings tab missing.' }
+        if ($headers -notcontains 'Trajectory' -or $headers -notcontains 'Efficiency') { throw 'Separate trajectory and efficiency Settings tabs are missing.' }
+        if ($settingsTest.Controls.TrajectoryEnabled.IsChecked -or $settingsTest.Controls.ContextManagerEnabled.IsChecked -or $settingsTest.Controls.EfficiencyAnalyticsEnabled.IsChecked) { throw 'Trajectory, context management and efficiency analytics must be opt-in.' }
+        if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '200') { throw 'Efficiency analytics session limit default failed.' }
         if ($headers -notcontains 'Skills' -or -not $settingsTest.Skills.State.Controls.ContainsKey('debug-swarm') -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked) { throw 'Globally enabled Deck skills Settings tab missing or invalid.' }
         $environmentUI=$settingsTest.Environment
         if($environmentUI.Name.Text -ne 'pool' -or $environmentUI.Name.SelectedItem -ne 'pool'){throw 'Environment picker did not select its default pool.'}
@@ -1439,7 +1463,7 @@ try{
         $Cards.Children[0].Child.IsExpanded=$true
         $detailLabels=@($Cards.Children[0].Child.Content.Children | Where-Object {$_ -is [Windows.Controls.Grid]} | ForEach-Object {$_.Children[0].Text})
         foreach($label in @('Status','Email','Plan','Terminals','Model','Uptime','Last check','Source','Process IDs','Folders','Warm-up','Credits')){if($label -notin $detailLabels){throw "Missing expanded field: $label"}}
-        if($LaunchBar.Visibility -ne 'Visible' -or $Cards.Children.Count -ne 1){throw 'Panel mode failed.'}
+        if($LaunchBar.Visibility -ne 'Visible' -or $StudioBar.Visibility -ne 'Visible' -or $Cards.Children.Count -ne 1){throw 'Panel mode failed.'}
         if($window.FindName('AllButton') -or $window.FindName('CheckButton')){throw 'Redundant panel controls remain.'}
         if(-not $window.ShowInTaskbar -or $MinimizeButton.Visibility -ne 'Visible'){throw 'Panel taskbar/minimize failed.'}
         if($MinimizeButton.Parent.Children[0] -ne $MinimizeButton){throw 'Minimize must be the first caption button.'}
