@@ -7,6 +7,7 @@ const fsp = fs.promises;
 const path = require('node:path');
 const crypto = require('node:crypto');
 const readline = require('node:readline');
+const VERSION = crypto.createHash('sha256').update(fs.readFileSync(__filename)).digest('hex');
 
 const MAX_CHUNK = 768 * 1024;
 const cache = new Map();
@@ -226,7 +227,7 @@ async function createInspector(root,stateFile){
     const host=`127.0.0.1:${server.address().port}`,origin=`http://${host}`;
     if(req.headers.host!==host || (req.headers.origin&&req.headers.origin!==origin) || !req.url.startsWith('/'+secret+'/'))return error(res,403,'Forbidden.');
     const relative=req.url.slice(secret.length+1),url=new URL(relative,origin); const route=url.pathname.replace(/^\//,'');
-    if(route==='health')return sendJson(res,200,{ok:true,pid:process.pid});
+    if(route==='health')return sendJson(res,200,{ok:true,pid:process.pid,version:VERSION});
     if(route==='trajectory'||route==='efficiency'){
       if(!enabled(root,route))return error(res,403,`${route==='trajectory'?'Trajectory':'Efficiency analytics'} is disabled in Deck Settings.`);
       const nonce=crypto.randomBytes(18).toString('base64');res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','content-security-policy':`default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; connect-src 'self'; img-src 'self'`});return res.end(page(route,nonce));

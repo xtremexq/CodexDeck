@@ -156,6 +156,19 @@ function projectContext(parsed, rules, allowProtected) {
   const effectiveTokens = effective.reduce((sum, entry) => sum + entry.tokens, 0);
   return { output, entries, effective, rawTokens, effectiveTokens };
 }
+function contextThreadId(headers, parsed) {
+  const direct=headers['thread-id'];
+  if (typeof direct === 'string' && direct.length <= 128) return direct;
+  try {
+    const turn=JSON.parse(headers['x-codex-turn-metadata'] || '{}');
+    if (typeof turn.thread_id === 'string' && turn.thread_id.length <= 128) return turn.thread_id;
+  } catch { }
+  const metadata=parsed?.client_metadata;
+  for (const value of [metadata?.thread_id, headers['session-id'], metadata?.session_id, parsed?.prompt_cache_key]) {
+    if (typeof value === 'string' && value.length > 0 && value.length <= 128) return value;
+  }
+  return null;
+}
 async function collect(stream, max) {
   const parts = []; let size = 0;
   for await (const part of stream) {
@@ -192,8 +205,9 @@ async function createProxy(config, dependencies = {}) {
   const now = dependencies.now || Date.now;
   const contextEnabled = config.contextManager === true;
   const allowProtected = config.contextManagerProtected === true;
-  const contextRules = new Map();
-  let contextSnapshot = { version:1, revision:0, enabled:contextEnabled, protectedChanges:allowProtected, capturedAt:null, requestPath:null, raw:[], effective:[], rawTokens:0, effectiveTokens:0, savedTokens:0, rules:[] };
+  let contextRules = new Map(), contextThread = null;
+  const threadRules = new Map();
+  let contextSnapshot = { version:1, revision:0, enabled:contextEnabled, protectedChanges:allowProtected, threadId:null, capturedAt:null, requestPath:null, raw:[], effective:[], rawTokens:0, effectiveTokens:0, savedTokens:0, rules:[] };
   const refreshContextSnapshot = () => {
     const raw=contextSnapshot.raw.map(entry => {
       const rule=contextRules.get(entry.key), usable=!rule || !entry.protected || allowProtected;
@@ -274,7 +288,7 @@ async function createProxy(config, dependencies = {}) {
       if (!contextEnabled) return reply(res, 404, 'The context manager is disabled for this conversation.');
       if (req.method === 'GET') {
         const since=Number(routeQuery.get('since'));
-        const account=config.environment || current;
+        const account=current;
         if(routeQuery.has('since')&&Number.isInteger(since)&&since===contextSnapshot.revision)return replyJson(res,{version:1,revision:contextSnapshot.revision,unchanged:true,busy:activeRequests>0,account});
         return replyJson(res, { ...contextSnapshot, account, busy:activeRequests > 0, rules:[...contextRules.entries()].map(([key,rule]) => ({key,...rule})) });
       }
@@ -320,10 +334,16 @@ async function createProxy(config, dependencies = {}) {
       if (conversation) {
         let parsed; try { parsed = JSON.parse(body); } catch { return reply(res, 400, 'Expected JSON request.'); }
         if (contextEnabled) {
+          const threadId=contextThreadId(req.headers,parsed);
+          if(threadId && threadId!==contextThread){
+            if(contextThread)threadRules.set(contextThread,contextRules);
+            contextRules=threadRules.get(threadId) || new Map();
+            contextThread=threadId;
+          }
           const projection = projectContext(parsed, contextRules, allowProtected);
           parsed = projection.output;
           body = Buffer.from(JSON.stringify(parsed));
-          contextSnapshot = { version:1, revision:contextSnapshot.revision+1, enabled:true, protectedChanges:allowProtected, capturedAt:new Date(now()).toISOString(), requestPath:routePath,
+          contextSnapshot = { version:1, revision:contextSnapshot.revision+1, enabled:true, protectedChanges:allowProtected, threadId:contextThread, capturedAt:new Date(now()).toISOString(), requestPath:routePath,
             raw:projection.entries.map(({raw,...entry}) => entry), effective:projection.effective.map(({raw,...entry}) => entry),
             rawTokens:projection.rawTokens, effectiveTokens:projection.effectiveTokens, savedTokens:Math.max(0, projection.rawTokens - projection.effectiveTokens), rules:[] };
         }

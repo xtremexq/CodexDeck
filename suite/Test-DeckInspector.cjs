@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const http = require('node:http');
+const crypto = require('node:crypto');
 const { walkSessions, scanSession, timelineChunk, efficiency, createInspector } = require('./Deck.Inspector.cjs');
 
 async function main() {
@@ -10,7 +12,7 @@ async function main() {
   const deck=path.join(root,'deck'), sessions=path.join(root,'accounts','account1','sessions','2026','09','22');
   const settingsFile=path.join(deck,'settings.json'), stateFile=path.join(deck,'inspector.json');
   const writeSettings=value=>fs.writeFileSync(settingsFile,JSON.stringify(value),'utf8');
-  let server;
+  let server, proxy;
   try {
     fs.mkdirSync(sessions,{recursive:true});fs.mkdirSync(deck,{recursive:true});
     writeSettings({TrajectoryEnabled:true,ContextManagerEnabled:false,EfficiencyAnalyticsEnabled:true,EfficiencySessionLimit:20});
@@ -46,7 +48,9 @@ async function main() {
     fs.writeFileSync(path.join(liveDirectory,'older.json'),JSON.stringify({ProcessId:process.pid,Account:'account1',Folder:'C:\\work\\project',StartedAt:'2026-09-22T11:59:00Z'}),'utf8');
     fs.writeFileSync(path.join(liveDirectory,'newer.json'),JSON.stringify({ProcessId:process.pid,Account:'account1',Folder:'C:\\work\\project',StartedAt:'2026-09-22T12:00:00Z'}),'utf8');
     const inspector=await createInspector(root,stateFile);server=inspector.server;
-    assert.equal((await fetch(inspector.baseUrl+'health')).status,200);
+    const healthResponse=await fetch(inspector.baseUrl+'health');assert.equal(healthResponse.status,200);
+    const health=await healthResponse.json();assert.equal(health.pid,process.pid);
+    assert.equal(health.version,require('node:crypto').createHash('sha256').update(fs.readFileSync(require.resolve('./Deck.Inspector.cjs'))).digest('hex'),'The launcher must distinguish an old inspector process from the installed script');
     let response=await fetch(inspector.baseUrl+'trajectory');assert.equal(response.status,200);const trajectoryHtml=await response.text();assert.match(trajectoryHtml,/Trajectory \+ Context/);
     assert.match(trajectoryHtml,/managed\[0\]/,'Trajectory must prefer the newest managed live context');assert.match(trajectoryHtml,/pollTimeline/,'Trajectory must tail active rollouts');assert.match(trajectoryHtml,/setInterval\([^]*1000\)/,'Live views must poll while Codex is working');assert.match(trajectoryHtml,/state\.protectedChanges/,'Protected context controls must honor the advanced setting');
     response=await fetch(inspector.baseUrl+'efficiency');assert.equal(response.status,200);assert.match(await response.text(),/Efficiency Analytics/);
@@ -59,6 +63,18 @@ async function main() {
     writeSettings({TrajectoryEnabled:true,ContextManagerEnabled:true,ContextManagerProtected:false,EfficiencyAnalyticsEnabled:true,EfficiencySessionLimit:20});
     response=await fetch(inspector.baseUrl+'context?live=aaaaaaaaaaaaaaaaaaaaaaaa');assert.equal(response.status,200);const companionHtml=await response.text();
     assert.match(companionHtml,/Live Context/);assert.match(companionHtml,/Full studio/);assert.match(companionHtml,/content-visibility:auto/);assert.match(companionHtml,/&since=/);assert.match(companionHtml,/Suppress this item from the next request/);assert.match(companionHtml,/Edit model-visible content/);
+    const proxySecret='b'.repeat(64), markerFile=path.join(liveDirectory,'newer.json');
+    proxy=http.createServer((request,result)=>{
+      assert.equal(request.url,`/${proxySecret}/_deck/context`);
+      result.writeHead(200,{'content-type':'application/json'});
+      result.end(JSON.stringify({revision:1,account:'account1',raw:[],effective:[],capturedAt:null}));
+    });
+    await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));
+    fs.writeFileSync(markerFile,JSON.stringify({ProcessId:process.pid,Account:'account1',Folder:'C:\\work\\project',StartedAt:'2026-09-22T12:00:00Z',ContextUrl:`http://127.0.0.1:${proxy.address().port}/${proxySecret}/_deck/context`}), 'utf8');
+    const markerId=crypto.createHash('sha256').update(markerFile).digest('hex').slice(0,24);
+    const firstContext=await fetch(inspector.baseUrl+'api/context?id='+markerId);
+    assert.equal(firstContext.status,200,'The compact companion must reach its exact live conversation');
+    assert.equal((await firstContext.json()).account,'account1');
 
     writeSettings({TrajectoryEnabled:false,ContextManagerEnabled:false,EfficiencyAnalyticsEnabled:true,EfficiencySessionLimit:20});
     assert.equal((await fetch(inspector.baseUrl+'trajectory')).status,403);assert.equal((await fetch(inspector.baseUrl+'efficiency')).status,200,'Efficiency analytics must remain independently available');
@@ -67,6 +83,7 @@ async function main() {
     console.log('PASS: local trajectory indexing, compact live-context companion, safe live tailing, newest-live selection, exact usage, independent efficiency analytics, opt-in gates and inspector access controls.');
   } finally {
     if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+    if(proxy){proxy.closeAllConnections();await new Promise(resolve=>proxy.close(resolve));}
     fs.rmSync(root,{recursive:true,force:true});
   }
 }

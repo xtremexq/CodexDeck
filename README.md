@@ -43,7 +43,7 @@ Always optional; Deck is free and open source.
 
 **Requires Windows, Windows PowerShell 5.1, and Codex CLI available as `codex`.** The desktop companion uses WPF and the Windows system tray. Linux and macOS are not supported. No administrator account is required.
 
-Download **[CodexDeck-1.6.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/v1.6.0/CodexDeck-1.6.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
+Download **[CodexDeck-1.6.1.zip](https://github.com/xtremexq/CodexDeck/releases/download/v1.6.1/CodexDeck-1.6.1.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
@@ -130,6 +130,8 @@ Enable **Trajectory** in Settings to get a fast local timeline of sessions acros
 The **Live context manager** is a second opt-in inside the Trajectory settings. Every interactive account or pool opened from `codex-auth`, its dashboard, or Codex Deck then gets a dedicated slim app-style companion beside the terminal, targeted directly at that launch. It shows the complete model-visible context as individual message, tool-call, and tool-result cards from the first request onward. Use the red **−** to suppress a card, edit or trim its exact visible text, restore one change or all changes, search/filter the window, and watch the next-request token estimate update. Tool calls and outputs are paired by default, while system, developer, reasoning, and encrypted items are protected unless the advanced override is explicitly enabled. The larger Trajectory studio remains one click away for the complete emitted timeline through the final response.
 
 The companion is deliberately lightweight: it reads the exact live proxy snapshot instead of rescanning rollout history, lazy-renders long card lists, and polls a tiny revision/status response when nothing changed. A full context payload and DOM update happen only for a new model request or one of your edits.
+
+A newly opened terminal shows an empty context until its first model request. When `/new` or `/resume` changes conversations in the same terminal, the companion switches to the new thread on its first model request and keeps each thread's edits separate. Until that request, it displays the last captured context because Codex's TUI does not send Deck a conversation-change event.
 
 Context overlays apply at the shared request boundary, so they remain active across ordinary accounts, pools, quota failover, manual account switching, Responses requests, and native or custom compaction requests. A change affects the next request; it cannot alter one already in flight or undo actions the model has already taken. `-Direct` deliberately bypasses Deck's route, so its completed rollout remains viewable but it has no authoritative live-edit boundary.
 

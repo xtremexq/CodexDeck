@@ -301,6 +301,23 @@ function Start-DeckInspectorAppWindow([string]$Url) {
     $process=[Diagnostics.Process]::Start($info)
     if($process){$process.Dispose()}
 }
+function Test-DeckInspectorHealth($Health, $State, [string]$Version) {
+    return [bool]($Health -and $Health.ok -and $State -and
+        [int]$Health.pid -eq [int]$State.ProcessId -and
+        [string]$Health.version -eq $Version)
+}
+function Stop-DeckStaleInspector($State, [string]$ScriptPath, [string]$StatePath) {
+    $pidValue=0
+    if(-not $State -or -not [int]::TryParse([string]$State.ProcessId,[ref]$pidValue) -or $pidValue -le 0){return}
+    try {
+        $process=Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop
+        if($process -and $process.Name -eq 'node.exe' -and
+            $process.CommandLine -match [regex]::Escape($ScriptPath) -and
+            $process.CommandLine -match [regex]::Escape($StatePath)) {
+            Stop-Process -Id $pidValue -ErrorAction Stop
+        }
+    } catch { }
+}
 function Open-DeckInspector([string]$SuiteRoot, [ValidateSet('Trajectory','Efficiency')][string]$Mode, [switch]$NoOpen, [switch]$Companion, [string]$SessionPath) {
     $deckRoot=Join-Path $SuiteRoot 'deck'
     $current=Get-DeckSettings $deckRoot
@@ -308,16 +325,18 @@ function Open-DeckInspector([string]$SuiteRoot, [ValidateSet('Trajectory','Effic
     if(-not $enabled){throw "$Mode is disabled. Enable it in Codex Deck Settings first."}
     $scriptPath=Join-Path $SuiteRoot 'Deck.Inspector.cjs'
     if(-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)){throw 'Deck Inspector is not installed.'}
+    $version=(Get-FileHash -LiteralPath $scriptPath -Algorithm SHA256).Hash
     $statePath=Join-Path $deckRoot 'inspector.json'
     $baseUrl=$null
     $state=Read-DeckJson $statePath
     if($state -and [string]$state.BaseUrl -match '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/$'){
         try{
             $health=Invoke-RestMethod -Uri ($state.BaseUrl+'health') -UseBasicParsing -TimeoutSec 1
-            if($health.ok){$baseUrl=[string]$state.BaseUrl}
+            if(Test-DeckInspectorHealth $health $state $version){$baseUrl=[string]$state.BaseUrl}
         }catch{}
     }
     if(-not $baseUrl){
+        Stop-DeckStaleInspector $state $scriptPath $statePath
         if(Test-Path -LiteralPath $statePath -PathType Leaf){Remove-Item -LiteralPath $statePath -Force}
         $node=(Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
         $info=[Diagnostics.ProcessStartInfo]::new()
@@ -330,7 +349,7 @@ function Open-DeckInspector([string]$SuiteRoot, [ValidateSet('Trajectory','Effic
             Start-Sleep -Milliseconds 100
             $state=Read-DeckJson $statePath
             if($state -and [string]$state.BaseUrl -match '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/$'){
-                try{$health=Invoke-RestMethod -Uri ($state.BaseUrl+'health') -UseBasicParsing -TimeoutSec 1;if($health.ok){$baseUrl=[string]$state.BaseUrl}}catch{}
+                try{$health=Invoke-RestMethod -Uri ($state.BaseUrl+'health') -UseBasicParsing -TimeoutSec 1;if(Test-DeckInspectorHealth $health $state $version){$baseUrl=[string]$state.BaseUrl}}catch{}
             }
         }while(-not $baseUrl -and [DateTimeOffset]::UtcNow -lt $deadline)
         if(-not $baseUrl){throw 'Deck Inspector did not become ready.'}

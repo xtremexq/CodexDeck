@@ -125,7 +125,8 @@ async function main() {
       {type:'function_call_output',call_id:'call_1',output:'large paired tool output'}
     ]};
     behavior=(_req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end('{"output":[]}');};
-    url=await start({contextManager:true});
+    url=await start({contextManager:true,environment:'launch-account'});
+    let emptyContext=await (await context(url)).json();assert.equal(emptyContext.raw.length,0);assert.equal(emptyContext.capturedAt,null,'A newly opened terminal must show an empty context before its first model request');
     await (await send(url,contextBody)).text();
     state=await (await fetch(url+'/_deck/account')).json();assert.equal(state.contextManager.enabled,true);
     let contextState=await (await context(url)).json();assert.equal(contextState.raw.length,4);assert.equal(contextState.effective.length,4);assert.equal(contextState.account,'a');
@@ -147,6 +148,19 @@ async function main() {
     assert.equal((await context(url,{action:'clear'})).status,200);
     contextState=await (await context(url)).json();assert.equal(contextState.effective.length,4);assert.equal(contextState.savedTokens,0,'Restore all must update companion metrics immediately');
     await (await send(url,contextBody)).text();assert.equal(JSON.parse(seen.at(-1).body).input.length,4,'Clearing overlays must restore the immutable raw request projection');
+    await (await send(url,contextBody,{'thread-id':'thread-one'})).text();
+    contextState=await (await context(url)).json();assert.equal(contextState.threadId,'thread-one');
+    assert.equal((await context(url,{action:'suppress',key:contextState.raw.find(item=>item.role==='user').key})).status,200);
+    assert.equal((await select(url,'b')).status,200);
+    await (await send(url,contextBody,{'thread-id':'thread-one'})).text();
+    contextState=await (await context(url)).json();assert.equal(contextState.account,'b','A manual account switch must update the companion account');
+    assert.equal(seen.at(-1).account,'b');assert.equal(JSON.parse(seen.at(-1).body).input.length,3,'A manual account switch must keep the current conversation overlay');
+    await (await send(url,contextBody,{'thread-id':'thread-two'})).text();
+    contextState=await (await context(url)).json();assert.equal(contextState.threadId,'thread-two');assert.equal(contextState.rules.length,0,'A new conversation must not inherit overlays from the previous conversation');
+    assert.equal(JSON.parse(seen.at(-1).body).input.length,4,'A new conversation must receive its full untouched first request');
+    await (await send(url,contextBody,{'thread-id':'thread-one'})).text();
+    contextState=await (await context(url)).json();assert.equal(contextState.threadId,'thread-one');assert.equal(contextState.rules.length,1,'Resuming a conversation must restore only its own overlays');
+    assert.equal(JSON.parse(seen.at(-1).body).input.length,3,'A resumed conversation must apply its own saved overlay');
     url=await start();assert.equal((await context(url)).status,404,'The context route must not exist unless explicitly enabled');
     const concurrency=4;
     let pending=[];
