@@ -309,6 +309,18 @@ function Test-DeckInspectorHealth($Health, $State, [string]$Version) {
         [int]$Health.pid -eq [int]$State.ProcessId -and
         [string]$Health.version -eq $Version)
 }
+function Get-DeckInspectorVersion([string]$ScriptPath) {
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try {
+        $stream=[IO.File]::OpenRead($ScriptPath)
+        try {
+            $hash=$sha.ComputeHash($stream)
+            return (($hash | ForEach-Object { $_.ToString('x2') }) -join '')
+        } finally { $stream.Dispose() }
+    } finally {
+        $sha.Dispose()
+    }
+}
 function Stop-DeckStaleInspector($State, [string]$ScriptPath, [string]$StatePath) {
     $pidValue=0
     if(-not $State -or -not [int]::TryParse([string]$State.ProcessId,[ref]$pidValue) -or $pidValue -le 0){return}
@@ -328,7 +340,7 @@ function Open-DeckInspector([string]$SuiteRoot, [ValidateSet('Trajectory','Effic
     if(-not $enabled){throw "$Mode is disabled. Enable it in Codex Deck Settings first."}
     $scriptPath=Join-Path $SuiteRoot 'Deck.Inspector.cjs'
     if(-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)){throw 'Deck Inspector is not installed.'}
-    $version=(Get-FileHash -LiteralPath $scriptPath -Algorithm SHA256).Hash
+    $version=Get-DeckInspectorVersion $scriptPath
     $statePath=Join-Path $deckRoot 'inspector.json'
     $baseUrl=$null
     $state=Read-DeckJson $statePath

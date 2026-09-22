@@ -21,6 +21,23 @@ Assert ((Get-DeckInspectorMarkerId 'C:\synthetic\marker.json') -eq 'bbb109b158ae
 Assert (-not (Test-DeckInspectorHealth ([pscustomobject]@{ok=$true;pid=123}) ([pscustomobject]@{ProcessId=123}) 'expected')) 'A pre-update inspector must be restarted'
 Assert (-not (Test-DeckInspectorHealth ([pscustomobject]@{ok=$true;pid=123;version='old'}) ([pscustomobject]@{ProcessId=123}) 'expected')) 'A stale inspector version must be restarted'
 Assert (Test-DeckInspectorHealth ([pscustomobject]@{ok=$true;pid=123;version='expected'}) ([pscustomobject]@{ProcessId=123}) 'expected') 'A matching inspector version must be reused'
+$launchSuite=Join-Path $fixture 'inspector-launch'
+$launchDeck=Join-Path $launchSuite 'deck'
+[void][IO.Directory]::CreateDirectory($launchDeck)
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Deck.Inspector.cjs') -Destination (Join-Path $launchSuite 'Deck.Inspector.cjs')
+Write-DeckJson (Join-Path $launchDeck 'settings.json') @{TrajectoryEnabled=$true;ContextManagerEnabled=$true}
+$launchHealth=$null
+function Get-FileHash { throw 'Get-FileHash is unavailable in this shell.' }
+try {
+    $launchUrl=Open-DeckInspector $launchSuite 'Trajectory' -NoOpen
+    $launchHealth=Invoke-RestMethod -Uri ($launchUrl.Replace('/trajectory','/health')) -TimeoutSec 5
+    Assert ($launchHealth.ok -and $launchHealth.version -eq (Get-DeckInspectorVersion (Join-Path $launchSuite 'Deck.Inspector.cjs'))) 'Inspector failed without Get-FileHash'
+    $companionUrl=Open-DeckInspector $launchSuite 'Trajectory' -Companion -SessionPath (Join-Path $launchDeck 'sessions/terminal.json') -NoOpen
+    Assert ($companionUrl -match '/context\?live=[a-f0-9]{24}$') 'Live Context launcher failed without Get-FileHash'
+} finally {
+    Remove-Item Function:Get-FileHash -ErrorAction SilentlyContinue
+    if($launchHealth -and $launchHealth.pid){Stop-Process -Id $launchHealth.pid -ErrorAction SilentlyContinue}
+}
 $settings=Set-DeckAutoCompactLaunch $fixture $true
 Assert ($settings.AutoCompactLaunchEnabled -and (Get-DeckSettings $fixture).AutoCompactLaunchEnabled) 'Shared auto-compact launch toggle was not persisted'
 $settings=Set-DeckAutoCompactLaunch $fixture $false
