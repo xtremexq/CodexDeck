@@ -29,6 +29,8 @@ if(-not $SmokeTest -and -not $Demo){$settingsItem=Get-Item -LiteralPath (Join-Pa
 $script:cache = @{}; $script:nextCheck = @{}; $script:resets = @{}; $script:history = @{}
 $script:rowPools=@{}; $script:rowControls=@{}; $script:rowStyle=''; $script:expandedRows=@{}; $script:profiles=@{}; $script:profileStamps=@{}; $script:cacheVersion=0; $script:lastPicker=[DateTimeOffset]::MinValue
 $script:accountNames=@(); $script:pickerContentKeys=@{}; $script:usageCacheStamp=''
+$script:cacheWrite=$null; $script:cacheWriteVersion=0; $script:cacheSavedVersion=0
+$script:sessionRead=$null; $script:lastSessionRead=[DateTimeOffset]::MinValue
 $script:tasks = @{}; $script:batchAccounts=@(); $script:batchUntil=[DateTimeOffset]::MinValue; $script:task = $null
 $script:quit = $false; $script:accountFilter='all'; $script:lastWarmupScheduleCheck=[DateTimeOffset]::UtcNow; $script:scheduleRepairTask=$null; $script:initialScheduleRepairStarted=$false
 $script:sessions = @(); $script:notice = 'Ready'; $script:lastRender = ''
@@ -457,7 +459,7 @@ function Sync-DeckUsageCache {
         $incoming=$fresh[$name]; $old=$cache[$name]
         $incomingKey=ConvertTo-Json -Compress -Depth 20 -InputObject $incoming
         $oldKey=if($old){ConvertTo-Json -Compress -Depth 20 -InputObject $old}else{''}
-        if($incomingKey -ne $oldKey){
+        if($incomingKey -ne $oldKey -and (-not $old -or (Get-DeckUsageCheckTicks $incoming) -ge (Get-DeckUsageCheckTicks $old))){
             $cache[$name]=$incoming; $changed=$true
             if($incoming.CheckedAt){$nextCheck[$name]=Get-DeckNextCheck $settings $incoming ([DateTimeOffset]$incoming.CheckedAt)}
         }
@@ -466,11 +468,44 @@ function Sync-DeckUsageCache {
     if($changed){$script:cacheVersion++;$script:lastRender='';$script:lastPicker=[DateTimeOffset]::MinValue}
 }
 function Save-DeckDesktopUsageCache {
-    # Sync-DeckUsageCache already merged the terminal's separate file at the
-    # start of this tick. Re-reading both large JSON files on every result
-    # blocks the WPF thread while checks are completing.
-    Write-DeckJson (Join-Path $root 'cache.json') @(Get-DeckMapValues $cache)
-    $script:usageCacheStamp=Get-DeckUsageCacheStamp
+    $script:cacheWriteVersion++
+    Complete-DeckDesktopUsageCache
+}
+function Complete-DeckDesktopUsageCache([switch]$Wait) {
+    if($script:cacheWrite){
+        if(-not $Wait -and -not $cacheWrite.Handle.IsCompleted){return}
+        $finished=$script:cacheWrite
+        try {
+            Complete-DeckJsonWrite $finished
+            $script:cacheSavedVersion=$finished.Version
+            $stamp=Get-DeckUsageCacheStamp
+            if(($stamp -split '\|',2)[1] -eq $finished.TerminalStamp){$script:usageCacheStamp=$stamp}else{$script:usageCacheStamp=''}
+        } catch {
+            $script:notice='Usage cache save failed: '+$_.Exception.Message; $script:lastRender=''
+            $script:cacheWrite=$null
+            if($Wait){throw}
+            return
+        }
+        $script:cacheWrite=$null
+    }
+    if($cacheSavedVersion -lt $cacheWriteVersion){
+        $write=Start-DeckJsonWrite (Join-Path $root 'cache.json') @(Get-DeckMapValues $cache)
+        $write.Version=$cacheWriteVersion
+        $write.TerminalStamp=((Get-DeckUsageCacheStamp) -split '\|',2)[1]
+        $script:cacheWrite=$write
+        if($Wait){Complete-DeckDesktopUsageCache -Wait}
+    }
+}
+function Update-DeckSessions {
+    if($sessionRead -and $sessionRead.Handle.IsCompleted){
+        try {$script:sessions=@(Complete-DeckSessionRead $sessionRead)}
+        catch {$script:notice='Session refresh failed: '+$_.Exception.Message; $script:lastRender=''}
+        $script:sessionRead=$null
+    }
+    if(-not $sessionRead -and ([DateTimeOffset]::UtcNow-$lastSessionRead).TotalSeconds -ge 2){
+        $script:sessionRead=Start-DeckSessionRead $root
+        $script:lastSessionRead=[DateTimeOffset]::UtcNow
+    }
 }
 function Get-DeckPickerPoolEntry([string]$Name) {
     if(($SmokeTest -or $Demo) -and $script:testPoolEntries -and $script:testPoolEntries.ContainsKey($Name)){return [pscustomobject]$script:testPoolEntries[$Name]}
@@ -503,6 +538,9 @@ function Update-DeckPicker([switch]$Force) {
         if($profileStamps[$name] -ne $stamp){$profiles[$name]=Get-DeckProfile $suite $name; $profileStamps[$name]=$stamp; $script:lastRender=''}
     }
     Set-DeckPickerNames $names
+    # The account picker is an internal, collapsed identity control. Building
+    # its rich quota inlines for every account never reaches the screen.
+    if($AccountPicker.Visibility -eq 'Collapsed' -and -not ($SmokeTest -or $Demo)){return}
     foreach($item in $AccountPicker.Items){
         $name=[string]$item.Tag
         $poolEntry=Get-DeckPickerPoolEntry $name
@@ -1177,6 +1215,7 @@ function Complete-DeckScheduleRepair {
 }
 function Invoke-DeckTick {
     if($SmokeTest -or $Demo){Render-Deck; return}
+    Complete-DeckDesktopUsageCache
     $settingsItem=Get-Item -LiteralPath (Join-Path $root 'settings.json') -ErrorAction SilentlyContinue
     $freshStamp=if($settingsItem){$settingsItem.LastWriteTimeUtc.Ticks}else{0}
     if($freshStamp -ne $settingsStamp){
@@ -1203,7 +1242,7 @@ function Invoke-DeckTick {
     }
     Complete-DeckScheduleRepair
     Sync-DeckUsageCache
-    $script:sessions=@(Get-DeckSessions $root); Update-DeckPicker
+    Update-DeckSessions; Update-DeckPicker
     $now=[DateTimeOffset]::UtcNow; $unix=$now.ToUnixTimeSeconds()
     if(-not $initialScheduleRepairStarted -or ($settings.WarmupEnabled -and $settings.WarmupSchedulingEnabled -and ($now-$lastWarmupScheduleCheck).TotalMinutes -ge 5)){
         $script:initialScheduleRepairStarted=$true
@@ -1215,9 +1254,10 @@ function Invoke-DeckTick {
         $timeout=($now-$task.Started).TotalSeconds -gt 120
         if($timeout){Stop-DeckTask $task}
         if($timeout -or (Test-DeckTaskReady $task)){
-            $account=$task.Account; $success=(-not $timeout -and $task.Process.ExitCode -eq 0)
+            $account=$task.Account; $success=(-not $timeout -and -not $task.StartError -and $task.Process -and $task.Process.ExitCode -eq 0)
             if($task.Kind -eq 'Check'){
                 try{
+                    if($task.StartError){throw $task.StartError}
                     if(-not $success){throw 'Check process failed or timed out.'}
                     $records=@(Expand-DeckCheckRecords ($task.Out.Result | ConvertFrom-Json))
                     if($records.Count -ne 1){throw 'Expected exactly one account result.'}
@@ -1259,7 +1299,7 @@ function Invoke-DeckTick {
                 if($tasks.Count -ge 8){break}; if($tasks.ContainsKey($account)){continue}
                 if($window -and $tickWatch.ElapsedMilliseconds -ge 35){$yieldTick=$true; break}
                 try{
-                    $tasks[$account]=Start-DeckTask (Get-DeckCheckCode $suite $account) 'Check' $account
+                    $tasks[$account]=Start-DeckCheckTask (Get-DeckCheckCode $suite $account) $account
                     $manualChecks.Remove($account)
                 }catch{
                     $manualChecks.Remove($account); $nextCheck[$account]=$now.AddMinutes(20)
@@ -1416,6 +1456,7 @@ $window.Add_Closing({param($sender,$eventArgs)
         return
     }
     if(-not $SmokeTest -and -not $Demo){
+        Complete-DeckDesktopUsageCache -Wait
         if($widget){$settings.WidgetWidth=[int]$window.Width; $settings.WidgetHeight=[int]$window.Height}else{$settings.Width=[int]$window.Width; $settings.Height=[int]$window.Height}
         Write-DeckJson (Join-Path $root 'settings.json') $settings
     }
@@ -1475,7 +1516,7 @@ try{
         if ($headers -notcontains 'Environments') { throw 'Environment sharing Settings tab missing.' }
         if ($headers -notcontains 'Trajectory' -or $headers -notcontains 'Efficiency') { throw 'Separate trajectory and efficiency Settings tabs are missing.' }
         if ($settingsTest.Controls.TrajectoryEnabled.IsChecked -or $settingsTest.Controls.ContextManagerEnabled.IsChecked -or $settingsTest.Controls.ContextManagerAutoOpen.IsChecked -or -not $settingsTest.Controls.EfficiencyAnalyticsEnabled.IsChecked) { throw 'Trajectory/context defaults or enabled-by-default efficiency analytics are incorrect.' }
-        if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '1000') { throw 'Efficiency analytics session limit default failed.' }
+        if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '600') { throw 'Efficiency analytics session limit default failed.' }
         if ($headers -notcontains 'Skills' -or -not $settingsTest.Skills.State.Controls.ContainsKey('debug-swarm') -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked) { throw 'Globally enabled Deck skills Settings tab missing or invalid.' }
         $environmentUI=$settingsTest.Environment
         if($environmentUI.Name.Text -ne 'pool' -or $environmentUI.Name.SelectedItem -ne 'pool'){throw 'Environment picker did not select its default pool.'}
@@ -1729,6 +1770,19 @@ try{
         $script:sessions=$savedSessions; $script:lastRender=''; Render-Deck
         $perf=[Diagnostics.Stopwatch]::StartNew(); for($i=0;$i -lt 100;$i++){Render-Deck}; $perf.Stop()
         'Unchanged render pass: {0:N2} ms average (100 passes).' -f ($perf.Elapsed.TotalMilliseconds/100)
+        $launchWatch=[Diagnostics.Stopwatch]::StartNew()
+        $checkWorkers=@(1..3 | ForEach-Object {Start-DeckCheckTask "Start-Sleep -Milliseconds 1500; 'checked'" "account$_"})
+        $launchWatch.Stop()
+        try {
+            $deadline=[DateTimeOffset]::UtcNow.AddSeconds(12)
+            while(@($checkWorkers | Where-Object {-not (Test-DeckTaskReady $_)}).Count -and [DateTimeOffset]::UtcNow -lt $deadline){
+                Start-Sleep -Milliseconds 30
+            }
+            $pending=@($checkWorkers | Where-Object {-not (Test-DeckTaskReady $_)}).Count
+            $bad=@($checkWorkers | Where-Object {-not $_.Out -or $_.Out.Result.Trim() -ne 'checked'}).Count
+            if($pending -or $bad -or $launchWatch.ElapsedMilliseconds -gt 500){throw "Three background checks were slow to queue or lost output: pending=$pending bad=$bad launch=$($launchWatch.ElapsedMilliseconds) ms."}
+            'Three background checks queued in {0} ms and returned output.' -f $launchWatch.ElapsedMilliseconds
+        } finally {foreach($worker in $checkWorkers){Stop-DeckTask $worker; Dispose-DeckTask $worker}}
         $originalSuite=$suite;$originalRoot=$root;$originalSettings=$settings
         $settingsFixture=Join-Path ([IO.Path]::GetTempPath()) ('deck-settings-save-'+[guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory((Join-Path $settingsFixture 'accounts/account1'))

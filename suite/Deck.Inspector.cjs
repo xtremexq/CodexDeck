@@ -27,9 +27,10 @@ function settings(root) {
 }
 function efficiencyLimit(root) {
   const saved=settings(root);
-  const legacyDefault=saved.EfficiencyLimitVersion == null && Number(saved.EfficiencySessionLimit) === 200;
-  const value=legacyDefault ? 1000 : Number(saved.EfficiencySessionLimit || 1000);
-  return Math.max(10,Math.min(5000,Number.isFinite(value) ? value : 1000));
+  const legacyDefault=(saved.EfficiencyLimitVersion == null && Number(saved.EfficiencySessionLimit) === 200) ||
+    (Number(saved.EfficiencyLimitVersion) === 2 && Number(saved.EfficiencySessionLimit) === 1000);
+  const value=legacyDefault ? 600 : Number(saved.EfficiencySessionLimit ?? 600);
+  return Math.max(10,Math.min(5000,Number.isFinite(value) ? value : 600));
 }
 function enabled(root, mode) {
   const value = settings(root);

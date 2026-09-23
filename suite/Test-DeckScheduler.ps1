@@ -5,11 +5,13 @@ $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot
 $tick=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-DeckTick'},$true)
 Invoke-Expression $tick.Extent.Text
 function Get-DeckSessions { [pscustomobject]@{Account='work-main'} }
+function Update-DeckSessions { $script:sessions=@(Get-DeckSessions) }
 function Get-DeckAccounts { 'work-main'; 1..12 | ForEach-Object {"account$_"} }
 function Get-DeckVisibleAccounts { @($visibleAccounts) }
 function Update-DeckPicker {}
 function Sync-DeckUsageCache {}
 function Save-DeckDesktopUsageCache {}
+function Complete-DeckDesktopUsageCache {}
 function Render-Deck {}
 function Write-DeckJson {}
 function Complete-DeckScheduleRepair {}
@@ -21,6 +23,7 @@ function Start-DeckTask($code,$kind,$account){
     $output=if($kind -eq 'Warm-up'){'{"type":"item.completed","item":{"type":"agent_message","text":"hi"}}'+"`n"+'{"type":"turn.completed"}'}else{ConvertTo-Json -InputObject @(@{Account=$account;Status='available';Windows=@()}) -Compress}
     return @{Kind=$kind;Account=$account;Started=[DateTimeOffset]::UtcNow;Process=$process;Out=@{Result=$output}}
 }
+function Start-DeckCheckTask($code,$account){Start-DeckTask $code 'Check' $account}
 $root=Join-Path $env:TEMP ('deck-scheduler-'+[guid]::NewGuid().ToString('N'))
 $suite=$PSScriptRoot; $settings=Get-DeckDefaults; $tasks=@{}; $manualChecks=@{}; $nextCheck=@{}
 $cache=@{}; $history=@{}; $resets=@{}; $batchAccounts=@(); $batchUntil=[DateTimeOffset]::MinValue
@@ -69,3 +72,18 @@ $settings.AutoCheck=$false; $settings.WarmupEnabled=$true; $settings.WarmupAccou
 Invoke-DeckTick
 Assert ($started.Count -eq 0 -and $tasks.Count -eq 0) 'GUI duplicated the headless automatic warm-up worker'
 'PASS: GUI checks remain separate from the headless warm-up worker.'
+
+# Check results may arrive while a previous cache snapshot is being written.
+# The final on-disk snapshot must contain the newest result after coalescing.
+foreach($name in 'Get-DeckUsageCacheStamp','Save-DeckDesktopUsageCache','Complete-DeckDesktopUsageCache'){
+    $definition=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
+    Invoke-Expression $definition.Extent.Text
+}
+$script:cacheWrite=$null; $script:cacheWriteVersion=0; $script:cacheSavedVersion=0; $script:usageCacheStamp=''
+$cache=@{account1=[pscustomobject]@{Account='account1';Status='first';CheckedAt=[DateTimeOffset]::UtcNow.ToString('o')}}
+Save-DeckDesktopUsageCache
+$cache.account1=[pscustomobject]@{Account='account1';Status='newest';CheckedAt=[DateTimeOffset]::UtcNow.ToString('o')}
+Save-DeckDesktopUsageCache
+Complete-DeckDesktopUsageCache -Wait
+Assert ((@(Read-DeckJson (Join-Path $root 'cache.json'))[0].Status) -eq 'newest' -and $cacheSavedVersion -eq 2) 'Asynchronous cache save lost the newest check result'
+'PASS: concurrent check results coalesce into the latest persisted cache snapshot.'

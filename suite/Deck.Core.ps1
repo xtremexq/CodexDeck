@@ -41,7 +41,7 @@ function Get-DeckDefaults {
         AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.'
         ContextOptimizer='Off'; CodeGraphEnabled=$false; CodeGraphProfile='core'; BrowserHarnessEnabled=$false
         TrajectoryEnabled=$false; ContextManagerEnabled=$false; ContextManagerAutoOpen=$false; ContextManagerProtected=$false
-        EfficiencyAnalyticsEnabled=$true; EfficiencySessionLimit=1000; EfficiencyLimitVersion=2
+        EfficiencyAnalyticsEnabled=$true; EfficiencySessionLimit=600; EfficiencyLimitVersion=3
     }
 }
 function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
@@ -83,16 +83,17 @@ function Get-DeckNextCheck($Settings, $Record, [DateTimeOffset]$CheckedAt) {
     return $next
 }
 function Read-DeckJson([string]$Path) {
-    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+    if ([IO.File]::Exists($Path)) {
         try {
             $json=[IO.File]::ReadAllText($Path)
             # PowerShell 7.5 started materializing ISO strings as DateTime by
             # default. Deck's state schema stores timestamps as strings and
             # casts them explicitly at use sites, matching Windows PowerShell.
-            if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')) {
-                return $json | ConvertFrom-Json -DateKind String
+            if($null -eq $script:deckJsonDateKind){$script:deckJsonDateKind=(Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')}
+            if ($script:deckJsonDateKind) {
+                return ConvertFrom-Json -InputObject $json -DateKind String
             }
-            return $json | ConvertFrom-Json
+            return ConvertFrom-Json -InputObject $json
         } catch { }
     }
 }
@@ -153,6 +154,30 @@ function Write-DeckJson([string]$Path, $Value) {
         else { [IO.File]::Move($temp, $Path) }
     } finally { if ([IO.File]::Exists($temp)) { [IO.File]::Delete($temp) } }
 }
+function Start-DeckJsonWrite([string]$Path, $Value) {
+    # ConvertTo-Json is expensive for usage snapshots. Give it a separate
+    # runspace so check completions do not hold the WPF dispatcher.
+    $writer=[PowerShell]::Create()
+    $code=@'
+param($path,$value)
+$ErrorActionPreference='Stop'
+$dir=[IO.Path]::GetDirectoryName($path)
+[void][IO.Directory]::CreateDirectory($dir)
+$temp=[IO.Path]::Combine($dir,[guid]::NewGuid().ToString('N')+'.tmp')
+try {
+    [IO.File]::WriteAllText($temp,(ConvertTo-Json -InputObject $value -Depth 30),[Text.UTF8Encoding]::new($false))
+    if([IO.File]::Exists($path)){[IO.File]::Replace($temp,$path,[System.Management.Automation.Language.NullString]::Value)}else{[IO.File]::Move($temp,$path)}
+} finally {if([IO.File]::Exists($temp)){[IO.File]::Delete($temp)}}
+'@
+    try {
+        [void]$writer.AddScript($code).AddArgument($Path).AddArgument($Value)
+        return @{Writer=$writer;Handle=$writer.BeginInvoke()}
+    } catch {$writer.Dispose(); throw}
+}
+function Complete-DeckJsonWrite($Write) {
+    try { [void]$Write.Writer.EndInvoke($Write.Handle) }
+    finally { $Write.Writer.Dispose() }
+}
 function Set-DeckAutoCompactLaunch([string]$Root, [bool]$Enabled) {
     $settings=Get-DeckSettings $Root
     $settings.AutoCompactLaunchEnabled=$Enabled
@@ -176,9 +201,10 @@ function Get-DeckSettings([string]$Root) {
                 try { $settings[$key]=[Convert]::ToInt32($candidate) } catch { }
             }
         }
-        # The old 200-session default was saved by the UI. Move that stock
-        # value to the new default while retaining other chosen limits.
-        if (-not $saved.PSObject.Properties['EfficiencyLimitVersion'] -and $saved.EfficiencySessionLimit -eq 200) { $settings.EfficiencySessionLimit=1000 }
+        # Migrate saved stock defaults while retaining custom session limits.
+        if ((-not $saved.PSObject.Properties['EfficiencyLimitVersion'] -and $saved.EfficiencySessionLimit -eq 200) -or
+            ($saved.EfficiencyLimitVersion -eq 2 -and $saved.EfficiencySessionLimit -eq 1000)) { $settings.EfficiencySessionLimit=600 }
+        $settings.EfficiencyLimitVersion=3
         # WarmupAllPaid was the pre-1.5 boolean selector. Migrate it only when
         # the new multi-select scope has not already been saved.
         if (-not $saved.PSObject.Properties['WarmupPlanTypes'] -and
@@ -225,19 +251,49 @@ function Register-DeckSession([string]$Root, [string]$Account, [string]$Folder) 
 }
 function Get-DeckSessions([string]$Root) {
     $dir = Join-Path $Root 'sessions'
-    if (-not (Test-Path -LiteralPath $dir)) { return }
-    foreach ($file in Get-ChildItem -LiteralPath $dir -Filter '*.json' -File) {
-        $entry = Read-DeckJson $file.FullName
+    if (-not [IO.Directory]::Exists($dir)) { return }
+    foreach ($path in [IO.Directory]::EnumerateFiles($dir, '*.json')) {
+        $entry = Read-DeckJson $path
         $valid = $false
         if ($entry -and $entry.Account -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') {
             try {
-                $proc = Get-Process -Id $entry.ProcessId -ErrorAction Stop
+                $proc = [Diagnostics.Process]::GetProcessById([int]$entry.ProcessId)
                 try{$valid = $proc.StartTime.ToUniversalTime().Ticks -eq $entry.ProcessStartTicks}finally{$proc.Dispose()}
             } catch { }
         }
         if ($valid) { $entry }
-        else { Remove-Item -LiteralPath $file.FullName -ErrorAction SilentlyContinue }
+        else { try { [IO.File]::Delete($path) } catch { } }
     }
+}
+function Start-DeckSessionRead([string]$Root) {
+    $reader=[PowerShell]::Create()
+    $code=@'
+param($root)
+$ErrorActionPreference='Stop'
+$dir=[IO.Path]::Combine($root,'sessions')
+if([IO.Directory]::Exists($dir)){
+    foreach($path in [IO.Directory]::EnumerateFiles($dir,'*.json')){
+        $entry=$null
+        try {$entry=ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($path))}catch{}
+        $valid=$false
+        if($entry -and $entry.Account -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){
+            try{
+                $proc=[Diagnostics.Process]::GetProcessById([int]$entry.ProcessId)
+                try{$valid=$proc.StartTime.ToUniversalTime().Ticks -eq $entry.ProcessStartTicks}finally{$proc.Dispose()}
+            }catch{}
+        }
+        if($valid){$entry}else{try{[IO.File]::Delete($path)}catch{}}
+    }
+}
+'@
+    try {
+        [void]$reader.AddScript($code).AddArgument($Root)
+        return @{Reader=$reader;Handle=$reader.BeginInvoke()}
+    } catch {$reader.Dispose(); throw}
+}
+function Complete-DeckSessionRead($Read) {
+    try { return $Read.Reader.EndInvoke($Read.Handle) }
+    finally { $Read.Reader.Dispose() }
 }
 function ConvertTo-DeckProcessArgument([AllowEmptyString()][string]$Value) {
     if ($null -eq $Value) { $Value='' }
@@ -420,6 +476,8 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
 
 public sealed class DeckProcessJob : IDisposable {
     const UInt32 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
@@ -471,6 +529,39 @@ public sealed class DeckProcessJob : IDisposable {
     }
     ~DeckProcessJob(){Dispose();}
 }
+
+public sealed class DeckStartedProcess {
+    public Process Process;
+    public DeckProcessJob Job;
+    public Task<string> Out;
+    public Task<string> Err;
+}
+
+public static class DeckProcessLauncher {
+    public static Task<DeckStartedProcess> StartCheck(string code) {
+        return Task.Run(() => {
+            var info = new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(code)));
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            info.RedirectStandardOutput = true;
+            info.RedirectStandardError = true;
+            info.EnvironmentVariables.Remove("PSModulePath");
+            var process = Process.Start(info);
+            DeckProcessJob job = null;
+            try { job = new DeckProcessJob(process); } catch { }
+            return new DeckStartedProcess { Process = process, Job = job, Out = process.StandardOutput.ReadToEndAsync(), Err = process.StandardError.ReadToEndAsync() };
+        });
+    }
+    public static void StopWhenStarted(Task<DeckStartedProcess> launch) {
+        launch.ContinueWith(done => {
+            if (done.Status != TaskStatus.RanToCompletion) return;
+            var started = done.Result;
+            try { if (started.Job != null) started.Job.Terminate(); else started.Process.Kill(); } catch { }
+            if (started.Job != null) started.Job.Dispose();
+            started.Process.Dispose();
+        });
+    }
+}
 '@
 }
 function Start-DeckTask([string]$Code, [string]$Kind, [string]$Account) {
@@ -484,15 +575,26 @@ function Start-DeckTask([string]$Code, [string]$Kind, [string]$Account) {
     # Let powershell.exe construct its own Windows PowerShell module path.
     [void]$info.EnvironmentVariables.Remove('PSModulePath')
     $process = [Diagnostics.Process]::Start($info)
-    if($Kind -eq 'Check'){
-        try{$process.PriorityClass=[Diagnostics.ProcessPriorityClass]::BelowNormal}catch{}
-    }
     $job=$null
     try{$job=[DeckProcessJob]::new($process)}catch{}
     return @{ Process=$process; Out=$process.StandardOutput.ReadToEndAsync(); Err=$process.StandardError.ReadToEndAsync(); Job=$job; Kind=$Kind; Account=$Account; Started=[DateTimeOffset]::UtcNow; ExitObservedAt=$null }
 }
+function Start-DeckCheckTask([string]$Code, [string]$Account) {
+    return @{ Launch=[DeckProcessLauncher]::StartCheck($Code); Process=$null; Out=$null; Err=$null; Job=$null; Kind='Check'; Account=$Account; Started=[DateTimeOffset]::UtcNow; ExitObservedAt=$null; StartError=$null }
+}
+function Resolve-DeckTaskLaunch($Task) {
+    if(-not $Task.Launch){return $true}
+    if(-not $Task.Launch.IsCompleted){return $false}
+    try {
+        $started=$Task.Launch.Result
+        $Task.Process=$started.Process; $Task.Out=$started.Out; $Task.Err=$started.Err; $Task.Job=$started.Job
+    } catch { $Task.StartError=$_.Exception.GetBaseException().Message }
+    $Task.Launch=$null
+    return $true
+}
 function Stop-DeckTask($Task) {
     if(-not $Task){return}
+    if($Task.Launch){[DeckProcessLauncher]::StopWhenStarted($Task.Launch); $Task.Launch=$null; $Task.StartError='Worker launch timed out.'; return}
     # A job owns the full worker tree, including codex.cmd and its Node child.
     # Native taskkill is only a silent fallback when Windows rejected job nesting.
     if($Task.Job){try{$Task.Job.Terminate()}catch{}; return}
@@ -507,6 +609,8 @@ function Stop-DeckTask($Task) {
 }
 function Test-DeckTaskReady($Task, [int]$DrainGraceSeconds = 2) {
     if(-not $Task){return $false}
+    if(-not (Resolve-DeckTaskLaunch $Task)){return $false}
+    if($Task.StartError){return $true}
     try{if(-not $Task.Process.HasExited){return $false}}catch{return $true}
     $outReady=(-not $Task.Out -or $Task.Out.IsCompleted -ne $false)
     $errReady=(-not $Task.Err -or $Task.Err.IsCompleted -ne $false)

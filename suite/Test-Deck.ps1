@@ -11,15 +11,19 @@ Assert ($settings.ContextOptimizer -eq 'Off' -and -not $settings.CodeGraphEnable
 Assert ($settings.AutoCompactHandoffPrompt -match 'DECK_HANDOFF') 'Default handoff prompt must require the checkpoint marker'
 Assert ($settings.AutoCompactHandoffPrompt -eq 'Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.') 'Default handoff prompt is incorrect'
 Assert (-not $settings.TrajectoryEnabled -and -not $settings.ContextManagerEnabled -and $settings.EfficiencyAnalyticsEnabled) 'Trajectory/context must remain opt-in and efficiency analytics must default on'
-Assert (-not $settings.ContextManagerAutoOpen -and $settings.EfficiencySessionLimit -eq 1000) 'Context auto-open must default off and efficiency must analyze 1000 sessions by default'
+Assert (-not $settings.ContextManagerAutoOpen -and $settings.EfficiencySessionLimit -eq 600) 'Context auto-open must default off and efficiency must analyze 600 sessions by default'
 Write-DeckJson (Join-Path $fixture 'settings.json') @{EfficiencySessionLimit=5000;EfficiencyLimitVersion=2}
 Assert ((Get-DeckSettings $fixture).EfficiencySessionLimit -eq 5000) 'Efficiency must allow a 5000-session limit'
 Remove-Item -LiteralPath (Join-Path $fixture 'settings.json')
 $legacySettings=Join-Path $fixture 'settings.json'
 Write-DeckJson $legacySettings @{EfficiencySessionLimit=200}
-Assert ((Get-DeckSettings $fixture).EfficiencySessionLimit -eq 1000) 'The old saved 200-session default was not upgraded'
+Assert ((Get-DeckSettings $fixture).EfficiencySessionLimit -eq 600) 'The old saved 200-session default was not upgraded'
 Write-DeckJson $legacySettings @{EfficiencySessionLimit=200;EfficiencyLimitVersion=2}
 Assert ((Get-DeckSettings $fixture).EfficiencySessionLimit -eq 200) 'An explicitly saved new-version limit of 200 was not retained'
+Write-DeckJson $legacySettings @{EfficiencySessionLimit=1000;EfficiencyLimitVersion=2}
+Assert ((Get-DeckSettings $fixture).EfficiencySessionLimit -eq 600 -and (Get-DeckSettings $fixture).EfficiencyLimitVersion -eq 3) 'The old saved 1000-session default was not upgraded'
+Write-DeckJson $legacySettings @{EfficiencySessionLimit=1000;EfficiencyLimitVersion=3}
+Assert ((Get-DeckSettings $fixture).EfficiencySessionLimit -eq 1000) 'A newly chosen 1000-session limit was not retained'
 Remove-Item -LiteralPath $legacySettings
 Assert ((Get-DeckInspectorMarkerId 'C:\synthetic\marker.json') -eq 'bbb109b158ae51aad899ea44') 'Inspector marker IDs must match the Node inspector session identity'
 Assert (-not (Test-DeckInspectorHealth ([pscustomobject]@{ok=$true;pid=123}) ([pscustomobject]@{ProcessId=123}) 'expected')) 'A pre-update inspector must be restarted'
@@ -56,6 +60,8 @@ $models=@(Get-DeckModelNames @('gpt-5.6-luna',@('gpt-5.6-sol','gpt-5.6-luna'),'S
 Assert ($models.Count -eq 2 -and $models[1] -eq 'gpt-5.6-sol') 'Nested model list was not flattened'
 $namedSession=Register-DeckSession $fixture 'work-main' 'C:\example'
 Assert (@(Get-DeckSessions $fixture | Where-Object Account -eq 'work-main').Count -eq 1) 'Custom account session missing'
+$sessionRead=Start-DeckSessionRead $fixture
+Assert (@(Complete-DeckSessionRead $sessionRead | Where-Object Account -eq 'work-main').Count -eq 1) 'Background session refresh lost a live session'
 Remove-Item -LiteralPath $namedSession
 Assert (-not $settings.WarmupEnabled) 'Warm-up must default off'
 Assert (-not $settings.WarmupSchedulingEnabled) 'Background warm-up scheduling must default off'
@@ -145,6 +151,17 @@ Assert ($task.Process.WaitForExit(10000)) 'Worker did not finish'
 Assert ($task.Out.Result.Trim() -eq 'synthetic worker output') 'Worker output lost'
 Assert ($task.Job) 'Worker process tree was not assigned to a cleanup job'
 Dispose-DeckTask $task
+$checkTask=Start-DeckCheckTask "Start-Sleep -Milliseconds 200; 'async check output'" 'account1'
+Assert ($checkTask.Launch -and -not $checkTask.Process) 'Check process was launched on the caller thread'
+$checkDeadline=[DateTimeOffset]::UtcNow.AddSeconds(10)
+while(-not (Test-DeckTaskReady $checkTask) -and [DateTimeOffset]::UtcNow -lt $checkDeadline){Start-Sleep -Milliseconds 20}
+Assert ($checkTask.Process -and $checkTask.Process.ExitCode -eq 0 -and $checkTask.Out.Result.Trim() -eq 'async check output') 'Background check launch or output failed'
+Dispose-DeckTask $checkTask
+$cachePath=Join-Path $fixture 'async-cache.json'
+$jsonWrite=Start-DeckJsonWrite $cachePath @([pscustomobject]@{Account='account1';Status='available'})
+Assert ($jsonWrite.Handle -and $jsonWrite.Writer) 'Usage cache serialization did not start in a background runspace'
+Complete-DeckJsonWrite $jsonWrite
+Assert ((Read-DeckJson $cachePath)[0].Account -eq 'account1') 'Background usage cache write lost a record'
 $moduleTask=Start-DeckTask 'Get-FileHash -LiteralPath $PSHOME\powershell.exe | Select-Object -ExpandProperty Algorithm' 'Test' ''
 Assert ($moduleTask.Process.WaitForExit(10000)) 'Worker module check did not finish'
 Assert ($moduleTask.Process.ExitCode -eq 0 -and $moduleTask.Out.Result.Trim() -eq 'SHA256') 'Windows PowerShell worker inherited an incompatible module path'
