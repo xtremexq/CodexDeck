@@ -189,7 +189,7 @@ function Get-DeckIntegrationComponent([string]$SuiteRoot,[ValidateSet('rtk','hea
     if(-not $component){throw "Unknown Deck integration: $Name"}
     return $component
 }
-function Get-DeckIntegrationStatus([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness','aas_catalog')][string]$Name) {
+function Get-DeckIntegrationStatus([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness','aas_catalog')][string]$Name,[switch]$SkipHash) {
     $component=Get-DeckIntegrationComponent $SuiteRoot $Name
     if($Name -eq 'aas_catalog'){
         $path=Join-Path $SuiteRoot 'deck/catalog/aas-index.json'
@@ -228,7 +228,9 @@ function Get-DeckIntegrationStatus([string]$SuiteRoot,[ValidateSet('rtk','headro
     $entry=$state.components.$Name
     $path=if($entry -and $entry.version){Join-Path $SuiteRoot ("integrations/packages/{0}/{1}/{2}" -f $Name,$entry.version,$component.executable)}else{$null}
     $valid=[bool]($path -and (Test-Path -LiteralPath $path -PathType Leaf))
-    if($valid -and $entry.sha256){$valid=(Get-DeckFileHash -LiteralPath $path -Algorithm SHA256).Hash -eq [string]$entry.sha256}
+    # Settings only needs a quick inventory. Launch and install paths still
+    # verify the executable against the recorded hash.
+    if($valid -and $entry.sha256 -and -not $SkipHash){$valid=(Get-DeckFileHash -LiteralPath $path -Algorithm SHA256).Hash -eq [string]$entry.sha256}
     if($valid -and $Name -eq 'codegraph'){$valid=Test-Path -LiteralPath (Join-Path (Split-Path -Parent $path) 'onnxruntime.dll') -PathType Leaf}
     $versions=@(Get-ChildItem -LiteralPath (Join-Path $SuiteRoot "integrations/packages/$Name") -Directory -ErrorAction SilentlyContinue | Where-Object {$_.Name -notlike '.stage-*'} | Sort-Object LastWriteTimeUtc -Descending | ForEach-Object Name)
     return [pscustomobject]@{Name=$Name;DisplayName=$component.displayName;Installed=$valid;Valid=$valid;Version=if($entry){[string]$entry.version}else{''};Executable=$path;Versions=$versions;ProjectUrl=$component.projectUrl;License=$component.license}

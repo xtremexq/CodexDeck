@@ -149,4 +149,10 @@ $saveEnvironments={
     }
 }.GetNewClosure()
 & $loadPool
-if($shareSourceBox.Items.Count){$shareSourceBox.SelectedIndex=0}
+if($SmokeTest){
+    if($shareSourceBox.Items.Count){$shareSourceBox.SelectedIndex=0}
+}else{
+    $tabs.Add_SelectionChanged({param($sender,$eventArgs)
+        if($eventArgs.OriginalSource -eq $tabs -and $tabs.SelectedItem -eq $environmentTab -and $shareSourceBox.SelectedIndex -lt 0 -and $shareSourceBox.Items.Count){$shareSourceBox.SelectedIndex=0}
+    }.GetNewClosure())
+}

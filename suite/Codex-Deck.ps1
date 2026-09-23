@@ -176,13 +176,11 @@ function Update-DeckWidgetHeight {
     if($script:sizing){return}
     $script:sizing=$true
     try{
-        $window.Content.UpdateLayout()
         $width=[Math]::Max(100,$window.Width-2-$LayoutRoot.Margin.Left-$LayoutRoot.Margin.Right-9)
         $Cards.Measure([Windows.Size]::new($width,[double]::PositiveInfinity))
         $window.Content.Measure([Windows.Size]::new($window.Width,[double]::PositiveInfinity))
         $overhead=2+$LayoutRoot.Margin.Top+$LayoutRoot.Margin.Bottom
         foreach($section in $LayoutRoot.Children){if($section -ne $CardScroll){$overhead+=$section.DesiredSize.Height}}
-        $Cards.Measure([Windows.Size]::new($width,[double]::PositiveInfinity))
         $collapsed=0
         $expanded=0
         foreach($card in $Cards.Children){
@@ -502,7 +500,7 @@ function Update-DeckSessions {
         catch {$script:notice='Session refresh failed: '+$_.Exception.Message; $script:lastRender=''}
         $script:sessionRead=$null
     }
-    if(-not $sessionRead -and ([DateTimeOffset]::UtcNow-$lastSessionRead).TotalSeconds -ge 2){
+    if(-not $sessionRead -and ([DateTimeOffset]::UtcNow-$lastSessionRead).TotalSeconds -ge 5){
         $script:sessionRead=Start-DeckSessionRead $root
         $script:lastSessionRead=[DateTimeOffset]::UtcNow
     }
@@ -838,8 +836,9 @@ function Show-DeckSettings {
     $controls.AutoCompactMode.Add_SelectionChanged({& $updateCompactModeVisibility}.GetNewClosure())
     & $updateCompactModeVisibility
     $integrationUI=@{}
+    $integrationCatalog=Get-DeckIntegrationCatalog $suite
     foreach($integrationName in @('rtk','headroom','codegraph','browser_harness','aas_catalog')){
-        $component=Get-DeckIntegrationComponent $suite $integrationName
+        $component=$integrationCatalog.components.$integrationName
         $card=[Windows.Controls.Border]::new(); $card.Padding='12'; $card.Margin='0,2,10,12'; $card.CornerRadius='7'; $card.Background='#171C1F'; $card.BorderBrush='#2B343A'; $card.BorderThickness='1'
         $body=[Windows.Controls.StackPanel]::new(); $card.Child=$body
         $title=New-DeckText ([string]$component.displayName) '#A9E8D5' 14; [void]$body.Children.Add($title)
@@ -847,12 +846,12 @@ function Show-DeckSettings {
             $note=New-DeckText 'Installs only the searchable index. Pick skills in the Skills tab; no AAS skills are installed automatically.' '#929CA4' 11
             $note.Margin='0,5,0,0';[void]$body.Children.Add($note)
         }
-        $statusText=New-DeckText '' '#929CA4'; $statusText.Margin='0,4,0,9'; [void]$body.Children.Add($statusText)
+        $statusText=New-DeckText 'Open Integrations to check status.' '#929CA4'; $statusText.Margin='0,4,0,9'; [void]$body.Children.Add($statusText)
         $row=[Windows.Controls.WrapPanel]::new(); [void]$body.Children.Add($row)
         $install=[Windows.Controls.Button]::new(); $install.Padding='10,6'; $install.Margin='0,0,8,0'; [void]$row.Children.Add($install)
         $rollback=[Windows.Controls.Button]::new(); $rollback.Content='Roll back'; $rollback.Padding='10,6'; if($integrationName -notin @('browser_harness','aas_catalog')){[void]$row.Children.Add($rollback)}
         $refresh={
-            $local=Get-DeckIntegrationStatus $suite $integrationName
+            $local=Get-DeckIntegrationStatus $suite $integrationName -SkipHash
             $statusText.Text=if($local.Valid){"Installed $($local.Version) · $($local.License) · updates only on request"}else{'Not installed · no files are downloaded while disabled'}
             $install.Content=if($local.Valid){if($integrationName -eq 'browser_harness'){'Check for updates'}else{'Check & update'}}else{'Install now'}
             $rollback.IsEnabled=@($local.Versions).Count -gt 1
@@ -914,13 +913,19 @@ function Show-DeckSettings {
             catch{$statusText.Text='Rollback failed: '+$_.Exception.Message}
             finally{$rollback.IsEnabled=$true}
         }.GetNewClosure())
-        try{& $refresh}catch{
-            $statusText.Text='Status unavailable: '+$_.Exception.Message
-            $install.Content='Status unavailable'; $install.IsEnabled=$false; $rollback.IsEnabled=$false
-        }
         [void]$panels.Integrations.Children.Add($card)
-        $integrationUI[$integrationName]=@{Status=$statusText;Install=$install;Rollback=$rollback;Operation=$operation}
+        $integrationUI[$integrationName]=@{Status=$statusText;Install=$install;Rollback=$rollback;Operation=$operation;Refresh=$refresh}
     }
+    $integrationsTab=@($tabs.Items | Where-Object Header -eq 'Integrations')[0]
+    $tabs.Add_SelectionChanged({param($sender,$eventArgs)
+        if($eventArgs.OriginalSource -ne $tabs -or $tabs.SelectedItem -ne $integrationsTab){return}
+        foreach($card in $integrationUI.Values){
+            try{& $card.Refresh}catch{
+                $card.Status.Text='Status unavailable: '+$_.Exception.Message
+                $card.Install.Content='Status unavailable'; $card.Install.IsEnabled=$false; $card.Rollback.IsEnabled=$false
+            }
+        }
+    }.GetNewClosure())
     . (Join-Path $suite 'Deck.SettingsExtras.ps1')
     $settingsError=New-DeckText '' '#F17D8D'; $settingsError.Margin='0,10,0,0'; $settingsError.FontWeight='SemiBold'; [Windows.Controls.DockPanel]::SetDock($settingsError,'Bottom'); $dock.Children.Insert(0,$settingsError)
     $finishSettingsSave={param($updated)
@@ -1034,10 +1039,19 @@ function Show-DeckSettings {
         }catch{$controls.WarmupModel.ToolTip='Model list unavailable; showing saved choices. Paid-plan warm-up uses low reasoning effort; Free and Go use their Codex-default model.'}
         finally{Dispose-DeckTask $worker; $modelState.Task=$null}
     })
-    try{
+    $startModelDiscovery={
+        if($modelState.Task){return}
+        try{
         $modelAccount=[string]$AccountPicker.SelectedValue
         if(-not $modelAccount -or (Get-DeckPoolEntry $suite $modelAccount)){$modelAccount=@(Get-DeckAccounts | Where-Object { -not (Get-DeckPoolEntry $suite $_) -and (Test-Path -LiteralPath (Join-Path $suite "accounts/$_/auth.json")) })[0]}
         if($modelAccount){$modelState.Task=Start-DeckTask (Get-DeckModelsCode $suite $modelAccount) 'Models' $modelAccount; $modelTimer.Start()}
+        }catch{$controls.WarmupModel.ToolTip='Model list unavailable; showing saved choices.'}
+    }.GetNewClosure()
+    $warmupTab=@($tabs.Items | Where-Object Header -eq 'Checks & Warmup')[0]
+    $tabs.Add_SelectionChanged({param($sender,$eventArgs)
+        if($eventArgs.OriginalSource -eq $tabs -and $tabs.SelectedItem -eq $warmupTab -and -not $modelState.Started){$modelState.Started=$true; & $startModelDiscovery}
+    }.GetNewClosure())
+    try{
         [void]$dialog.ShowDialog()
     }finally{$modelTimer.Stop(); if($modelState.Task){Stop-DeckTask $modelState.Task; Dispose-DeckTask $modelState.Task}}
 }
@@ -1128,7 +1142,8 @@ function Render-Deck {
     foreach ($name in $names) {
         $connected=@($sessions | Where-Object Account -eq $name); $row=$cache[$name]
         $profile=$profiles[$name]
-        $rowKey=($connected.ProcessId -join ',')+'/'+($connected.Folder -join ',')+'/'+$profileStamps[$name]+'/'+($name -in $pins)+'/'+[DateTimeOffset]::Now.ToString('yyyyMMddHHmm')+'/'+$row.Error+'/'+$row.CheckedAt+'/'+$history[$name].Outcome
+        $minuteKey=if($expandedRows[$name] -and $settings.ShowUptime -and $connected.Count){[DateTimeOffset]::Now.ToString('yyyyMMddHHmm')}else{''}
+        $rowKey=($connected.ProcessId -join ',')+'/'+($connected.Folder -join ',')+'/'+$profileStamps[$name]+'/'+($name -in $pins)+'/'+$minuteKey+'/'+$row.Error+'/'+$row.CheckedAt+'/'+$history[$name].Outcome
         $healthKey=[string]$tasks.ContainsKey($name)+'/'+$manualChecks.ContainsKey($name)
         $saved=$rowControls[$name]
         if($saved){
@@ -1483,7 +1498,9 @@ if($SmokeTest -or $Demo){Update-DeckPicker}else{
     if($storageProcess){$storageProcess.Dispose()}
 }
 Set-DeckMode $settings.ViewMode -Initial
-$window.Add_SizeChanged({if(-not $script:sizing){[void]$window.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Loaded,[Action]{Update-DeckWidgetHeight})}})
+$heightTimer=[Windows.Threading.DispatcherTimer]::new(); $heightTimer.Interval=[TimeSpan]::FromMilliseconds(120)
+$heightTimer.Add_Tick({$heightTimer.Stop(); if(-not $script:sizing){Update-DeckWidgetHeight}})
+$window.Add_SizeChanged({if(-not $script:sizing){$heightTimer.Stop();$heightTimer.Start()}})
 $timer=[Windows.Threading.DispatcherTimer]::new(); $timer.Interval=[TimeSpan]::FromSeconds(2)
 $timer.Add_Tick({try{Invoke-DeckTick}catch{$script:notice='Companion error: '+$_.Exception.Message; $StatusLine.Text=$notice}})
 $showTimer=[Windows.Threading.DispatcherTimer]::new(); $showTimer.Interval=[TimeSpan]::FromMilliseconds(250)
@@ -1964,6 +1981,6 @@ try{
     [IO.File]::AppendAllText((Join-Path $root 'errors.log'),([DateTimeOffset]::Now.ToString('o')+"`n"+$_.ToString()+"`n"+$_.ScriptStackTrace+"`n"))
     throw
 }finally{
-    $timer.Stop(); $showTimer.Stop(); if($scheduleRepairTask){Stop-DeckTask $scheduleRepairTask; Dispose-DeckTask $scheduleRepairTask}; foreach($worker in @($tasks.Values)){Stop-DeckTask $worker; Dispose-DeckTask $worker}; $tray.Dispose(); $deckIcon.Dispose()
+    $timer.Stop(); $showTimer.Stop(); $heightTimer.Stop(); if($scheduleRepairTask){Stop-DeckTask $scheduleRepairTask; Dispose-DeckTask $scheduleRepairTask}; foreach($worker in @($tasks.Values)){Stop-DeckTask $worker; Dispose-DeckTask $worker}; $tray.Dispose(); $deckIcon.Dispose()
     if($created){$mutex.ReleaseMutex()}; $mutex.Dispose()
 }
