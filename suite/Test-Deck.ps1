@@ -8,7 +8,7 @@ Assert ($settings.AutoCompactMode -eq 'Native') 'Auto-compact implementation mus
 Assert ($settings.AutoCompactThresholdPercent -eq 55) 'Auto-compact threshold must default to 55%'
 Assert (-not $settings.AutoCompactLaunchEnabled) 'Auto-compact launches must default off'
 Assert ($settings.ContextOptimizer -eq 'Off' -and -not $settings.CodeGraphEnabled -and $settings.CodeGraphProfile -eq 'core') 'Managed integrations must default to off with the small CodeGraph profile'
-Assert (-not $settings.UizzeMcpEnabled) 'Paid UIZZE reference search must be opt-in'
+Assert (-not $settings.Contains('UizzeMcpEnabled')) 'Paid UIZZE reference search must not appear in Deck settings'
 Assert ($settings.AutoCompactHandoffPrompt -match 'DECK_HANDOFF') 'Default handoff prompt must require the checkpoint marker'
 Assert ($settings.AutoCompactHandoffPrompt -eq 'Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.') 'Default handoff prompt is incorrect'
 Assert (-not $settings.TrajectoryEnabled -and -not $settings.ContextManagerEnabled -and $settings.EfficiencyAnalyticsEnabled) 'Trajectory/context must remain opt-in and efficiency analytics must default on'

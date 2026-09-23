@@ -3,13 +3,11 @@ function Assert-DeckCatalogName([string]$Name) {
     Assert-DeckBundledSkillName $Name
 }
 function Get-DeckCatalogFile([string]$SuiteRoot) {
-    $cached=Join-Path $SuiteRoot 'deck/catalog/aas-index.json'
-    if(Test-Path -LiteralPath $cached -PathType Leaf){return $cached}
-    return Join-Path $SuiteRoot 'skill-catalog/aas-index.json'
+    return Join-Path $SuiteRoot 'deck/catalog/aas-index.json'
 }
 function Read-DeckAasCatalog([string]$SuiteRoot) {
     $path=Get-DeckCatalogFile $SuiteRoot
-    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw 'The AAS catalog is missing. Reinstall Codex Deck.'}
+    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw 'The AAS catalog is not installed. Install it in Deck Settings > Integrations, or run deck-skills refresh.'}
     $stamp=(Get-Item -LiteralPath $path).LastWriteTimeUtc.Ticks
     if($script:deckAasCatalogCache -and $script:deckAasCatalogCache.Path -ceq $path -and $script:deckAasCatalogCache.Stamp -eq $stamp){return $script:deckAasCatalogCache.Value}
     $catalog=[IO.File]::ReadAllText($path) | ConvertFrom-Json -ErrorAction Stop

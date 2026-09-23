@@ -5,7 +5,7 @@ $suiteRoot = Join-Path $InstallHome '.codex-loop'
 $binRoot = Join-Path $InstallHome '.local/bin'
 $files = @('Codex-Deck.ps1','Deck.Core.ps1','Deck.Commands.ps1','Deck.WarmupWorker.ps1','Deck.Background.vbs','Deck.ScheduledMessages.ps1','Deck.DelayedMessageWorker.ps1','Deck.ScheduledMessageWorker.ps1','Deck.GlobalRules.ps1','Deck.GlobalRules.cjs','Deck.Integrations.json','Deck.RtkHook.cjs','Deck.Memories.ps1','Deck.AccountResources.ps1','Deck.Storage.ps1','Deck.Environments.ps1','Deck.BundledSkills.ps1','Deck.SkillCatalog.ps1','Deck.EnvironmentSettings.ps1','Deck.SkillSettings.ps1','Deck.AccountTools.ps1','Deck.Failover.ps1','Deck.Failover.cjs','Deck.Terminal.ps1','Deck.Backup.ps1','Deck.Crypto.cs','Deck.SettingsExtras.ps1','Deck.Theme.xaml','Run-CodexLoopUsage.cmd',
     'Test-Deck.ps1','Test-DeckCommands.ps1','Test-DeckEnvironments.ps1','Test-DeckEnvironmentLaunch.ps1','Test-DeckAccountTools.ps1','Test-DeckFailover.ps1','Test-DeckScheduler.ps1','Test-DeckStorage.ps1','Test-DeckBackup.ps1','Test-CodexAuth.ps1','Test-CodexLoopUsage.ps1',
-    'Test-DeckBundledSkills.ps1','Test-DeckSkillCatalog.ps1','Test-DeckScheduledMessages.ps1','deck/assets/codex-deck.png','deck/assets/codex-deck.ico','skill-catalog/aas-index.json','skills/debug-swarm/SKILL.md','skills/debug-swarm/agents/openai.yaml','skills/debug-swarm/.codexdeck.json')
+    'Test-DeckBundledSkills.ps1','Test-DeckSkillCatalog.ps1','Test-DeckScheduledMessages.ps1','deck/assets/codex-deck.png','deck/assets/codex-deck.ico','skills/debug-swarm/SKILL.md','skills/debug-swarm/agents/openai.yaml','skills/debug-swarm/.codexdeck.json')
 $files += @(foreach($skillName in @('ui-design','anti-ui-slop','ui-radar')){
     $directory=Join-Path $PSScriptRoot "suite/skills/$skillName"
     foreach($file in Get-ChildItem -LiteralPath $directory -Recurse -File -Force){
@@ -47,6 +47,14 @@ if(-not $hasSchedulingChoice){
         $warmupSettings.WarmupSchedulingEnabled=$true
         Write-DeckJson (Join-Path $suiteRoot 'deck/settings.json') $warmupSettings
     }
+}
+$legacyAasIndex=Join-Path $suiteRoot 'skill-catalog/aas-index.json'
+$managedAasIndex=Join-Path $suiteRoot 'deck/catalog/aas-index.json'
+if(Test-Path -LiteralPath $legacyAasIndex -PathType Leaf){
+    if(-not (Test-Path -LiteralPath $managedAasIndex -PathType Leaf)){
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $managedAasIndex))
+        Move-Item -LiteralPath $legacyAasIndex -Destination $managedAasIndex
+    }else{Remove-Item -LiteralPath $legacyAasIndex}
 }
 Sync-DeckWarmupStartup $suiteRoot $warmupSettings
 if (!$SkipPath) {

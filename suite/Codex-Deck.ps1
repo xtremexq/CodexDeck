@@ -694,12 +694,12 @@ function Show-DeckSettings {
         Details=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
         Compaction=@('AutoCompactMode','AutoCompactThresholdPercent','AutoCompactHandoffPrompt')
-        Integrations=@('ContextOptimizer','CodeGraphEnabled','CodeGraphProfile','BrowserHarnessEnabled','UizzeMcpEnabled')
+        Integrations=@('ContextOptimizer','CodeGraphEnabled','CodeGraphProfile','BrowserHarnessEnabled')
         Trajectory=@('TrajectoryEnabled','ContextManagerEnabled','ContextManagerAutoOpen','ContextManagerProtected')
         Efficiency=@('EfficiencyAnalyticsEnabled','EfficiencySessionLimit')
         'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupPlanTypes','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
     }
-    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Compaction='Press C in the codex-auth dashboard to opt in for a launch. Native uses Codex automatic compaction. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 55% means compaction starts at 45% used. Account, pool and failover conversations are supported.';Integrations='Optional, Deck-managed tools. Nothing is downloaded until you enable and save it or press Install. RTK and Headroom are exclusive optimizer modes; CodeGraph is independent. Updates are explicit, versioned and reversible.';Trajectory='Opt-in local trajectory inspection. The context manager is a related live control surface: it filters the next model request through Deck''s normal loopback route, including failover and auto-compaction. Raw rollout history stays unchanged. Direct launches remain view-only.';Efficiency='Independent opt-in efficiency analysis inspired by PrismoDev. It measures repeated commands and paths, large tool results, token/cache patterns and compaction activity. It does not enable or depend on the trajectory/context manager.';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
+    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Compaction='Press C in the codex-auth dashboard to opt in for a launch. Native uses Codex automatic compaction. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 55% means compaction starts at 45% used. Account, pool and failover conversations are supported.';Integrations='Optional tools and catalogs. Install or update the AAS index here, then choose individual skills in Skills. Browser Harness has a separate account-sharing switch because an installed CLI does not add its skill to every account.';Trajectory='Opt-in local trajectory inspection. The context manager is a related live control surface: it filters the next model request through Deck''s normal loopback route, including failover and auto-compaction. Raw rollout history stays unchanged. Direct launches remain view-only.';Efficiency='Independent opt-in efficiency analysis inspired by PrismoDev. It measures repeated commands and paths, large tool results, token/cache patterns and compaction activity. It does not enable or depend on the trajectory/context manager.';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
     $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupPlanTypes='Account types (select one or more)';WarmupAccounts='Specific accounts (optional with account types; select one or more)';WarmupModel='Paid-plan model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
     $labels.AutoCompactMode='Auto-compact implementation'
     $labels.AutoCompactThresholdPercent='Auto-compact when context remaining (%)'
@@ -708,8 +708,7 @@ function Show-DeckSettings {
     $labels.ContextOptimizer='Context optimizer'
     $labels.CodeGraphEnabled='Enable CodeGraph for new conversations (indexes their start folder)'
     $labels.CodeGraphProfile='CodeGraph tool profile'
-    $labels.BrowserHarnessEnabled='Enable Browser Harness for new conversations'
-    $labels.UizzeMcpEnabled='Enable UIZZE reference search (paid MCP; requires UIZZE_AGENT_TOKEN)'
+    $labels.BrowserHarnessEnabled='Add Browser Harness skill to codex-auth accounts'
     $labels.TrajectoryEnabled='Enable local trajectory viewer'
     $labels.ContextManagerEnabled='Enable live context suppression and editing for new conversations'
     $labels.ContextManagerAutoOpen='Automatically open Live Context when opening accounts'
@@ -819,6 +818,11 @@ function Show-DeckSettings {
             $control.Margin='0,0,10,16'; $control.MinHeight=34
         }
         $controls[$key]=$control; [void]$panel.Children.Add($control)
+        if($key -eq 'BrowserHarnessEnabled'){
+            $control.ToolTip='On: Deck links its Browser Harness skill into each account when launched. Off: Deck removes only links it created; user-owned skills remain available.'
+            $note=New-DeckText 'The CLI can be installed without sharing its skill. An account that already owns this skill can use it regardless of this switch.' '#929CA4' 11
+            $note.Margin='0,-9,0,16';[void]$panel.Children.Add($note)
+        }
         if($key -eq 'DashboardTheme'){
             $themeDescriptions=@{Default='Original dashboard layout';Focus='Selected account first, then a compact roster';Cards='Two-line cards with quota bars';Ledger='Dense table for comparing many accounts';Split='Accounts and selected details side by side'}
             $themeNote=New-DeckText $themeDescriptions[[string]$control.SelectedItem] '#929CA4'
@@ -834,15 +838,19 @@ function Show-DeckSettings {
     $controls.AutoCompactMode.Add_SelectionChanged({& $updateCompactModeVisibility}.GetNewClosure())
     & $updateCompactModeVisibility
     $integrationUI=@{}
-    foreach($integrationName in @('rtk','headroom','codegraph','browser_harness')){
+    foreach($integrationName in @('rtk','headroom','codegraph','browser_harness','aas_catalog')){
         $component=Get-DeckIntegrationComponent $suite $integrationName
         $card=[Windows.Controls.Border]::new(); $card.Padding='12'; $card.Margin='0,2,10,12'; $card.CornerRadius='7'; $card.Background='#171C1F'; $card.BorderBrush='#2B343A'; $card.BorderThickness='1'
         $body=[Windows.Controls.StackPanel]::new(); $card.Child=$body
         $title=New-DeckText ([string]$component.displayName) '#A9E8D5' 14; [void]$body.Children.Add($title)
+        if($integrationName -eq 'aas_catalog'){
+            $note=New-DeckText 'Installs only the searchable index. Pick skills in the Skills tab; no AAS skills are installed automatically.' '#929CA4' 11
+            $note.Margin='0,5,0,0';[void]$body.Children.Add($note)
+        }
         $statusText=New-DeckText '' '#929CA4'; $statusText.Margin='0,4,0,9'; [void]$body.Children.Add($statusText)
         $row=[Windows.Controls.WrapPanel]::new(); [void]$body.Children.Add($row)
         $install=[Windows.Controls.Button]::new(); $install.Padding='10,6'; $install.Margin='0,0,8,0'; [void]$row.Children.Add($install)
-        $rollback=[Windows.Controls.Button]::new(); $rollback.Content='Roll back'; $rollback.Padding='10,6'; if($integrationName -ne 'browser_harness'){[void]$row.Children.Add($rollback)}
+        $rollback=[Windows.Controls.Button]::new(); $rollback.Content='Roll back'; $rollback.Padding='10,6'; if($integrationName -notin @('browser_harness','aas_catalog')){[void]$row.Children.Add($rollback)}
         $refresh={
             $local=Get-DeckIntegrationStatus $suite $integrationName
             $statusText.Text=if($local.Valid){"Installed $($local.Version) · $($local.License) · updates only on request"}else{'Not installed · no files are downloaded while disabled'}
@@ -1519,11 +1527,13 @@ try{
         if ($settingsTest.Controls.TrajectoryEnabled.IsChecked -or $settingsTest.Controls.ContextManagerEnabled.IsChecked -or $settingsTest.Controls.ContextManagerAutoOpen.IsChecked -or -not $settingsTest.Controls.EfficiencyAnalyticsEnabled.IsChecked) { throw 'Trajectory/context defaults or enabled-by-default efficiency analytics are incorrect.' }
         if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '600') { throw 'Efficiency analytics session limit default failed.' }
         if ($headers -notcontains 'Skills' -or -not $settingsTest.Skills.State.Controls.ContainsKey('debug-swarm') -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked) { throw 'Globally enabled Deck skills Settings tab missing or invalid.' }
-        if(-not $settingsTest.Controls.ContainsKey('UizzeMcpEnabled') -or $settingsTest.Controls.UizzeMcpEnabled.IsChecked){throw 'UIZZE MCP must be separately opt-in.'}
+        if($settingsTest.Controls.ContainsKey('UizzeMcpEnabled') -or -not $settingsTest.Integrations.ContainsKey('aas_catalog')){throw 'Integrations must show optional AAS catalog without paid UIZZE MCP.'}
         $catalogOpenWatch=[Diagnostics.Stopwatch]::StartNew()
         $settingsTest.Tabs.SelectedItem=@($settingsTest.Tabs.Items | Where-Object Header -eq 'Skills')[0]
         $catalogOpenWatch.Stop()
         if($catalogOpenWatch.ElapsedMilliseconds -gt 500){throw 'Opening Skills blocked the UI thread.'}
+        $catalogUI=$settingsTest.Skills.Catalog
+        if(Test-Path -LiteralPath (Get-DeckCatalogFile $suite) -PathType Leaf){
         $catalogDeadline=[DateTimeOffset]::UtcNow.AddSeconds(12)
         while($settingsTest.Skills.Catalog.Results.Items.Count -lt 1 -and [DateTimeOffset]::UtcNow -lt $catalogDeadline){
             $frame=[Windows.Threading.DispatcherFrame]::new()
@@ -1532,7 +1542,6 @@ try{
             [Windows.Threading.Dispatcher]::PushFrame($frame);$pump.Stop()
         }
         if($settingsTest.Skills.Catalog.Results.Items.Count -lt 1 -or -not $settingsTest.Skills.Catalog.Search -or -not $settingsTest.Skills.Catalog.Refresh){throw 'Native AAS skill catalog did not load in Skills settings.'}
-        $catalogUI=$settingsTest.Skills.Catalog
         if(-not $catalogUI.Next.IsEnabled -or $catalogUI.PageLabel.Text -notlike 'Page 1 of *'){throw 'AAS catalog pagination is unavailable.'}
         $firstSkillId=[string]$catalogUI.Results.Items[0].Tag.id
         $catalogUI.Next.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
@@ -1546,6 +1555,9 @@ try{
         if($catalogUI.PageLabel.Text -notlike 'Page 2 of *' -or $catalogUI.Results.Items.Count -lt 1 -or [string]$catalogUI.Results.Items[0].Tag.id -ceq $firstSkillId -or -not $catalogUI.Previous.IsEnabled){throw 'AAS catalog did not advance to the next page.'}
         $settingsTest.Skills.Catalog.Results.SelectedIndex=0
         if(-not $settingsTest.Skills.Catalog.Install.IsEnabled){throw 'AAS catalog selection did not enable direct installation.'}
+        }elseif($catalogUI.Results.Items.Count -ne 0 -or $catalogUI.Refresh.Content -ne 'Install catalog'){
+            throw 'Uninstalled AAS catalog must remain empty with an install action.'
+        }
         $environmentUI=$settingsTest.Environment
         if($environmentUI.Name.Text -ne 'pool' -or $environmentUI.Name.SelectedItem -ne 'pool'){throw 'Environment picker did not select its default pool.'}
         [void]$environmentUI.Name.ApplyTemplate(); $environmentEditor=$environmentUI.Name.Template.FindName('PART_EditableTextBox',$environmentUI.Name)

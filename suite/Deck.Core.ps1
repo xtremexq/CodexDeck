@@ -40,7 +40,7 @@ function Get-DeckDefaults {
         FailoverEnabled=$false; FailoverMode='Ordered'; FailoverAccounts=''
         AutoCompactLaunchEnabled=$false; AutoCompactMode='Native'; AutoCompactThresholdPercent=55
         AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.'
-        ContextOptimizer='Off'; CodeGraphEnabled=$false; CodeGraphProfile='core'; BrowserHarnessEnabled=$false; UizzeMcpEnabled=$false
+        ContextOptimizer='Off'; CodeGraphEnabled=$false; CodeGraphProfile='core'; BrowserHarnessEnabled=$false
         TrajectoryEnabled=$false; ContextManagerEnabled=$false; ContextManagerAutoOpen=$false; ContextManagerProtected=$false
         EfficiencyAnalyticsEnabled=$true; EfficiencySessionLimit=600; EfficiencyLimitVersion=3
     }

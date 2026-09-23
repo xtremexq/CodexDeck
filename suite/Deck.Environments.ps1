@@ -183,14 +183,19 @@ function Write-DeckIntegrationState([string]$SuiteRoot,$State) {
         if([IO.File]::Exists($path)){[IO.File]::Replace($temporary,$path,[System.Management.Automation.Language.NullString]::Value)}else{[IO.File]::Move($temporary,$path)}
     }finally{if([IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}}
 }
-function Get-DeckIntegrationComponent([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness')][string]$Name) {
+function Get-DeckIntegrationComponent([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness','aas_catalog')][string]$Name) {
     $catalog=Get-DeckIntegrationCatalog $SuiteRoot
     $component=$catalog.components.$Name
     if(-not $component){throw "Unknown Deck integration: $Name"}
     return $component
 }
-function Get-DeckIntegrationStatus([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness')][string]$Name) {
+function Get-DeckIntegrationStatus([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness','aas_catalog')][string]$Name) {
     $component=Get-DeckIntegrationComponent $SuiteRoot $Name
+    if($Name -eq 'aas_catalog'){
+        $path=Join-Path $SuiteRoot 'deck/catalog/aas-index.json'
+        $valid=Test-Path -LiteralPath $path -PathType Leaf
+        return [pscustomobject]@{Name=$Name;DisplayName=$component.displayName;Installed=$valid;Valid=$valid;Version='catalog index';Executable=$path;Versions=@();ProjectUrl=$component.projectUrl;License=$component.license}
+    }
     if($Name -eq 'browser_harness'){
         $command=Get-Command browser-harness -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         $executable=if($command){[string]$command.Source}else{''}
@@ -263,8 +268,13 @@ function Stop-DeckBrowserHarnessDaemonForUpdate([string]$UvExecutable,[string]$B
     foreach($daemon in $daemons){Stop-Process -Id $daemon.ProcessId -Force -ErrorAction Stop}
     if($daemons.Count){Start-Sleep -Milliseconds 500}
 }
-function Install-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness')][string]$Name,[switch]$Update) {
+function Install-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness','aas_catalog')][string]$Name,[switch]$Update) {
     $component=Get-DeckIntegrationComponent $SuiteRoot $Name
+    if($Name -eq 'aas_catalog'){
+        if(-not $Update -and (Get-DeckIntegrationStatus $SuiteRoot $Name).Valid){return Get-DeckIntegrationStatus $SuiteRoot $Name}
+        Update-DeckAasCatalog $SuiteRoot | Out-Null
+        return Get-DeckIntegrationStatus $SuiteRoot $Name
+    }
     if($Name -eq 'browser_harness'){
         $existing=Get-DeckIntegrationStatus $SuiteRoot $Name
         if($existing.Valid -and -not $Update){return $existing}
@@ -437,12 +447,6 @@ function Get-DeckIntegrationLaunch([string]$SuiteRoot,$Settings) {
         $definition=@{command=$status.Executable;args=@('--mcp','--profile',$profile);startup_timeout_sec=30;tool_timeout_sec=120}
         $arguments+=@('-c',('mcp_servers.deck_codegraph='+(ConvertTo-DeckTomlValue $definition)))
         $sections+='Deck Code Intelligence: Prefer deck_codegraph for repository discovery and relationship queries when it avoids broad file reads or repeated searches. Verify exact source before editing.'
-    }
-    if($Settings.UizzeMcpEnabled){
-        if(-not $env:UIZZE_AGENT_TOKEN){throw 'UIZZE reference search is enabled. Set UIZZE_AGENT_TOKEN in the launcher environment and restart Deck, or turn off the UIZZE MCP setting.'}
-        $definition=@{url='https://uizze.com/mcp';bearer_token_env_var='UIZZE_AGENT_TOKEN';startup_timeout_sec=20;tool_timeout_sec=60}
-        $arguments+=@('-c',('mcp_servers.deck_uizze='+(ConvertTo-DeckTomlValue $definition)))
-        $sections+='UIZZE references: Use deck_uizze only for a concrete UI design question. Reuse this product''s components and visual language; do not retry an empty reference result.'
     }
     return [pscustomobject]@{Arguments=@($arguments);InstructionSections=@($sections);Environment=$environment}
 }

@@ -39,6 +39,13 @@
       "executable": "browser-harness.exe",
       "license": "MIT",
       "projectUrl": "https://github.com/browser-use/browser-harness"
+    },
+    "aas_catalog": {
+      "displayName": "Agentic Awesome Skills catalog",
+      "provider": "github-index",
+      "repository": "sickn33/agentic-awesome-skills",
+      "license": "Per-skill licenses",
+      "projectUrl": "https://github.com/sickn33/agentic-awesome-skills"
     }
   }
 }

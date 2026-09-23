@@ -1,9 +1,9 @@
 ﻿$ErrorActionPreference='Stop'
 $fixture=Join-Path ([IO.Path]::GetTempPath()) ('deck-catalog-test-'+[guid]::NewGuid().ToString('N'))
 try{
-    [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'skill-catalog'))
+    [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'deck/catalog'))
     [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'skills'))
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'skill-catalog/aas-index.json') -Destination (Join-Path $fixture 'skill-catalog/aas-index.json')
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'skill-catalog/aas-index.json') -Destination (Join-Path $fixture 'deck/catalog/aas-index.json')
     . (Join-Path $PSScriptRoot 'Deck.Environments.ps1')
     . (Join-Path $PSScriptRoot 'Deck.BundledSkills.ps1')
     . (Join-Path $PSScriptRoot 'Deck.SkillCatalog.ps1')

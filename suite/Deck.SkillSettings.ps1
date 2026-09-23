@@ -53,7 +53,7 @@ if($deckSkillTarget.Items.Count){$deckSkillTarget.SelectedIndex=0}
 
 $catalogDivider=[Windows.Controls.Border]::new(); $catalogDivider.BorderBrush='#303A42'; $catalogDivider.BorderThickness='0,1,0,0'; $catalogDivider.Margin='0,16,0,14'; [void]$deckSkillPanel.Children.Add($catalogDivider)
 [void]$deckSkillPanel.Children.Add((New-DeckText 'Agentic Awesome Skills catalog' '#EDF1F7' 18))
-$catalogHelp=New-DeckText 'Search the full AAS catalog locally. Install only the skills you choose; Deck makes each selected skill available to all accounts and pools. Review the risk and setup notes before installing.' '#929CA4' 11
+$catalogHelp=New-DeckText 'Install or update the AAS index in Integrations, then search it here. Install only the skills you choose; Deck makes each selected skill available to all accounts and pools.' '#929CA4' 11
 $catalogHelp.Margin='0,7,0,13'; [void]$deckSkillPanel.Children.Add($catalogHelp)
 [void]$deckSkillPanel.Children.Add((New-DeckText 'Find a skill' '#A2ADB5' 11))
 $catalogSearch=[Windows.Controls.TextBox]::new(); $catalogSearch.Margin='0,0,0,8'; $catalogSearch.ToolTip='Search names, descriptions, categories and tags'; [void]$deckSkillPanel.Children.Add($catalogSearch)
@@ -77,6 +77,13 @@ $catalogState=@{Loaded=$false;Busy=$false;Task=$null;Mode='';Selected=$null;Sear
 $catalogPoll=[Windows.Threading.DispatcherTimer]::new(); $catalogPoll.Interval=[TimeSpan]::FromMilliseconds(200)
 $renderCatalog={
     if($catalogState.Closed -or $catalogState.Busy){return}
+    if(-not (Test-Path -LiteralPath (Get-DeckCatalogFile $suite) -PathType Leaf)){
+        $catalogStatus.Text='AAS catalog not installed. Use Install catalog here or in Integrations.'
+        $catalogRefresh.Content='Install catalog';$catalogRefresh.IsEnabled=$true
+        $catalogResults.Items.Clear();$catalogPrevious.IsEnabled=$false;$catalogNext.IsEnabled=$false;$catalogPageGo.IsEnabled=$false;$catalogPageInput.IsEnabled=$false
+        return
+    }
+    $catalogRefresh.Content='Refresh catalog'
     $category=if($catalogCategory.SelectedIndex -gt 0){[string]$catalogCategory.SelectedItem}else{''}
     $risk=if($catalogRisk.SelectedIndex -gt 0){[string]$catalogRisk.SelectedItem}else{''}
     $query=[string]$catalogSearch.Text
