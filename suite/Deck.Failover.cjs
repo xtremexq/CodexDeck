@@ -97,60 +97,82 @@ function stableJson(value) {
 }
 function contextText(value) {
   if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(contextText).filter(Boolean).join('\n');
   if (!value || typeof value !== 'object') return '';
-  if (typeof value.text === 'string') return value.text;
-  if (typeof value.output === 'string') return value.output;
-  if (typeof value.arguments === 'string') return value.arguments;
-  if (typeof value.content === 'string') return value.content;
-  if (Array.isArray(value.content)) return value.content.map(contextText).filter(Boolean).join('\n');
+  for (const field of ['text','output','arguments','input','content','summary']) {
+    if (value[field] != null) { const content=contextText(value[field]); if (content) return content; }
+  }
   return '';
+}
+function hasContextText(value) {
+  if (typeof value === 'string') return true;
+  if (Array.isArray(value)) return value.some(hasContextText);
+  if (!value || typeof value !== 'object') return false;
+  return ['text','output','arguments','input','content'].some(field => value[field] != null && hasContextText(value[field]));
+}
+function replaceTextValue(value, replacement, used = {value:false}) {
+  if (typeof value === 'string') { const result=used.value ? '' : replacement; used.value=true; return result; }
+  if (Array.isArray(value)) return value.map(part => replaceTextValue(part,replacement,used));
+  if (!value || typeof value !== 'object') return value;
+  const copy={...value};
+  for (const field of ['text','output','arguments','input','content']) {
+    if (copy[field] != null && contextText(copy[field]) && hasContextText(copy[field])) { copy[field]=replaceTextValue(copy[field],replacement,used); return copy; }
+  }
+  for (const field of ['text','output','arguments','input','content']) {
+    if (copy[field] != null && hasContextText(copy[field])) { copy[field]=replaceTextValue(copy[field],replacement,used); break; }
+  }
+  return copy;
 }
 function contextEntries(parsed) {
   const input = Array.isArray(parsed?.input) ? parsed.input : parsed?.input == null ? [] : [parsed.input];
+  const sources = [];
+  if (typeof parsed?.instructions === 'string') sources.push({source:'instructions',item:parsed.instructions});
+  if (Array.isArray(parsed?.tools)) parsed.tools.forEach((item,toolIndex) => sources.push({source:'tools',toolIndex,item}));
+  input.forEach((item,inputIndex) => sources.push({source:'input',inputIndex,item}));
   const seen = new Map();
-  return input.map((item, index) => {
+  return sources.map(({source,toolIndex,inputIndex,item}, index) => {
     const serialized = stableJson(item);
-    const hash = crypto.createHash('sha256').update(serialized).digest('hex').slice(0, 24);
+    const hash = crypto.createHash('sha256').update(source+':'+serialized).digest('hex').slice(0, 24);
     const occurrence = seen.get(hash) || 0; seen.set(hash, occurrence + 1);
     const object = item && typeof item === 'object' ? item : {};
-    const role = typeof object.role === 'string' ? object.role : null;
-    const type = typeof object.type === 'string' ? object.type : typeof item === 'string' ? 'input_text' : 'item';
+    const role = source === 'instructions' ? 'system' : typeof object.role === 'string' ? object.role : null;
+    const type = source === 'instructions' ? 'instructions' : source === 'tools' ? 'tool_definition' : typeof object.type === 'string' ? object.type : typeof item === 'string' ? 'input_text' : 'item';
     const callId = object.call_id || object.callId || null;
-    const content = contextText(item);
-    const protectedItem = ['system','developer'].includes(role) || type === 'reasoning' || Boolean(object.encrypted_content);
-    const editable = typeof item === 'string' || type === 'message' || typeof object.output === 'string' || typeof object.arguments === 'string' ||
-      typeof object.content === 'string' || (Array.isArray(object.content) && object.content.some(part => part && typeof part.text === 'string'));
-    return { key:`${hash}:${occurrence}`, index, type, role, name:object.name || null, callId, text:content,
-      preview:content.slice(0, 420), chars:content.length || serialized.length, tokens:Math.ceil((content.length || serialized.length) / 4),
+    const content = source === 'tools' ? JSON.stringify(item,null,2) : contextText(item);
+    const protectedItem = source === 'tools' || ['system','developer'].includes(role) || type === 'reasoning' || Boolean(object.encrypted_content);
+    const editable = source !== 'tools' && type !== 'reasoning' && hasContextText(item);
+    const opaque = !content && (object.encrypted_content ? 'Encrypted reasoning; plaintext is unavailable' : 'No displayable text in this item');
+    return { key:`${hash}:${occurrence}`, index, source, toolIndex, inputIndex, type, role, name:object.name || null, callId, text:content,
+      preview:content.slice(0, 420) || opaque, chars:content.length || serialized.length, tokens:Math.ceil((content.length || serialized.length) / 4),
       protected:protectedItem, editable, raw:item };
   });
 }
 function replaceContextText(item, replacement) {
-  if (typeof item === 'string') return replacement;
-  const copy = JSON.parse(JSON.stringify(item));
-  if (typeof copy.output === 'string') copy.output = replacement;
-  else if (typeof copy.arguments === 'string') copy.arguments = replacement;
-  else if (typeof copy.content === 'string') copy.content = replacement;
-  else if (Array.isArray(copy.content)) {
-    const parts = copy.content.filter(value => value && typeof value.text === 'string');
-    if (parts.length) { parts[0].text = replacement; for (const part of parts.slice(1)) part.text = ''; }
-  }
-  return copy;
+  return replaceTextValue(item, replacement);
 }
 function projectContext(parsed, rules, allowProtected) {
   const entries = contextEntries(parsed);
-  const projected = [];
+  const projected = [], tools = [];
+  let instructions = parsed.instructions;
   for (const entry of entries) {
     const rule = rules.get(entry.key);
     const usable = !rule || !entry.protected || allowProtected;
     entry.suppressed = Boolean(usable && rule?.action === 'suppress');
     entry.edited = Boolean(usable && rule?.action === 'edit');
     if (entry.suppressed) continue;
-    projected.push(entry.edited ? replaceContextText(entry.raw, rule.text) : entry.raw);
+    const value=entry.edited ? replaceContextText(entry.raw, rule.text) : entry.raw;
+    if (entry.source === 'instructions') instructions=value;
+    else if (entry.source === 'tools') tools.push(value);
+    else projected.push(value);
   }
   const output = JSON.parse(JSON.stringify(parsed));
   if (Array.isArray(parsed.input)) output.input = projected;
   else if (parsed.input != null) output.input = projected[0] ?? '';
+  if (typeof parsed.instructions === 'string') {
+    if (entries.some(entry=>entry.source==='instructions'&&entry.suppressed)) delete output.instructions;
+    else output.instructions=instructions;
+  }
+  if (Array.isArray(parsed.tools)) output.tools=tools;
   const effective = contextEntries(output);
   const rawTokens = entries.reduce((sum, entry) => sum + entry.tokens, 0);
   const effectiveTokens = effective.reduce((sum, entry) => sum + entry.tokens, 0);
@@ -368,6 +390,7 @@ async function createProxy(config, dependencies = {}) {
           parsed = projection.output;
           body = Buffer.from(JSON.stringify(parsed));
           contextSnapshot = { version:1, revision:contextSnapshot.revision+1, enabled:true, protectedChanges:allowProtected, threadId:contextThread, capturedAt:new Date(now()).toISOString(), requestPath:routePath, model:typeof parsed.model==='string' ? parsed.model : null,
+            hasServerHistory:Boolean(parsed.previous_response_id || projection.entries.some(entry=>entry.type==='item_reference')),
             raw:projection.entries.map(({raw,...entry}) => entry), effective:projection.effective.map(({raw,...entry}) => entry),
             rawTokens:projection.rawTokens, effectiveTokens:projection.effectiveTokens, savedTokens:Math.max(0, projection.rawTokens - projection.effectiveTokens), rules:[] };
         }

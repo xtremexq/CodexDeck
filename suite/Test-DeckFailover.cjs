@@ -6,10 +6,39 @@ const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { once } = require('node:events');
-const { createProxy, rank, quotaRejected } = require('./Deck.Failover.cjs');
+const { createProxy, rank, quotaRejected, contextEntries, projectContext } = require('./Deck.Failover.cjs');
 const quota = JSON.stringify({error:{type:'usage_limit_reached'}});
 const row = (pct, age = 0) => ({Status:'available', CheckedAt:new Date(Date.now()-age).toISOString(), Windows:[{RemainingPct:pct}]});
 async function main() {
+  const realShape={instructions:'Follow the system rules',tools:[{type:'custom',name:'exec',description:'Run code'}],input:[
+    {type:'custom_tool_call',name:'exec',call_id:'call-real',input:'const result = await tools.exec_command({cmd:"rg TODO"});'},
+    {type:'custom_tool_call_output',call_id:'call-real',output:[{type:'input_text',text:'Ran rg TODO'},{type:'input_text',text:'match one\nmatch two'}]},
+    {type:'reasoning',summary:[],encrypted_content:'encrypted-only'}
+  ]};
+  const realEntries=contextEntries(realShape);
+  assert.equal(realEntries.length,5,'Instructions and tool definitions must appear alongside the input history');
+  assert.equal(realEntries[2].text,realShape.input[0].input,'Custom tool code must be visible');
+  assert.equal(realEntries[3].text,'Ran rg TODO\nmatch one\nmatch two','All custom tool output blocks must be visible');
+  assert.equal(realEntries[3].editable,true,'Text-block tool results must support editing');
+  assert.match(realEntries[4].preview,/Encrypted reasoning/,'Encrypted reasoning must be identified honestly');
+  assert.equal(realEntries[4].editable,false);
+  const fallbackEntry=contextEntries({input:[{type:'message',output:[],content:[{type:'input_text',text:'Visible after empty output'}]}]})[0];
+  assert.equal(fallbackEntry.text,'Visible after empty output','An empty earlier field must not hide later text');
+  assert.equal(projectContext({input:[fallbackEntry.raw]},new Map([[fallbackEntry.key,{action:'edit',text:'Replacement'}]]),false).output.input[0].content[0].text,'Replacement');
+  const editRules=new Map([[realEntries[3].key,{action:'edit',text:'short result'}]]);
+  const edited=projectContext(realShape,editRules,false).output;
+  assert.equal(edited.input[1].output[0].text,'short result');
+  assert.equal(edited.input[1].output[1].text,'');
+  assert.equal(realShape.input[1].output[1].text,'match one\nmatch two','Projection must leave the original request intact');
+  const suppressed=projectContext(realShape,new Map([[realEntries[2].key,{action:'suppress'}],[realEntries[3].key,{action:'suppress'}]]),false).output;
+  assert.deepEqual(suppressed.input.map(item=>item.type),['reasoning']);
+  assert.equal(suppressed.instructions,realShape.instructions);
+  assert.equal(suppressed.tools.length,1);
+  const protectedRules=new Map([[realEntries[0].key,{action:'suppress'}],[realEntries[1].key,{action:'suppress'}]]);
+  assert.equal(projectContext(realShape,protectedRules,false).output.instructions,realShape.instructions,'Protected request fields must remain without override');
+  const overridden=projectContext(realShape,protectedRules,true).output;
+  assert.equal('instructions' in overridden,false,'Advanced suppression must remove top-level instructions');
+  assert.equal(overridden.tools.length,0,'Advanced suppression must remove the selected tool definition');
   assert.deepEqual(rank(['a','b','c'], {a:row(30),b:row(80),c:row(90,310000)}), ['b','a']);
   assert.equal(quotaRejected(429,quota),true);
   for (const [status,body,expected] of [[401,quota,false],[500,quota,false],[429,'{"error":{"type":"rate_limit_exceeded"}}',true],[429,'invalid',false]]) assert.equal(quotaRejected(status,body),expected);

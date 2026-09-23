@@ -5,9 +5,16 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { walkSessions, scanSession, timelineChunk, efficiency, createInspector } = require('./Deck.Inspector.cjs');
+const { walkSessions, scanSession, timelineChunk, efficiency, createInspector, normalize } = require('./Deck.Inspector.cjs');
 
 async function main() {
+  const toolCall=normalize({type:'response_item',payload:{type:'custom_tool_call',name:'exec',input:'await tools.exec_command({cmd:"rg TODO"})'}},1);
+  const toolResult=normalize({type:'response_item',payload:{type:'custom_tool_call_output',output:[{type:'input_text',text:'first block'},{type:'input_text',text:'second block'}]}},2);
+  const reasoning=normalize({type:'response_item',payload:{type:'reasoning',summary:[],encrypted_content:'opaque'}},3);
+  assert.match(toolCall.text,/rg TODO/);
+  assert.equal(toolResult.text,'first block\nsecond block');
+  assert.match(reasoning.text,/Encrypted reasoning/);
+  assert.equal(normalize({type:'response_item',payload:{type:'message',output:[],content:[{type:'input_text',text:'Visible after empty output'}]}},4).text,'Visible after empty output');
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'codexdeck-inspector-'));
   const deck=path.join(root,'deck'), sessions=path.join(root,'accounts','account1','sessions','2026','09','22');
   const settingsFile=path.join(deck,'settings.json'), stateFile=path.join(deck,'inspector.json');
@@ -78,6 +85,8 @@ async function main() {
     assert.match(companionHtml,/Live Context/);assert.match(companionHtml,/Full studio/);assert.match(companionHtml,/content-visibility:auto/);assert.match(companionHtml,/&since=/);assert.match(companionHtml,/Suppress this item from the next request/);assert.match(companionHtml,/Edit model-visible content/);
     assert.match(companionHtml,/Follow new/);assert.match(companionHtml,/deck\.context\.follow/);assert.match(companionHtml,/card\.append\(actions,body,remove\)/,'Edit must appear to the left of Suppress');
     assert.match(companionHtml,/Context free ≈/);assert.match(companionHtml,/Auto-compact/);assert.match(companionHtml,/renderedEnd/);
+    assert.ok(companionHtml.indexOf('class="context-signals"')<companionHtml.indexOf('class="signals" aria-label="Account quotas"'),'Context and compaction must be above the quota divider');
+    assert.match(companionHtml,/item\?\.text\|\|item\?\.preview/,'Expanded cards must use full captured text');
     const proxySecret='b'.repeat(64), markerFile=path.join(liveDirectory,'newer.json');
     proxy=http.createServer((request,result)=>{
       assert.equal(request.url,`/${proxySecret}/_deck/context`);
