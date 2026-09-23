@@ -69,7 +69,7 @@ Assert (-not $settings.WarmupSchedulingEnabled) 'Background warm-up scheduling m
 Assert (-not $settings.AlwaysOnTop) 'Always on top must default off'
 Assert ($settings.ViewMode -eq 'Widget') 'Widget must be default'
 Assert ($settings.DashboardTheme -eq 'Default') 'Terminal dashboard theme must default to the original layout'
-Assert ($settings.Width -eq 476 -and $settings.WidgetWidth -eq 238 -and $settings.Height -eq 0 -and $settings.WidgetHeight -eq 0) 'Content-based geometry defaults failed'
+Assert ($settings.Width -eq 400 -and $settings.WidgetWidth -eq 238 -and $settings.Height -eq 0 -and $settings.WidgetHeight -eq 0) 'Content-based geometry defaults failed'
 $recoverySuite=Join-Path $fixture 'recovery-suite'
 $recoveryAccount=Join-Path $recoverySuite 'accounts/account1'
 [void][IO.Directory]::CreateDirectory($recoveryAccount)

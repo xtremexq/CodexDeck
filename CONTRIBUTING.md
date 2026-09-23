@@ -24,10 +24,17 @@ For changes to window lifetime, also run `powershell.exe -NoProfile -STA -File .
 Regenerate the desktop screenshot from the committed code using synthetic state:
 
 ```powershell
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File ./suite/Codex-Deck.ps1 -SmokeTest -PreviewMode Panel -PreviewExpanded -ScreenshotPath "$PWD/docs/panel.png"
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File ./suite/Codex-Deck.ps1 -SmokeTest -PreviewMode Panel -PreviewExpanded -PreviewWidth 476 -ScreenshotPath "$PWD/docs/desktop-preview.png"
+Copy-Item ./docs/desktop-preview.png ./docs/panel.png -Force
 ```
 
-`docs/terminal.png` is a synthetic rendering of `Get-DeckTerminalFrame` from `suite/Deck.Terminal.ps1`, with the frame's text and console colors. Keep its caption explicit about this being a rendered preview. Use example account identities and project paths only.
+Regenerate the terminal screenshot from the actual dashboard frame with example account data:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./docs/Render-TerminalPreview.ps1
+```
+
+Both README screenshots use synthetic identities and never read installed accounts. The terminal renderer uses `Get-DeckTerminalFrame` from `suite/Deck.Terminal.ps1` and its console colors. Keep captions explicit about the synthetic previews.
 
 `-Demo` opens a synthetic widget; add `-PreviewMode Panel` for the panel. Install the app for normal use rather than treating the source checkout as a portable installation.
 

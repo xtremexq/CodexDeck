@@ -25,7 +25,7 @@ function Get-DeckDefaults {
     return [ordered]@{
         DefaultFolder=$HOME; AlwaysAskFolder=$false
         AutoStart=$false; AutoCheck=$false; PollMinutes=10; MinimumGapSeconds=20
-        AlwaysOnTop=$false; OpacityPercent=100; FontSize=12; Width=476; Height=0
+        AlwaysOnTop=$false; OpacityPercent=100; FontSize=12; Width=400; Height=0
         ShowEmail=$true; ShowPlan=$true; ShowQuota=$true; ShowResets=$true; ShowResetCredits=$true
         ShowSessionCount=$false; ShowUptime=$false; ShowProcessIds=$false
         ShowFolder=$false; ShowSource=$false; ShowCheckedAt=$false; ShowCredits=$false
@@ -218,7 +218,7 @@ function Get-DeckSettings([string]$Root) {
     $settings.WarmupGraceSeconds = [Math]::Min(600, [Math]::Max(60, $settings.WarmupGraceSeconds))
     $settings.WarmupMaxDelayMinutes = [Math]::Min(60, [Math]::Max(5, $settings.WarmupMaxDelayMinutes))
     $settings.FontSize = [Math]::Min(20, [Math]::Max(10, $settings.FontSize))
-    $settings.Width = [Math]::Min(1200, [Math]::Max(476, $settings.Width))
+    $settings.Width = [Math]::Min(1200, [Math]::Max(400, $settings.Width))
     $settings.Height = [Math]::Min(1000, [Math]::Max(0, $settings.Height))
     $settings.OpacityPercent = [Math]::Min(100, [Math]::Max(50, $settings.OpacityPercent))
     $settings.WidgetWidth = [Math]::Min(600, [Math]::Max(238, $settings.WidgetWidth))

@@ -2,8 +2,8 @@
   <img src="suite/deck/assets/codex-deck.png" width="88" alt="Codex Deck">
 </p>
 <h1 align="center">Codex Deck</h1>
-<p align="center"><strong>One command. Every account.</strong><br>
-A terminal dashboard and desktop companion for multiple Codex CLI accounts on Windows.</p>
+<p align="center"><strong>Your Codex CLI accounts, usage, and conversations in one place.</strong><br>
+A Windows terminal dashboard and desktop companion for an existing Codex CLI installation.</p>
 <p align="center">
   <a href="https://github.com/xtremexq/CodexDeck/actions/workflows/test.yml"><img src="https://github.com/xtremexq/CodexDeck/actions/workflows/test.yml/badge.svg" alt="Windows checks"></a>
   <img src="https://img.shields.io/badge/Windows-PowerShell%205.1-0078D4" alt="Windows PowerShell 5.1">
@@ -11,23 +11,21 @@ A terminal dashboard and desktop companion for multiple Codex CLI accounts on Wi
 </p>
 <p align="center"><a href="#install">Install</a> · <a href="#terminal-dashboard">Terminal</a> · <a href="#desktop-companion">Desktop</a> · <a href="#commands">Commands</a> · <a href="#help">Help</a></p>
 
-<p align="center"><img src="docs/terminal.png" width="1040" alt="Terminal dashboard showing accounts, remaining quota bars, reset times, sessions and keyboard shortcuts"></p>
+<p align="center"><img src="docs/terminal.png" width="1040" alt="Synthetic Codex Deck terminal dashboard with five profiles, quota bars, reset times, and keyboard shortcuts"></p>
+<p align="center"><em>Terminal dashboard · synthetic example accounts</em></p>
 
-## Your accounts, together
+## What Deck adds
 
-New accounts remain isolated by default. The first-listed **pool** environment can use your selected accounts' quotas while keeping one Codex home. Open **Settings > Environments** to configure membership and explicitly share skills, memory files, instructions or individual MCP definitions between selected entries. **Settings > Skills** manages Deck-provided workflows that are globally available to accounts and pools without merging their private skill folders. See [environments, Deck skills and selective sharing](docs/ENVIRONMENTS.md) for details.
+- **See usage without hopping between accounts.** `codex-auth` opens a keyboard-driven dashboard with cached quota, reset, and session data. `codex-deck` opens a desktop panel or floating widget. Refresh on demand, or opt into desktop polling.
+- **Keep accounts separate.** Each profile gets its own Codex home, sign-in, configuration, and history. A pool can use quotas from accounts you choose while keeping one environment; sharing skills, memories, instructions, or MCP definitions is explicit.
+- **Stay in control when a limit is reached.** Use `!account` to change the active account during a conversation. Optional automatic failover retries supported quota-rejected requests with another account in your selected pool. [How failover works and where it stops](docs/ACCOUNT-TOOLS.md#live-failover-opt-in).
+- **Manage the conversation as it runs.** Optional live context inspection lets you review and edit the next request. Auto-compaction, local efficiency analytics, and `!delay` / `!schedule` are available when you need them.
+- **Add only the extras you choose.** Warm-up, integrations, and an installable skill catalog are opt-in. Warm-up sends real requests and consumes quota.
 
-**Skill catalog:** Settings > Integrations can install or update the Agentic Awesome Skills index. Settings > Skills then searches it and installs only chosen skills into codex-auth accounts and pools. Three UIZZE UI skills are included. The CLI also supports `deck-skills search`, `show`, `install`, `refresh`, and `update`. See [skills and catalog](docs/SKILL-CATALOG.md).
+Deck is [MIT-licensed](LICENSE), free, and open source. There is no paid tier. It uses your separately installed Codex CLI and does not replace or patch it.
 
-Run **`codex-auth`** to see your local accounts and their cached usage immediately. Check fresh limits in the background, find the profile you need, and launch Codex from the same terminal. Keep the floating desktop widget nearby when you want usage visible while you work.
-
-| Terminal dashboard | Desktop companion |
-| --- | --- |
-| Search and navigate accounts with the keyboard | Switch between a control panel and floating widget |
-| See quota bars, plans, reset times and attached sessions | Keep usage nearby with tray access and optional always-on-top |
-| Refresh one account or queue every account | Run manual checks or enable automatic polling |
-| Launch Codex, log in, or create a profile | Choose a launch folder and enable Deck skills per account or pool |
-| Print a cached snapshot for scripts | Configure optional, quota-consuming warm-up requests |
+<p align="center"><img src="docs/desktop-preview.png" width="476" alt="Synthetic Codex Deck desktop panel with account usage, Deck Analysis, and auto-compaction controls"></p>
+<p align="center"><em>Desktop panel · synthetic example account</em></p>
 
 ## Less account juggling. More time to build.
 
@@ -45,7 +43,7 @@ Always optional; Deck is free and open source.
 
 **Requires Windows, Windows PowerShell 5.1, and Codex CLI available as `codex`.** The desktop companion uses WPF and the Windows system tray. Linux and macOS are not supported. No administrator account is required.
 
-Download **[CodexDeck-1.8.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/v1.8.0/CodexDeck-1.8.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
+Download the ZIP asset from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
@@ -69,7 +67,13 @@ codex-auth
 
 Press **N** to create a profile and sign in. Already have local profiles under `.codex-loop/accounts`? They appear automatically. You can also create or open one directly with `codex-auth account1`.
 
-The installer adds command wrappers to your user PATH and preserves existing account data. Codex CLI is installed separately. The execution-policy flag applies only to the installer process.
+The installer adds command wrappers to your user PATH and preserves existing account data. Codex CLI is installed separately and is not modified. The execution-policy flag applies only to the installer process.
+
+## Accounts, pools, and skills
+
+New accounts remain isolated by default. The default **pool** environment can use your selected accounts' quotas while keeping one Codex home. Open **Settings → Environments** to configure membership and explicitly share skills, memory files, instructions, or individual MCP definitions between selected entries. **Settings → Skills** manages Deck-provided workflows without merging private skill folders. See [environments and selective sharing](docs/ENVIRONMENTS.md).
+
+For optional skills, **Settings → Integrations** can install the Agentic Awesome Skills catalog index. **Settings → Skills** then lets you search it and install only chosen skills. Three UIZZE UI skills are included; the CLI also supports `deck-skills search`, `show`, `install`, `refresh`, and `update`. See [skills and catalog](docs/SKILL-CATALOG.md).
 
 ## Terminal dashboard
 
@@ -80,14 +84,19 @@ The installer adds command wrappers to your user PATH and preserves existing acc
 | **↑ / ↓** | Select an account |
 | **Page Up / Page Down**, **Home / End** | Navigate a longer list |
 | **Enter** | Launch Codex; return to the dashboard when it exits |
+| **B** | Select the best account with recently checked usable quota |
 | **C** | Toggle auto-compaction; hold **C** to adjust its threshold with ↑/↓ and Enter |
 | **R** | Refresh the selected account |
-| **A** | Queue fresh checks for every account |
+| **A** | Queue fresh checks for signed-in accounts |
 | **/** | Search account names |
+| **H** | Browse and resume local sessions |
+| **F2** | Rename the selected account |
 | **L** | Log in to the selected account |
 | **N** | Create a new profile and log in |
 | **D** | Open the desktop companion |
+| **S** | Open desktop Settings |
 | **Y** | Open Analytics |
+| **U / T / W / P** | Run a warm-up, set daily times, select an account, or pause warm-ups |
 | **G** | Edit rules that apply globally |
 | **I** | Read or edit the selected account or pool's global `AGENTS.md` instructions |
 | **E** | Read or edit the selected account or pool's memory files |
@@ -98,7 +107,7 @@ The installer adds command wrappers to your user PATH and preserves existing acc
 
 Cached usage appears immediately and opening the dashboard performs no account checks. Press **R** to refresh the selected signed-in account or **A** to queue all signed-in accounts, with up to three checks running at once. Run `codex-auth -a` to open the dashboard and queue that same all-account refresh immediately; `-a` is only accepted with the otherwise plain command. Checks stay in the background and do not block navigation. Opening the dashboard also does not send a warm-up prompt.
 
-**Settings → Appearance → Codex-auth dashboard theme** offers five layouts. **Default** keeps the original dashboard; **Focus** emphasizes the selected account; **Cards** shows compact quota cards; **Ledger** compares accounts in a table; **Split** places the account roster beside its details. The four new layouts group shortcuts by task. Changing the setting updates an open dashboard after its next settings refresh.
+**Settings → General → Codex-auth dashboard theme** offers five layouts. **Default** keeps the original dashboard; **Focus** emphasizes the selected account; **Cards** shows compact quota cards; **Ledger** compares accounts in a table; **Split** places the account roster beside its details. The four additional layouts group shortcuts by task. Changing the setting updates an open dashboard after its next settings refresh.
 
 **Bars show quota remaining.** Primary is the five-hour window, or another plan-specific window such as a free account's longer allowance. Weekly is shown separately when available. `?` means the value is unknown; it does not mean zero. Reset timestamps use your local time. **Reset passed** means the displayed value needs a fresh check.
 
@@ -108,11 +117,9 @@ For a non-interactive view, use **`codex-auth status`**. It prints cached data w
 
 Auto-compaction is opt-in. Press **C** before entering an account or pool, or click **Auto-compact** in the desktop panel; both controls share the same saved launch state and update one another while open. The choice applies to terminals opened next, not conversations already running. You can also run `codex-auth account16 -AutoCompact` or `codex-auth pool -AutoCompact` directly. Hold **C** in the dashboard to focus the saved threshold, adjust it by 5% with **↑/↓**, and press **Enter** to save it. For a one-time command-line override, include the percent sign: `codex-auth account16 -AutoCompact 50%`. The threshold is the percentage of model context still free, so the 55% default triggers when 45% is used; a 75% override triggers when 25% is used.
 
-**Settings → Compaction** selects the implementation. **Native** is the default: Deck converts the free-context percentage into Codex's native token threshold for the selected model's effective context window, then launches the normal Codex TUI. It works through ordinary accounts, pools, configured quota failover, manual `!account` switching, resumed conversations and one-shot `exec` commands because the setting travels with the complete Deck launch. **Custom** preserves Deck's existing observer workflow: when context reaches the threshold, Deck requests a visible `DECK_HANDOFF`, compacts the thread, and sends the handoff back quoted with “Please go on.” Its multiline handoff setting appears only while Custom is selected. `-Direct` still keeps an exact account without routing.
+**Settings → Advanced → Compaction** selects the implementation. **Native** is the default: Deck converts the free-context percentage into Codex's native token threshold for the selected model's effective context window, then launches the normal Codex TUI. It works through ordinary accounts, pools, configured quota failover, manual `!account` switching, resumed conversations and one-shot `exec` commands because the setting travels with the complete Deck launch. **Custom** preserves Deck's existing observer workflow: when context reaches the threshold, Deck requests a visible `DECK_HANDOFF`, compacts the thread, and sends the handoff back quoted with “Please go on.” Its multiline handoff setting appears only while Custom is selected. `-Direct` still keeps an exact account without routing.
 
 ## Desktop companion
-
-<p align="center"><img src="docs/desktop-preview.png" width="476" alt="Codex Deck desktop control panel with an account and expanded usage details"></p>
 
 Run **`codex-deck`**, or press **D** in the terminal dashboard.
 
@@ -126,11 +133,11 @@ Run **`codex-deck`**, or press **D** in the terminal dashboard.
 
 Desktop automatic checks are off by default. Enable them in Settings if you want continued polling. Terminal startup checks and desktop polling are separate controls.
 
-### Trajectory and live context control (opt-in)
+### Live context and trajectory (opt-in)
 
-Enable **Trajectory** in Settings to get a fast local timeline of sessions across Deck accounts: requests, messages, tool calls and results, token-usage records, compactions, subagent/session metadata, and live sessions. You can open it from the tray menu or the terminal dashboard's **V** shortcut. The left menu orders sessions by most recent rollout file update across all accounts and refreshes that order every 30 seconds while open. The newest managed conversation is selected first, live context refreshes automatically, active rollouts are tailed in bounded pages, and raw paths are not exposed to the browser frontend.
+Enable **Live Context viewer** under **Settings → Advanced → Live Context Manager** to get a local trajectory of sessions across Deck accounts: requests, messages, tool calls and results, token-usage records, compactions, subagent/session metadata, and live sessions. Open it from the tray's **Open Live Context** action. The left menu orders sessions by most recent rollout file update across all accounts and refreshes that order every 30 seconds while open. The newest managed conversation is selected first, live context refreshes automatically, active rollouts are tailed in bounded pages, and raw paths are not exposed to the browser frontend.
 
-The **Live context manager** is a second opt-in inside the Trajectory settings. Its separate **Automatically open Live Context when opening accounts** setting is off by default. Enable it to open a slim companion for each interactive account or pool launch; use `!context` in a managed Codex conversation to open that terminal's companion on demand. Each companion is bound to its terminal's unique session marker and routing proxy. It shows the model request seen by Deck as individual instruction, tool-definition, message, tool-call, and tool-result cards from the first request onward. Click a card's preview to read its full text. Use the red **−** to suppress a card, edit or trim its visible text, restore one change or all changes, search/filter the window, and watch the next-request token estimate update. Tool calls and outputs are paired by default, while system, developer, tool definitions, reasoning, and encrypted items are protected unless the advanced override is explicitly enabled. Encrypted reasoning has no available plaintext, and a request that references server-side history cannot reveal that earlier content; the companion labels these limits. The larger Trajectory studio remains one click away for the emitted timeline through the final response.
+The **Live context manager** is a second opt-in in the same Advanced section. Its separate **Automatically open Live Context when opening accounts** setting is off by default. Enable it to open a slim companion for each interactive account or pool launch; use `!context` in a managed Codex conversation to open that terminal's companion on demand. Each companion is bound to its terminal's unique session marker and routing proxy. It shows the model request seen by Deck as individual instruction, tool-definition, message, tool-call, and tool-result cards from the first request onward. Click a card's preview to read its full text. Use the red **−** to suppress a card, edit or trim its visible text, restore one change or all changes, search/filter the window, and watch the next-request token estimate update. Tool calls and outputs are paired by default, while system, developer, tool definitions, reasoning, and encrypted items are protected unless the advanced override is explicitly enabled. Encrypted reasoning has no available plaintext, and a request that references server-side history cannot reveal that earlier content; the companion labels these limits. The larger Trajectory studio remains one click away for the emitted timeline through the final response.
 
 The companion is deliberately lightweight: it reads the live proxy snapshot instead of rescanning rollout history, lazy-renders long card lists, and polls a tiny revision/status response when nothing changed. A full context payload and DOM update happen only for a new model request or one of your edits. **Follow new** in its footer scrolls to new context items by default and can be switched off. The compact status area shows estimated free model context and this terminal's auto-compact mode above the quota divider, followed by cached primary and secondary quota use. Token figures are rough text/JSON size estimates, not exact model usage.
 
@@ -140,7 +147,7 @@ Context overlays apply at the shared request boundary, so they remain active acr
 
 ### Efficiency analytics (separate feature)
 
-**Efficiency analytics is an independent feature**, enabled by default but separately switchable in Settings. Open it with **Deck Analysis** in the panel, the tray menu, or **Y** in the terminal dashboard. When Trajectory is disabled, interactive `codex-auth` launches Efficiency automatically. Its PrismoDev-inspired analysis scans the 1,000 most recently updated local rollouts across all accounts by default; the limit remains configurable from 10 to 5,000 and a notice appears in the panel when reached. It reports exact token totals where Codex recorded them, cache use, repeated commands and paths, oversized tool results, tool frequency, compactions, and token distribution by account, project, and model. It then ranks concrete opportunities to reduce repeated discovery or noisy output.
+**Efficiency analytics is an independent feature**, enabled by default but separately switchable under **Settings → Advanced → Analytics**. Open it with **Deck Analysis** in the panel, the tray menu, or **Y** in the terminal dashboard. When Trajectory is disabled, interactive `codex-auth` launches Efficiency automatically. It scans the 1,000 most recently updated local rollouts across all accounts by default; the limit remains configurable from 10 to 5,000 and a notice appears in the panel when reached. It reports exact token totals where Codex recorded them, cache use, repeated commands and paths, oversized tool results, tool frequency, compactions, and token distribution by account, project, and model. It then ranks concrete opportunities to reduce repeated discovery or noisy output.
 
 The analytics feature does not enable, depend on, or modify Trajectory or the context manager. The two additions share only a low-level local rollout parser/index so Deck does not perform the same filesystem work twice.
 
@@ -178,20 +185,20 @@ codex-check -Json                # Machine-readable usage report
 codex-check -NoColor             # Plain-text usage report
 ```
 
-Inside any signed-in `codex-auth` conversation, use Codex's local shell
-prefix: `!account`, `!pool`, `!usage`, `!delay`, `!schedule`, `!check`, `!context`, or `!deck`. These commands run locally
-and do not submit a prompt or consume a model turn. Account first lets you choose
-the session's selectable accounts or, in a named environment, its current pool
-by printing numbered lists. Pool prints the current-pool list directly. Switch with a second local
-command such as `!pool 2` or `!pool account7`. Usage checks
-only the account currently routing the session; Check runs the complete local
-`codex-check` report, and Deck opens the desktop companion.
-Use `!delay 15m go on` to queue `go on` into the same live conversation after 15 minutes. The terminal stays open and usable while its hidden timer waits. Use `!schedule 6h go on` to create a one-time Windows task that opens a new visible PowerShell terminal, resumes this conversation under its owning account, and submits `go on`. The task removes itself when it runs. Durations accept whole-number seconds, minutes, hours, or days (`600s`, `10m`, `6h`, `1d`); quoted messages can include spaces. Scheduling requires a signed-in Windows session at delivery time. The original working folder and account must still exist.
-Codex does not expose a third-party bare-slash extension point, so these commands
-use `!` and cannot appear as `/account` entries in the built-in command menu.
-Ordinary launches use a manual-only loopback route so `!account` works even when
-automatic failover is Off. Their `CODEX_HOME`, saved conversation, and files stay
-with the account used to launch the session; only subsequent API requests switch.
+Inside a signed-in `codex-auth` conversation, Codex's local `!` shell prefix gives you these controls without submitting a model turn:
+
+| Command | Action |
+| --- | --- |
+| `!account`, then `!account account2` | List selectable accounts, then switch future requests to one |
+| `!pool`, then `!pool 2` | List the current pool and choose a member |
+| `!usage` / `!check` | Check the active account / run the complete `codex-check` report |
+| `!context` / `!deck` | Open the enabled live context companion / desktop panel |
+| `!delay 15m go on` | Send `go on` to this still-open conversation after 15 minutes |
+| `!schedule 6h go on` | Resume this conversation in a new visible terminal after six hours and send `go on` |
+
+Delayed messages require the current terminal to remain open. Scheduled messages use a one-time Windows task that removes itself after running; Windows must be signed in when it delivers, and the original account and working folder must still exist. Durations accept whole-number seconds, minutes, hours, or days (`600s`, `10m`, `6h`, `1d`); quote messages containing shell-sensitive characters. See [timed message details](docs/ACCOUNT-TOOLS.md#timed-local-messages).
+
+Codex does not expose a third-party bare-slash extension point, so these controls use `!` rather than appearing in the `/` menu. `!account` works even when automatic failover is off. The original account retains the conversation, `CODEX_HOME`, and files; only subsequent API requests switch routes.
 
 Each profile has a separate `CODEX_HOME`. New profiles can inherit local configuration, rules and skills; authentication remains separate. Deletion keeps a recovery copy and refuses an account with a tracked connected terminal.
 

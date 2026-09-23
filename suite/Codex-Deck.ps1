@@ -1,4 +1,4 @@
-﻿param([switch]$SmokeTest, [switch]$Demo, [switch]$Attach, [switch]$Background, [switch]$OpenSettings, [string]$ScreenshotPath, [switch]$LifecycleTest, [switch]$PreviewExpanded, [ValidateSet('Panel','Widget')][string]$PreviewMode='Widget')
+﻿param([switch]$SmokeTest, [switch]$Demo, [switch]$Attach, [switch]$Background, [switch]$OpenSettings, [string]$ScreenshotPath, [int]$PreviewWidth=0, [switch]$LifecycleTest, [switch]$PreviewExpanded, [ValidateSet('Panel','Widget')][string]$PreviewMode='Widget')
 if($LifecycleTest){$Demo=$true}
 $ErrorActionPreference = 'Stop'
 $script:suite = $PSScriptRoot
@@ -435,7 +435,7 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
     $window.ShowInTaskbar=-not $widget
     $visibility=if($widget){'Collapsed'}else{'Visible'}
     foreach($control in @($LaunchBar,$SettingsButton,$MinimizeButton)){$control.Visibility=$visibility}
-    $window.MinWidth=if($widget){238}else{476}; $window.MinHeight=100
+    $window.MinWidth=if($widget){238}else{400}; $window.MinHeight=100
     $window.Width=if($widget){$settings.WidgetWidth}else{[Math]::Max($window.MinWidth,$settings.Width)}
     $savedHeight=if($widget){$settings.WidgetHeight}else{$settings.Height}
     $script:defaultViewHeight=$savedHeight -le 0
@@ -1911,6 +1911,7 @@ try{
 
         if($PreviewExpanded){$rowExpander.IsExpanded=$true}
         if($ScreenshotPath){
+            if($PreviewWidth -gt 0){$window.Width=[Math]::Max($window.MinWidth,$PreviewWidth)}
             $visual=$window.Content
             $visual.Measure([Windows.Size]::new($window.Width,$window.Height)); $visual.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $visual.UpdateLayout()
             $bitmap=[Windows.Media.Imaging.RenderTargetBitmap]::new([int]$window.Width,[int]$window.Height,96,96,[Windows.Media.PixelFormats]::Pbgra32)
