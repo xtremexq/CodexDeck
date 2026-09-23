@@ -25,7 +25,7 @@ function Get-DeckDefaults {
     return [ordered]@{
         DefaultFolder=$HOME; AlwaysAskFolder=$false
         AutoStart=$false; AutoCheck=$false; PollMinutes=10; MinimumGapSeconds=20
-        AlwaysOnTop=$false; OpacityPercent=100; FontSize=12; Width=620; Height=0
+        AlwaysOnTop=$false; OpacityPercent=100; FontSize=12; Width=476; Height=0
         ShowEmail=$true; ShowPlan=$true; ShowQuota=$true; ShowResets=$true; ShowResetCredits=$true
         ShowSessionCount=$false; ShowUptime=$false; ShowProcessIds=$false
         ShowFolder=$false; ShowSource=$false; ShowCheckedAt=$false; ShowCredits=$false

@@ -151,7 +151,7 @@ function Format-DeckCompactQuotaReset($Quota) {
     if(-not $Quota.ResetsAtUnix){return ''}
     $at=[DateTimeOffset]::FromUnixTimeSeconds([long]$Quota.ResetsAtUnix).ToLocalTime()
     if($at -le [DateTimeOffset]::Now){return ([string][char]0x21BB)+' due'}
-    $time=if($at.Date -eq [DateTimeOffset]::Now.Date){$at.ToString('HH:mm')}else{$at.ToString('dd/MM HH:mm')}
+    $time=if($at.Date -eq [DateTimeOffset]::Now.Date){$at.ToString('HH:mm')}else{$at.ToString('dd/MM')}
     return ([string][char]0x21BB)+' '+$time
 }
 function New-DeckQuotaTrack($Quota,[string]$Color,[bool]$ShowReset=$true) {
@@ -314,7 +314,7 @@ function New-DeckHealthSummary([string]$Name,$Record,[int]$Size=10,$Existing=$nu
     $health=Get-DeckHealth $Record
     $text.ToolTip=$health
     $color=switch($health){'Ready'{'#69DEC0'} 'Low'{'#DCB675'} 'Exhausted'{'#F17D8D'} 'Limit reached'{'#F17D8D'} default{'#929CA4'}}
-    $quotas=if($settings.ShowQuota){@($Record.Windows | Where-Object {$null -ne $_})}else{@()}
+    $quotas=@(if($settings.ShowQuota){$Record.Windows | Where-Object {$null -ne $_}})
     if(-not $quotas.Count){$run=[Windows.Documents.Run]::new($health); $run.Foreground=$color; [void]$text.Inlines.Add($run)}
     if($quotas.Count){foreach($quota in $quotas){
         $expired=$quota.ResetsAtUnix -and [long]$quota.ResetsAtUnix -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -328,17 +328,16 @@ function New-DeckHealthSummary([string]$Name,$Record,[int]$Size=10,$Existing=$nu
     $suffixRun=[Windows.Documents.Run]::new($suffix); [void]$text.Inlines.Add($suffixRun); $text.Tag=$suffixRun
     return $text
 }
-function New-DeckPanelUsage([string]$Name,$Record,[int]$Columns) {
-    $usage=[Windows.Controls.Grid]::new(); $usage.VerticalAlignment='Center'
+function New-DeckPanelUsage([string]$Name,$Record) {
+    $usage=[Windows.Controls.Grid]::new(); $usage.VerticalAlignment='Center'; $usage.HorizontalAlignment='Left'
     $usage.ToolTip=(Get-DeckHealth $Record)+$(if($tasks.ContainsKey($Name) -or $manualChecks.ContainsKey($Name)){' · checking'}elseif($Record.Error){' · check failed'}else{''})
-    $windows=if($settings.ShowQuota){@($Record.Windows | Where-Object { $null -ne $_ })}else{@()}
-    for($i=0;$i -lt $Columns;$i++){
-        $column=[Windows.Controls.ColumnDefinition]::new(); $column.Width=[Windows.GridLength]::new(1,[Windows.GridUnitType]::Star); [void]$usage.ColumnDefinitions.Add($column)
-        if($i -ge $windows.Count){continue}
+    $windows=@(if($settings.ShowQuota){$Record.Windows | Where-Object { $null -ne $_ }})
+    for($i=0;$i -lt $windows.Count;$i++){
+        $column=[Windows.Controls.ColumnDefinition]::new(); $column.Width=[Windows.GridLength]::Auto; [void]$usage.ColumnDefinitions.Add($column)
         $quota=$windows[$i]
         $cell=[Windows.Controls.Border]::new(); $cell.Background='#171B1E'; $cell.CornerRadius='3'; $cell.Padding='4,1'; $cell.Margin='0,0,3,0'
         $content=[Windows.Controls.Grid]::new(); $cell.Child=$content
-        foreach($width in @('Auto','Auto','*')){$part=[Windows.Controls.ColumnDefinition]::new(); $part.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$content.ColumnDefinitions.Add($part)}
+        foreach($width in @('Auto','Auto','Auto')){$part=[Windows.Controls.ColumnDefinition]::new(); $part.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$content.ColumnDefinitions.Add($part)}
         $label=New-DeckText (Get-DeckQuotaLabel $quota) '#9DA9B8' 9; $label.Margin='0'; $label.TextWrapping='NoWrap'; [void]$content.Children.Add($label)
         $percent=New-DeckText $(if($null -eq $quota.RemainingPct -and $null -ne $quota.UsedPct){[string](100-[double]$quota.UsedPct)+'%'}elseif($null -eq $quota.RemainingPct){'?'}else{[string]$quota.RemainingPct+'%'}) (Get-DeckQuotaColor $quota) 10
         $percent.Margin='4,0,0,0'; $percent.FontWeight='SemiBold'; $percent.TextWrapping='NoWrap'; [Windows.Controls.Grid]::SetColumn($percent,1); [void]$content.Children.Add($percent)
@@ -348,7 +347,6 @@ function New-DeckPanelUsage([string]$Name,$Record,[int]$Columns) {
             [Windows.Controls.Grid]::SetColumn($reset,2); [void]$content.Children.Add($reset)
         }
         [Windows.Controls.Grid]::SetColumn($cell,$i)
-        if($windows.Count -eq 1){[Windows.Controls.Grid]::SetColumnSpan($cell,$Columns)}
         [void]$usage.Children.Add($cell)
     }
     if(-not $windows.Count){
@@ -358,11 +356,11 @@ function New-DeckPanelUsage([string]$Name,$Record,[int]$Columns) {
     }
     return $usage
 }
-function Set-DeckPanelCardUsage($Card,[string]$Name,$Record,[int]$Columns) {
+function Set-DeckPanelCardUsage($Card,[string]$Name,$Record) {
     $grid=$Card.Child.Header
     $old=$Card.Resources['UsageHost']
     if($old){[void]$grid.Children.Remove($old)}
-    $usage=New-DeckPanelUsage $Name $Record $Columns
+    $usage=New-DeckPanelUsage $Name $Record
     [Windows.Controls.Grid]::SetColumn($usage,3); [void]$grid.Children.Add($usage)
     $Card.Resources['UsageHost']=$usage
 }
@@ -437,7 +435,7 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
     $window.ShowInTaskbar=-not $widget
     $visibility=if($widget){'Collapsed'}else{'Visible'}
     foreach($control in @($LaunchBar,$SettingsButton,$MinimizeButton)){$control.Visibility=$visibility}
-    $window.MinWidth=if($widget){238}else{600}; $window.MinHeight=100
+    $window.MinWidth=if($widget){238}else{476}; $window.MinHeight=100
     $window.Width=if($widget){$settings.WidgetWidth}else{[Math]::Max($window.MinWidth,$settings.Width)}
     $savedHeight=if($widget){$settings.WidgetHeight}else{$settings.Height}
     $script:defaultViewHeight=$savedHeight -le 0
@@ -1212,10 +1210,9 @@ $SummaryButton.Add_MouseLeave({$summaryMarquee.Stop(); $script:summaryScroll=0; 
 $SummaryViewport.Add_SizeChanged({Update-DeckSummaryOverflow})
 function Render-Deck {
     $names=@(Get-DeckVisibleAccounts)
-    $longestName=0; $quotaColumns=1
+    $longestName=0
     foreach($visibleName in $names){
         $longestName=[Math]::Max($longestName,[Math]::Min(15,$visibleName.Length))
-        if($settings.ShowQuota -and $cache[$visibleName].Windows){$quotaColumns=[Math]::Max($quotaColumns,@($cache[$visibleName].Windows).Count)}
     }
     $nameColumnWidth=[Math]::Min(155,[Math]::Max(72,($longestName*$settings.FontSize*0.64)+19))
     $connectedCount=@($sessions | ForEach-Object Account | Select-Object -Unique).Count
@@ -1249,7 +1246,7 @@ function Render-Deck {
         $connected=@($sessions | Where-Object Account -eq $name); $row=$cache[$name]
         $profile=$profiles[$name]
         $minuteKey=if($expandedRows[$name] -and $settings.ShowUptime -and $connected.Count){[DateTimeOffset]::Now.ToString('yyyyMMddHHmm')}else{''}
-        $rowKey=($connected.ProcessId -join ',')+'/'+($connected.Folder -join ',')+'/'+$profileStamps[$name]+'/'+($name -in $pins)+'/'+$minuteKey+'/'+$row.Error+'/'+$row.CheckedAt+'/'+$history[$name].Outcome+'/'+$nameColumnWidth+'/'+$quotaColumns
+        $rowKey=($connected.ProcessId -join ',')+'/'+($connected.Folder -join ',')+'/'+$profileStamps[$name]+'/'+($name -in $pins)+'/'+$minuteKey+'/'+$row.Error+'/'+$row.CheckedAt+'/'+$history[$name].Outcome+'/'+$nameColumnWidth
         $healthKey=[string]$tasks.ContainsKey($name)+'/'+$manualChecks.ContainsKey($name)
         $saved=$rowControls[$name]
         if($saved){
@@ -1259,7 +1256,7 @@ function Render-Deck {
                     [void](New-DeckHealthSummary $name $row ([int]$health.FontSize) $health)
                 }else{
                     $saved.Card.Resources['NameColumn'].Width=[Windows.GridLength]::new($nameColumnWidth)
-                    Set-DeckPanelCardUsage $saved.Card $name $row $quotaColumns
+                    Set-DeckPanelCardUsage $saved.Card $name $row
                     $plan=if($row.PlanType){$row.PlanType}else{$profile.PlanType}
                     $saved.Card.Resources['PlanBadge'].Text=if($plan){$plan.ToUpperInvariant()}else{'?'}
                 }
@@ -1272,7 +1269,7 @@ function Render-Deck {
             $saved.Card.Child.IsExpanded=[bool]$expandedRows[$name]
             if($saved.HealthKey -ne $healthKey){
                 if($widget){$health=$saved.Card.Resources['HealthSummary']; $health.Tag.Text=if($tasks.ContainsKey($name) -or $manualChecks.ContainsKey($name)){' · checking'}elseif($row.Error){' · check failed'}else{''}}
-                else{Set-DeckPanelCardUsage $saved.Card $name $row $quotaColumns}
+                else{Set-DeckPanelCardUsage $saved.Card $name $row}
                 $saved.HealthKey=$healthKey
             }
             $rendered.Add($saved.Card); continue
@@ -1290,7 +1287,7 @@ function Render-Deck {
         $dot.VerticalAlignment='Center'; [void]$grid.Children.Add($dot)
         $title=New-DeckText ($(if($name -in $pins){'★ '}else{''})+$name) '#E4E7EC' $settings.FontSize; $title.FontWeight='SemiBold'; $title.VerticalAlignment='Center'; $title.TextWrapping='NoWrap'; $title.TextTrimming='CharacterEllipsis'; [Windows.Controls.Grid]::SetColumn($title,1); [void]$grid.Children.Add($title)
         $badge=New-DeckText $(if($plan){$plan.ToUpperInvariant()}else{'?'}) '#9EAFC2' 10; $badge.TextWrapping='NoWrap'; $badge.TextTrimming='CharacterEllipsis'; $badge.VerticalAlignment='Center'; $badge.Margin='2,0,6,0'; [Windows.Controls.Grid]::SetColumn($badge,2); [void]$grid.Children.Add($badge)
-        $usage=New-DeckPanelUsage $name $row $quotaColumns; [Windows.Controls.Grid]::SetColumn($usage,3); [void]$grid.Children.Add($usage)
+        $usage=New-DeckPanelUsage $name $row; [Windows.Controls.Grid]::SetColumn($usage,3); [void]$grid.Children.Add($usage)
         $card.ContextMenu=New-DeckEntryMenu $name
         $card.Resources['ConnectionDot']=$dot; $card.Resources['Title']=$title; $card.Resources['PlanBadge']=$badge; $card.Resources['UsageHost']=$usage; $card.Resources['NameColumn']=$grid.ColumnDefinitions[1]
         $card.Child=$null; $card.Child=New-DeckExpander $name $grid 'Panel'
