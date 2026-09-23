@@ -62,16 +62,18 @@ $catalogCategory=[Windows.Controls.ComboBox]::new(); $catalogCategory.MinWidth=1
 $catalogRisk=[Windows.Controls.ComboBox]::new(); $catalogRisk.MinWidth=110; $catalogRisk.Margin='0,0,8,0'; foreach($risk in @('All risks','none','safe','critical','offensive','unknown')){[void]$catalogRisk.Items.Add($risk)}; $catalogRisk.SelectedIndex=0; [void]$catalogFilters.Children.Add($catalogRisk)
 $catalogRefresh=[Windows.Controls.Button]::new(); $catalogRefresh.Content='Refresh catalog'; $catalogRefresh.Padding='9,5'; [void]$catalogFilters.Children.Add($catalogRefresh)
 $catalogResults=[Windows.Controls.ListBox]::new(); $catalogResults.Height=230; $catalogResults.Margin='0,0,0,8'; $catalogResults.Background='#171C1F'; $catalogResults.Foreground='#EAF0FA'; $catalogResults.BorderBrush='#303A42'; $catalogResults.BorderThickness='1'; [Windows.Controls.VirtualizingStackPanel]::SetIsVirtualizing($catalogResults,$true); [void]$deckSkillPanel.Children.Add($catalogResults)
-$catalogPager=[Windows.Controls.WrapPanel]::new(); $catalogPager.Margin='0,0,0,8'; [void]$deckSkillPanel.Children.Add($catalogPager)
+$catalogToolbar=[Windows.Controls.Grid]::new(); $catalogToolbar.Margin='0,0,0,8'; [void]$deckSkillPanel.Children.Add($catalogToolbar)
+foreach($width in @('*','Auto')){$column=[Windows.Controls.ColumnDefinition]::new(); $column.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$catalogToolbar.ColumnDefinitions.Add($column)}
+$catalogActions=[Windows.Controls.StackPanel]::new(); $catalogActions.Orientation='Horizontal'; $catalogActions.HorizontalAlignment='Left'; $catalogActions.VerticalAlignment='Center'; [void]$catalogToolbar.Children.Add($catalogActions)
+$catalogInstall=[Windows.Controls.Button]::new(); $catalogInstall.Content='Install'; $catalogInstall.IsEnabled=$false; $catalogInstall.Padding='8,5'; $catalogInstall.Margin='0,0,8,0'; [void]$catalogActions.Children.Add($catalogInstall)
+$catalogSource=[Windows.Controls.Button]::new(); $catalogSource.Content='Inspect'; $catalogSource.IsEnabled=$false; $catalogSource.Padding='8,5'; [void]$catalogActions.Children.Add($catalogSource)
+$catalogPager=[Windows.Controls.StackPanel]::new(); $catalogPager.Orientation='Horizontal'; $catalogPager.HorizontalAlignment='Right'; $catalogPager.VerticalAlignment='Center'; [Windows.Controls.Grid]::SetColumn($catalogPager,1); [void]$catalogToolbar.Children.Add($catalogPager)
 $catalogPrevious=[Windows.Controls.Button]::new(); $catalogPrevious.Content='Previous'; $catalogPrevious.Padding='9,5'; $catalogPrevious.Margin='0,0,8,0'; $catalogPrevious.IsEnabled=$false; [void]$catalogPager.Children.Add($catalogPrevious)
 $catalogPageInput=[Windows.Controls.TextBox]::new(); $catalogPageInput.Text='1'; $catalogPageInput.Width=48; $catalogPageInput.MaxLength=6; $catalogPageInput.VerticalContentAlignment='Center'; $catalogPageInput.Margin='0,0,5,0'; $catalogPageInput.IsEnabled=$false; [void]$catalogPager.Children.Add($catalogPageInput)
 $catalogPageGo=[Windows.Controls.Button]::new(); $catalogPageGo.Content='Go'; $catalogPageGo.Padding='9,5'; $catalogPageGo.Margin='0,0,8,0'; $catalogPageGo.IsEnabled=$false; [void]$catalogPager.Children.Add($catalogPageGo)
 $catalogNext=[Windows.Controls.Button]::new(); $catalogNext.Content='Next'; $catalogNext.Padding='9,5'; $catalogNext.Margin='0,0,10,0'; $catalogNext.IsEnabled=$false; [void]$catalogPager.Children.Add($catalogNext)
 $catalogPageLabel=New-DeckText 'Page 1 of 1' '#A2ADB5' 11; $catalogPageLabel.VerticalAlignment='Center'; [void]$catalogPager.Children.Add($catalogPageLabel)
 $catalogDetail=New-DeckText 'Select a skill to see its description, risk and setup notes.' '#A2ADB5' 11; $catalogDetail.Margin='0,0,0,8'; [void]$deckSkillPanel.Children.Add($catalogDetail)
-$catalogActions=[Windows.Controls.WrapPanel]::new(); [void]$deckSkillPanel.Children.Add($catalogActions)
-$catalogInstall=[Windows.Controls.Button]::new(); $catalogInstall.Content='Install selected'; $catalogInstall.IsEnabled=$false; $catalogInstall.Padding='11,7'; $catalogInstall.Margin='0,0,8,0'; [void]$catalogActions.Children.Add($catalogInstall)
-$catalogSource=[Windows.Controls.Button]::new(); $catalogSource.Content='Inspect source'; $catalogSource.IsEnabled=$false; $catalogSource.Padding='11,7'; [void]$catalogActions.Children.Add($catalogSource)
 $catalogStatus=New-DeckText '' '#9BB5D9' 11; $catalogStatus.Margin='0,10,0,0'; [void]$deckSkillPanel.Children.Add($catalogStatus)
 $catalogState=@{Loaded=$false;Busy=$false;Task=$null;Mode='';Selected=$null;SearchTask=$null;SearchKey='';WantedKey='';Commit='';UpdatingFilters=$false;Closed=$false;Page=1;PageCount=1}
 $catalogPoll=[Windows.Threading.DispatcherTimer]::new(); $catalogPoll.Interval=[TimeSpan]::FromMilliseconds(200)
@@ -138,7 +140,8 @@ $catalogResults.Add_SelectionChanged({
     $managed=$receipt -and $receipt.repository -eq 'sickn33/agentic-awesome-skills'
     $validName=$skill.id -match '^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$'
     $catalogInstall.IsEnabled=$validName -and (-not $installed -or $managed) -and -not $catalogState.Busy
-    $catalogInstall.Content=if($managed){'Update selected'}elseif($installed){'Name already in use'}else{'Install selected'}
+    $catalogInstall.Content=if($managed){'Update'}elseif($installed){'Name in use'}else{'Install'}
+    $catalogInstall.ToolTip=if($installed -and -not $managed){'A skill with this name is already installed.'}else{'Install or update the selected skill for all accounts and pools.'}
     $catalogSource.IsEnabled=$true
     $setup=if($skill.setupSummary){"`nSetup: $($skill.setupSummary)"}else{''}
     $license=if($skill.license){" · license: $($skill.license)"}else{''}

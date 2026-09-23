@@ -786,6 +786,7 @@ function Show-DeckSettings {
         [void]$detailWrap.Children.Add($card); foreach($field in $detailSections[$section]){$detailPanels[$field]=$sectionPanel}
     }
     $fieldLabels=@{}
+    $specificAccountsToggle=$null
     foreach ($key in @(@($groups.Values | ForEach-Object { $_ }) + @($settings.Keys) | Select-Object -Unique)) {
         if ($key -in @('Width','Height','WidgetWidth','WidgetHeight','WidgetAutoHeight','EfficiencyLimitVersion')) { continue }
         $group=@($groups.Keys | Where-Object { $key -in $groups[$_] })[0]
@@ -817,7 +818,14 @@ function Show-DeckSettings {
             $control=[Windows.Controls.CheckBox]::new(); $control.Content=$caption; $control.IsChecked=$settings[$key]
             $control.Foreground='#EAF0FA'; $control.Margin='0,0,0,14'; $control.MinHeight=24
         } else {
-            $label=New-DeckText $caption '#A2ADB5'; $label.Margin='0,2,0,6'; [void]$panel.Children.Add($label); $fieldLabels[$key]=$label
+            if($key -eq 'WarmupAccounts'){
+                $specificAccountsToggle=[Windows.Controls.CheckBox]::new(); $specificAccountsToggle.Content='Specific accounts'; $specificAccountsToggle.IsChecked=[bool]$settings.WarmupAccounts
+                $specificAccountsToggle.Foreground='#EAF0FA'; $specificAccountsToggle.Margin='0,2,0,8'; $specificAccountsToggle.MinHeight=24
+                $specificAccountsToggle.ToolTip='Include selected accounts alongside the chosen account types.'
+                [void]$panel.Children.Add($specificAccountsToggle)
+            }else{
+                $label=New-DeckText $caption '#A2ADB5'; $label.Margin='0,2,0,6'; [void]$panel.Children.Add($label); $fieldLabels[$key]=$label
+            }
             if($key -eq 'WarmupPlanTypes'){
                 $control=[Windows.Controls.Button]::new(); $control.HorizontalContentAlignment='Left'
                 $scopeMenu=[Windows.Controls.ContextMenu]::new()
@@ -845,11 +853,6 @@ function Show-DeckSettings {
             }elseif($key -eq 'WarmupAccounts'){
                 $control=[Windows.Controls.ListBox]::new(); $control.SelectionMode='Multiple'; $control.MaxHeight=150
                 $control.IsTextSearchEnabled=$true; $control.Background='#111315'; $control.Foreground='#E4EAF4'; $control.BorderBrush='#363C42'
-                $search=[Windows.Controls.TextBox]::new(); $search.ToolTip='Find an existing account'; $search.Margin='0,0,10,6'; $search.Tag=$control
-                $search.Add_TextChanged({param($sender,$eventArgs)
-                    $query=$sender.Text; $list=$sender.Tag
-                    $list.Items.Filter=[Predicate[object]]{param($value) [string]$value -like ('*'+$query+'*')}.GetNewClosure()
-                }); [void]$panel.Children.Add($search)
                 foreach($account in @(Get-DeckAccounts)){[void]$control.Items.Add($account); if($account -in @($settings.WarmupAccounts -split '[,;\s]+')){[void]$control.SelectedItems.Add($account)}}
             }elseif($key -eq 'FailoverAccounts'){
                 $control=[Windows.Controls.StackPanel]::new()
@@ -897,6 +900,24 @@ function Show-DeckSettings {
     }.GetNewClosure()
     $controls.AutoCompactMode.Add_SelectionChanged({& $updateCompactModeVisibility}.GetNewClosure())
     & $updateCompactModeVisibility
+    $updateCheckVisibility={
+        $visibility=if($controls.AutoCheck.IsChecked){'Visible'}else{'Collapsed'}
+        foreach($key in @('PollMinutes','MinimumGapSeconds')){$controls[$key].Visibility=$visibility; $fieldLabels[$key].Visibility=$visibility}
+    }.GetNewClosure()
+    $controls.AutoCheck.Add_Checked({& $updateCheckVisibility}.GetNewClosure())
+    $controls.AutoCheck.Add_Unchecked({& $updateCheckVisibility}.GetNewClosure())
+    & $updateCheckVisibility
+    $updateDailyTimesVisibility={
+        $visibility=if($controls.WarmupTimedEnabled.IsChecked){'Visible'}else{'Collapsed'}
+        $controls.WarmupTimes.Visibility=$visibility; $fieldLabels.WarmupTimes.Visibility=$visibility
+    }.GetNewClosure()
+    $controls.WarmupTimedEnabled.Add_Checked({& $updateDailyTimesVisibility}.GetNewClosure())
+    $controls.WarmupTimedEnabled.Add_Unchecked({& $updateDailyTimesVisibility}.GetNewClosure())
+    & $updateDailyTimesVisibility
+    $updateSpecificAccountsVisibility={$controls.WarmupAccounts.Visibility=if($specificAccountsToggle.IsChecked){'Visible'}else{'Collapsed'}}.GetNewClosure()
+    $specificAccountsToggle.Add_Checked({& $updateSpecificAccountsVisibility}.GetNewClosure())
+    $specificAccountsToggle.Add_Unchecked({& $updateSpecificAccountsVisibility}.GetNewClosure())
+    & $updateSpecificAccountsVisibility
     $integrationUI=@{}
     $integrationCatalog=Get-DeckIntegrationCatalog $suite
     foreach($integrationName in @('rtk','headroom','codegraph','browser_harness','aas_catalog')){
@@ -1010,7 +1031,8 @@ function Show-DeckSettings {
                 if ($key -eq 'WarmupSchedulingEnabled') { $updated[$key]=[bool]$controls[$key].Tag }
                 elseif ($key -eq 'WarmupPlanTypes') { $updated[$key]=ConvertTo-DeckWarmupPlanTypes (@($controls[$key].Resources['ScopeMenu'].Items | Where-Object IsChecked | ForEach-Object {[string]$_.Tag}) -join ',') }
                 elseif ($settings[$key] -is [bool]) { $updated[$key]=[bool]$controls[$key].IsChecked }
-                elseif ($key -eq 'WarmupAccounts') { $updated[$key]=@($controls[$key].SelectedItems) -join ',' }
+                elseif ($key -eq 'WarmupAccounts') { $updated[$key]=if($specificAccountsToggle.IsChecked){@($controls[$key].SelectedItems) -join ','}else{''} }
+                elseif ($key -in @('PollMinutes','MinimumGapSeconds') -and -not $controls.AutoCheck.IsChecked) { $updated[$key]=$settings[$key] }
                 elseif ($key -eq 'FailoverAccounts') {
                     $membership=$controls[$key].Resources['Membership']; $members=$controls[$key].Resources['Members']
                     if($membership.SelectedIndex -notin 0..3){throw 'Choose failover quota accounts.'}
