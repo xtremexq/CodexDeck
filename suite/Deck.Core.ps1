@@ -25,11 +25,11 @@ function Get-DeckDefaults {
     return [ordered]@{
         DefaultFolder=$HOME; AlwaysAskFolder=$false
         AutoStart=$false; AutoCheck=$false; PollMinutes=10; MinimumGapSeconds=20
-        AlwaysOnTop=$false; OpacityPercent=100; FontSize=12; Width=476; Height=0
+        AlwaysOnTop=$false; OpacityPercent=100; FontSize=12; Width=620; Height=0
         ShowEmail=$true; ShowPlan=$true; ShowQuota=$true; ShowResets=$true; ShowResetCredits=$true
         ShowSessionCount=$false; ShowUptime=$false; ShowProcessIds=$false
         ShowFolder=$false; ShowSource=$false; ShowCheckedAt=$false; ShowCredits=$false
-        ShowWarmup=$true; MaskEmail=$false; Compact=$false; CloseToTray=$true
+        ShowWarmup=$true; MaskEmail=$false; CloseToTray=$true
         ShowModel=$false; AccountPickerUsage=$false
         ViewMode='Widget'; DashboardTheme='Default'; WidgetOneLine=$true; WidgetShowEmail=$false; WidgetShowResets=$true; WidgetAutoHeight=$true
         WidgetWidth=238; WidgetHeight=0
@@ -721,9 +721,11 @@ function Move-DeckAccountToRecovery {
 
 
 function Get-DeckQuotaColor($Quota) {
-    if($null -eq $Quota.RemainingPct){return '#929CA4'}
-    if($Quota.Dead -or $Quota.RemainingPct -le 0){return '#F17D8D'}
-    if($Quota.RemainingPct -le 20){return '#DCB675'}
+    $remaining=$Quota.RemainingPct
+    if($null -eq $remaining -and $null -ne $Quota.UsedPct){$remaining=100-[double]$Quota.UsedPct}
+    if($null -eq $remaining){return '#929CA4'}
+    if($Quota.Dead -or $remaining -le 0){return '#F17D8D'}
+    if($remaining -le 20){return '#DCB675'}
     return '#69DEC0'
 }
 function Get-DeckHealth($Record) {

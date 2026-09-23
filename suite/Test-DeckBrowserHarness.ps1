@@ -24,13 +24,12 @@ try{
     Assert ($status.Valid -and $status.Version -eq '0.1.10' -and $status.Executable -eq $fake) 'Existing Browser Harness CLI was not detected.'
     $hash=(Get-FileHash -LiteralPath $fake).Hash
     Assert ((Get-DeckGlobalRuleText $fixture $account1) -eq $base) 'Fresh default Global Rules were not loaded.'
-    $debug='Debug swarms: Use the debug-swarm skill only when the user explicitly requests a debug swarm or parallel independent Codex CLI workers; never infer it because parallel work could help. Follow its account, foreground/background, isolation, evidence, and reporting rules.'
-    $browser='Browser Harness: For browser automation or live browser debugging, use the installed Browser Harness. Run `harness` to start its local services, `harness status` to verify them, and `browser-harness --doctor` when the CLI or browser connection needs diagnosis.'
-    [IO.File]::WriteAllText((Join-Path $fixture 'deck/global-rules.md'),($base+"`n`n"+$debug+"`n`n"+$browser),[Text.UTF8Encoding]::new($false))
-    Assert ((Get-DeckGlobalRuleText $fixture $account1) -eq $base) 'Legacy stock rules were not filtered when integrations were unavailable.'
+    $legacy='Usage efficiency: Except when more context or feedback is genuinely needed to understand the task, avoid unnecessary model/tool round trips. Batch independent read-only checks, related edits, and proportionate verification into coherent passes. Do not repeatedly alternate tiny command, inspection, edit, and test steps when a safe batch is possible.'
+    [IO.File]::WriteAllText((Join-Path $fixture 'deck/global-rules.md'),$legacy,[Text.UTF8Encoding]::new($false))
+    Assert ((Get-DeckGlobalRuleText $fixture $account1) -eq $base) 'Legacy stock rules were not upgraded to the new defaults.'
     [void][IO.Directory]::CreateDirectory((Join-Path $account1 'skills/debug-swarm'))
     [IO.File]::WriteAllText((Join-Path $account1 'skills/debug-swarm/SKILL.md'),'debug skill')
-    Assert ((Get-DeckGlobalRuleText $fixture $account1) -match 'Debug swarms:' -and (Get-DeckGlobalRuleText $fixture $account1) -notmatch 'Browser Harness:') 'Debug rule did not follow skill availability.'
+    Assert ((Get-DeckGlobalRuleText $fixture $account1) -eq $base) 'Default rules changed with skill availability.'
     [IO.File]::WriteAllText((Join-Path $fixture 'deck/settings.json'),'{"BrowserHarnessEnabled":true}')
     $owned=Join-Path $account2 'skills/browser-harness'
     [void][IO.Directory]::CreateDirectory($owned)
@@ -44,14 +43,14 @@ try{
     Assert ($active -match 'Debug swarms:' -and $active -match 'Browser Harness:' -and $active -match 'Usage efficiency:') 'Enabled default rules are incomplete.'
     Sync-DeckBrowserHarnessSkill $fixture $account1 $false
     Assert (-not (Test-Path -LiteralPath (Join-Path $account1 'skills/browser-harness')) -and (Test-Path -LiteralPath $fake)) 'Disabling removed more than the managed skill link.'
-    Assert ((Get-DeckGlobalRuleText $fixture $account1) -notmatch 'Browser Harness:') 'Disabled Browser Harness still appeared in Global Rules.'
+    Assert ((Get-DeckGlobalRuleText $fixture $account1) -eq $base) 'Disabling the managed skill changed default Global Rules.'
     [IO.File]::WriteAllText((Join-Path $fixture 'deck/global-rules.md'),'')
     Assert (-not (Get-DeckGlobalRuleText $fixture $account1)) 'Blank custom rules did not disable Global Rules.'
     Assert (Test-Path -LiteralPath (Join-Path $fixture 'integrations/browser-harness-detection.json')) 'Browser Harness detection was not cached.'
     [IO.File]::AppendAllText($fake,"`r`nrem changed executable`r`n")
     Assert ((Get-DeckIntegrationStatus $fixture browser_harness).Version -eq '0.1.10') 'Changed Browser Harness executable was not rechecked.'
     Assert (([IO.File]::ReadAllText((Join-Path $fixture 'integrations/browser-harness-detection.json')) | ConvertFrom-Json).length -eq (Get-Item -LiteralPath $fake).Length) 'Browser Harness detection cache was not refreshed.'
-    'PASS: existing Browser Harness detection, untouched CLI/user skill, managed account link, and conditional Global Rules.'
+    'PASS: existing Browser Harness detection, untouched CLI/user skill, managed account link, and default Global Rules.'
 }finally{
     $env:PATH=$originalPath
     $target=[IO.Path]::GetFullPath($fixture)

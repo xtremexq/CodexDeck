@@ -116,7 +116,7 @@ public static class DeckTaskbarIdentity {
 $script:window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
 $script:appIcon=[Windows.Media.Imaging.BitmapImage]::new([uri](Join-Path $root 'assets/codex-deck.png'))
 $window.Icon=$appIcon; $window.FindName('AppLogo').Source=$appIcon
-foreach ($name in 'AccountPicker','SettingsButton','ConfigButton','NewButton','AutoCompactButton','Summary','SummaryViewport','SummaryEllipsis','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','EfficiencyButton','Brand','Subtitle','LayoutRoot','Disclaimer','Header','SummaryButton','FilterButton','StatusButton','CardScroll') {
+foreach ($name in 'AccountPicker','SettingsButton','ConfigButton','NewButton','AutoCompactButton','Summary','SummaryViewport','SummaryEllipsis','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','EfficiencyButton','Brand','LayoutRoot','Disclaimer','Header','SummaryButton','FilterButton','StatusButton','CardScroll') {
     Set-Variable -Name $name -Value $window.FindName($name) -Scope Script
 }
 # Native caption hit testing covers the top padding, logo, text and gaps too.
@@ -146,6 +146,13 @@ function Format-DeckQuotaReset($Quota) {
     if($at -le [DateTimeOffset]::Now){return ([string][char]0x21BB)+' due'}
     $format=if($at.Date -eq [DateTimeOffset]::Now.Date){'HH:mm'}elseif($at.Year -eq [DateTimeOffset]::Now.Year){'MMM dd HH:mm'}else{'yyyy-MM-dd HH:mm'}
     return ([string][char]0x21BB)+' '+$at.ToString($format)
+}
+function Format-DeckCompactQuotaReset($Quota) {
+    if(-not $Quota.ResetsAtUnix){return ''}
+    $at=[DateTimeOffset]::FromUnixTimeSeconds([long]$Quota.ResetsAtUnix).ToLocalTime()
+    if($at -le [DateTimeOffset]::Now){return ([string][char]0x21BB)+' due'}
+    $time=if($at.Date -eq [DateTimeOffset]::Now.Date){$at.ToString('HH:mm')}else{$at.ToString('dd/MM HH:mm')}
+    return ([string][char]0x21BB)+' '+$time
 }
 function New-DeckQuotaTrack($Quota,[string]$Color,[bool]$ShowReset=$true) {
     $Color=Get-DeckQuotaColor $Quota
@@ -305,13 +312,16 @@ function New-DeckHealthSummary([string]$Name,$Record,[int]$Size=10,$Existing=$nu
     $text.Inlines.Clear()
     $text.TextWrapping='NoWrap'; $text.VerticalAlignment='Center'
     $health=Get-DeckHealth $Record
+    $text.ToolTip=$health
     $color=switch($health){'Ready'{'#69DEC0'} 'Low'{'#DCB675'} 'Exhausted'{'#F17D8D'} 'Limit reached'{'#F17D8D'} default{'#929CA4'}}
-    $run=[Windows.Documents.Run]::new($health); $run.Foreground=$color; [void]$text.Inlines.Add($run)
-    if($settings.ShowQuota){foreach($quota in $Record.Windows){
+    $quotas=if($settings.ShowQuota){@($Record.Windows | Where-Object {$null -ne $_})}else{@()}
+    if(-not $quotas.Count){$run=[Windows.Documents.Run]::new($health); $run.Foreground=$color; [void]$text.Inlines.Add($run)}
+    if($quotas.Count){foreach($quota in $quotas){
         $expired=$quota.ResetsAtUnix -and [long]$quota.ResetsAtUnix -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         $pct=if($null -eq $quota.RemainingPct){'?'}else{[string]$quota.RemainingPct+'%'}
-        $reset=if($settings.ShowResets -and (-not $widget -or $settings.WidgetShowResets)){' '+(Format-DeckQuotaReset $quota)}else{''}
-        $run=[Windows.Documents.Run]::new('  '+(Get-DeckQuotaLabel $quota)+' '+$pct+$(if($expired){'*'}else{''})+$reset)
+        $reset=if($settings.ShowResets -and (-not $widget -or $settings.WidgetShowResets)){' '+(Format-DeckCompactQuotaReset $quota)}else{''}
+        $prefix=if($text.Inlines.Count){'  '}else{''}
+        $run=[Windows.Documents.Run]::new($prefix+(Get-DeckQuotaLabel $quota)+' '+$pct+$(if($expired){'*'}else{''})+$reset)
         $run.Foreground=Get-DeckQuotaColor $quota; [void]$text.Inlines.Add($run)
     }}
     $suffix=if($tasks.ContainsKey($Name) -or $manualChecks.ContainsKey($Name)){' · checking'}elseif($Record.Error){' · check failed'}else{''}
@@ -326,18 +336,20 @@ function New-DeckPanelUsage([string]$Name,$Record,[int]$Columns) {
         $column=[Windows.Controls.ColumnDefinition]::new(); $column.Width=[Windows.GridLength]::new(1,[Windows.GridUnitType]::Star); [void]$usage.ColumnDefinitions.Add($column)
         if($i -ge $windows.Count){continue}
         $quota=$windows[$i]
-        $cell=[Windows.Controls.Border]::new(); $cell.Background='#171B1E'; $cell.CornerRadius='4'; $cell.Padding='5,2'; $cell.Margin='0,0,5,0'
-        $content=[Windows.Controls.StackPanel]::new(); $cell.Child=$content
-        $top=[Windows.Controls.Grid]::new(); $top.ColumnDefinitions.Add([Windows.Controls.ColumnDefinition]::new()) | Out-Null
-        $numberColumn=[Windows.Controls.ColumnDefinition]::new(); $numberColumn.Width=[Windows.GridLength]::Auto; [void]$top.ColumnDefinitions.Add($numberColumn)
-        $label=New-DeckText (Get-DeckQuotaLabel $quota) '#9DA9B8' 10; $label.Margin='0'; $label.TextWrapping='NoWrap'; $label.TextTrimming='CharacterEllipsis'; [void]$top.Children.Add($label)
-        $percent=New-DeckText $(if($null -eq $quota.RemainingPct){'?'}else{[string]$quota.RemainingPct+'%'}) (Get-DeckQuotaColor $quota) 11
-        $percent.Margin='4,0,0,0'; $percent.FontWeight='SemiBold'; $percent.TextWrapping='NoWrap'; [Windows.Controls.Grid]::SetColumn($percent,1); [void]$top.Children.Add($percent)
-        [void]$content.Children.Add($top)
-        $reset=New-DeckText $(if($settings.ShowResets){Format-DeckQuotaReset $quota}else{''}) '#8293AA' 9
-        $reset.Margin='0,1,0,0'; $reset.TextWrapping='NoWrap'; $reset.TextTrimming='CharacterEllipsis'; $reset.ToolTip=$reset.Text
-        if($settings.ShowResets){[void]$content.Children.Add($reset)}
-        [Windows.Controls.Grid]::SetColumn($cell,$i); [void]$usage.Children.Add($cell)
+        $cell=[Windows.Controls.Border]::new(); $cell.Background='#171B1E'; $cell.CornerRadius='3'; $cell.Padding='4,1'; $cell.Margin='0,0,3,0'
+        $content=[Windows.Controls.Grid]::new(); $cell.Child=$content
+        foreach($width in @('Auto','Auto','*')){$part=[Windows.Controls.ColumnDefinition]::new(); $part.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$content.ColumnDefinitions.Add($part)}
+        $label=New-DeckText (Get-DeckQuotaLabel $quota) '#9DA9B8' 9; $label.Margin='0'; $label.TextWrapping='NoWrap'; [void]$content.Children.Add($label)
+        $percent=New-DeckText $(if($null -eq $quota.RemainingPct -and $null -ne $quota.UsedPct){[string](100-[double]$quota.UsedPct)+'%'}elseif($null -eq $quota.RemainingPct){'?'}else{[string]$quota.RemainingPct+'%'}) (Get-DeckQuotaColor $quota) 10
+        $percent.Margin='4,0,0,0'; $percent.FontWeight='SemiBold'; $percent.TextWrapping='NoWrap'; [Windows.Controls.Grid]::SetColumn($percent,1); [void]$content.Children.Add($percent)
+        if($settings.ShowResets){
+            $reset=New-DeckText (Format-DeckCompactQuotaReset $quota) '#8293AA' 9
+            $reset.Margin='5,0,0,0'; $reset.TextWrapping='NoWrap'; $reset.TextTrimming='CharacterEllipsis'; $reset.ToolTip=Format-DeckQuotaReset $quota
+            [Windows.Controls.Grid]::SetColumn($reset,2); [void]$content.Children.Add($reset)
+        }
+        [Windows.Controls.Grid]::SetColumn($cell,$i)
+        if($windows.Count -eq 1){[Windows.Controls.Grid]::SetColumnSpan($cell,$Columns)}
+        [void]$usage.Children.Add($cell)
     }
     if(-not $windows.Count){
         $health=Get-DeckHealth $Record
@@ -373,7 +385,7 @@ function New-DeckWidgetDetails([string]$Name) {
     return $stack
 }
 function New-DeckWidgetCard([string]$Name,$Row,$Profile,[int]$Count) {
-    $card=[Windows.Controls.Border]::new(); $card.CornerRadius='6'; $card.Padding=if($settings.Compact){'8,5'}else{'9,6'}; $card.Margin='0,0,0,4'; $card.BorderThickness='1'; $card.BorderBrush='#33373D'; $card.Background=[Windows.Media.LinearGradientBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#1C1E22'),[Windows.Media.ColorConverter]::ConvertFromString('#101113'),90)
+    $card=[Windows.Controls.Border]::new(); $card.CornerRadius='5'; $card.Padding='7,3'; $card.Margin='0,0,0,3'; $card.BorderThickness='1'; $card.BorderBrush='#33373D'; $card.Background=[Windows.Media.LinearGradientBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#1C1E22'),[Windows.Media.ColorConverter]::ConvertFromString('#101113'),90)
     $stack=[Windows.Controls.StackPanel]::new(); $card.Child=$stack
     $head=[Windows.Controls.Grid]::new()
     foreach($width in @('14','*','Auto')){$col=[Windows.Controls.ColumnDefinition]::new(); $col.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$head.ColumnDefinitions.Add($col)}
@@ -390,7 +402,7 @@ function New-DeckWidgetCard([string]$Name,$Row,$Profile,[int]$Count) {
         $head.ColumnDefinitions[2].Width=[Windows.GridLength]::new(2,[Windows.GridUnitType]::Star)
         $title.VerticalAlignment='Center'; $summary.TextTrimming='CharacterEllipsis'
         [Windows.Controls.Grid]::SetColumn($summary,2)
-        $card.Padding='8,5'; $card.Margin='0,0,0,4'
+        $card.Padding='7,3'; $card.Margin='0,0,0,3'
     }else{
         foreach($i in 1..2){$rd=[Windows.Controls.RowDefinition]::new(); $rd.Height=[Windows.GridLength]::Auto; [void]$head.RowDefinitions.Add($rd)}
         [Windows.Controls.Grid]::SetRow($summary,1); [Windows.Controls.Grid]::SetColumnSpan($summary,3)
@@ -425,8 +437,7 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
     $window.ShowInTaskbar=-not $widget
     $visibility=if($widget){'Collapsed'}else{'Visible'}
     foreach($control in @($LaunchBar,$SettingsButton,$MinimizeButton)){$control.Visibility=$visibility}
-    $Subtitle.Visibility=$visibility
-    $window.MinWidth=if($widget){238}else{476}; $window.MinHeight=100
+    $window.MinWidth=if($widget){238}else{600}; $window.MinHeight=100
     $window.Width=if($widget){$settings.WidgetWidth}else{[Math]::Max($window.MinWidth,$settings.Width)}
     $savedHeight=if($widget){$settings.WidgetHeight}else{$settings.Height}
     $script:defaultViewHeight=$savedHeight -le 0
@@ -463,13 +474,11 @@ function Set-DeckSavedSettings($Saved) {
     # Show-DeckSettings returns. Assigning $script:settings inside that closure
     # writes to the closure's dynamic module, leaving the live Deck settings
     # unchanged; Set-DeckMode then persisted the old values over the new file.
-    $wasCompact=[bool]$script:settings.Compact
     $script:settings=$Saved
     Update-DeckPanelControls
     foreach($account in @($nextCheck.Keys)){
         if($cache[$account].CheckedAt){$nextCheck[$account]=Get-DeckNextCheck $settings $cache[$account] ([DateTimeOffset]$cache[$account].CheckedAt)}
     }
-    if($settings.Compact -and -not $wasCompact){$script:expandedRows=@{}}
     Set-DeckAppearance
     Set-DeckMode $settings.ViewMode
     if(-not $SmokeTest -and -not $Demo){$settingsItem=Get-Item -LiteralPath (Join-Path $root 'settings.json') -ErrorAction SilentlyContinue;if($settingsItem){$script:settingsStamp=$settingsItem.LastWriteTimeUtc.Ticks}}
@@ -726,7 +735,7 @@ function Show-DeckSettings {
     $intro=New-DeckText 'Make Deck feel at home.' '#929CA4'; $intro.Margin='0,0,0,20'
     [Windows.Controls.DockPanel]::SetDock($intro,'Top'); [void]$dock.Children.Add($intro)
     $tabs=[Windows.Controls.TabControl]::new(); [void]$dock.Children.Add($tabs)
-    $appearanceFields=@('ViewMode','DashboardTheme','Compact','AlwaysOnTop','CloseToTray','AutoStart','OpacityPercent','FontSize','DefaultFolder','AlwaysAskFolder')
+    $appearanceFields=@('ViewMode','DashboardTheme','AlwaysOnTop','CloseToTray','AutoStart','OpacityPercent','FontSize','DefaultFolder','AlwaysAskFolder')
     $detailFields=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
     $advancedSections=[ordered]@{
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
@@ -741,7 +750,7 @@ function Show-DeckSettings {
         Integrations=@('ContextOptimizer','CodeGraphEnabled','CodeGraphProfile','BrowserHarnessEnabled')
     }
     $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';General='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Advanced='Conversation routing, compaction, trajectory, and efficiency';Compaction='Press C in the codex-auth dashboard to opt in for a launch. Native uses Codex automatic compaction. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 55% means compaction starts at 45% used. Account, pool and failover conversations are supported.';Integrations='Optional tools and catalogs. Install or update the AAS index here, then choose individual skills in Skills. Browser Harness has a separate account-sharing switch because an installed CLI does not add its skill to every account.';Trajectory='Opt-in local trajectory inspection. The context manager is a related live control surface: it filters the next model request through Deck''s normal loopback route, including failover and auto-compaction. Raw rollout history stays unchanged. Direct launches remain view-only.';Efficiency='Independent opt-in efficiency analysis inspired by PrismoDev. It measures repeated commands and paths, large tool results, token/cache patterns and compaction activity. It does not enable or depend on the trajectory/context manager.';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
-    $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';Compact='Compact entries';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupPlanTypes='Account types (select one or more)';WarmupAccounts='Specific accounts (optional with account types; select one or more)';WarmupModel='Paid-plan model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
+    $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupPlanTypes='Account types (select one or more)';WarmupAccounts='Specific accounts (optional with account types; select one or more)';WarmupModel='Paid-plan model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
     $labels.AutoCompactMode='Auto-compact implementation'
     $labels.AutoCompactThresholdPercent='Auto-compact when context remaining (%)'
     $labels.DashboardTheme='Codex-auth dashboard theme'
@@ -1223,7 +1232,7 @@ function Render-Deck {
     $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + '/' + $accountFilter + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
     if ($signature -eq $lastRender) { return }
     $script:lastRender=$signature
-    $style=(@('Compact','FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowResetCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupSchedulingEnabled','WarmupPlanTypes','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
+    $style=(@('FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowResetCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupSchedulingEnabled','WarmupPlanTypes','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
     if($style -ne $rowStyle){
         $poolKey=[string]$widget; $pool=$rowPools[$poolKey]
         if($pool -and $pool.Style -eq $style){$script:rowControls=$pool.Controls}else{$script:rowControls=@{}; $rowPools[$poolKey]=@{Style=$style;Controls=$rowControls}}
@@ -1271,7 +1280,7 @@ function Render-Deck {
         $built++
         if($widget){$card=New-DeckWidgetCard $name $row $profile $connected.Count; $rowControls[$name]=@{Key=$rowKey;HealthKey=$healthKey;Record=$row;Card=$card}; $rendered.Add($card); continue}
         $plan=if($row.PlanType){$row.PlanType}else{$profile.PlanType}
-        $card=[Windows.Controls.Border]::new(); $card.CornerRadius='6'; $card.Margin='0,0,0,5'; $card.Padding=if($settings.Compact){'8,5'}else{'10,8'}
+        $card=[Windows.Controls.Border]::new(); $card.CornerRadius='5'; $card.Margin='0,0,0,3'; $card.Padding='6,2'
         $card.Background=[Windows.Media.LinearGradientBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#1C1E22'),[Windows.Media.ColorConverter]::ConvertFromString('#101113'),90)
         $card.BorderBrush=[Windows.Media.LinearGradientBrush]::new([Windows.Media.ColorConverter]::ConvertFromString('#383B40'),[Windows.Media.ColorConverter]::ConvertFromString('#202226'),90); $card.BorderThickness='1'
         $grid=[Windows.Controls.Grid]::new(); $card.Child=$grid
@@ -1906,7 +1915,7 @@ try{
             $script:lastRender=''; Render-Deck; $window.Content.UpdateLayout()
             for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Children[$index])){throw 'Completed checks replaced account rows'}}
             if([Math]::Abs($CardScroll.VerticalOffset-$beforeOffset) -gt 1 -or [Math]::Abs($CardScroll.ExtentHeight-$beforeExtent) -gt 1){throw 'Completed checks disturbed scroll position or extent'}
-            $quotaText=if($testMode -eq 'Widget'){$Cards.Children[0].Resources['HealthSummary'].Text}else{$Cards.Children[0].Resources['UsageHost'].Children[0].Child.Children[0].Children[1].Text}
+            $quotaText=if($testMode -eq 'Widget'){$Cards.Children[0].Resources['HealthSummary'].Text}else{$Cards.Children[0].Resources['UsageHost'].Children[0].Child.Children[1].Text}
             if($quotaText -notmatch '17%'){throw 'Retained row did not display new quota'}
             Write-Output "${testMode}: completed results retain rows, quota updates, scroll offset and extent."
             $script:rowControls=@{}; $Cards.Children.Clear(); $script:lastRender=''
