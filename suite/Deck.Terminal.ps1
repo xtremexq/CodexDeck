@@ -156,7 +156,7 @@ function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[in
     Add-Line '  LAUNCH    Enter open   / find   B best   Q quit' 'Cyan'
     Add-Line '  ACCOUNTS  R check   A all   N new   L login   F2 rename   M mask' 'Gray'
     Add-Line '  WARM-UP   U now   T times   W select   P pause' 'Gray'
-    Add-Line '  OPEN      D desktop   S settings   V trajectory   Y analysis' 'Gray'
+    Add-Line '  OPEN      D desktop   S settings   Y Analytics' 'Gray'
     Add-Line '  FILES     G rules   I instructions   E memories   K skills' 'Gray'
     if($CompactAdjusting){Add-Line ('  COMPACT   {0}  {1}% free   Up/Down 5%   Enter save   Esc cancel' -f $CompactMode,$CompactThreshold) 'White' 'DarkBlue'}
     else{Add-Line ('  COMPACT   C [{0}] {1} at {2}% free   Hold C to adjust' -f $(if($AutoCompact){'x'}else{' '}),$CompactMode,$CompactThreshold) 'Gray'}
@@ -223,7 +223,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
         Add-Line ('  NAVIGATE Enter launch  / search  B best  Q quit  C compact [{0}] {1} {2}% free (hold C to adjust)' -f $(if($AutoCompact){'x'}else{' '}),$CompactMode,$CompactThreshold) 'Gray'
     }
     Add-Line '  MANAGE R refresh  A all  H history  F2 rename  L login  N new  G global  M mask' 'DarkGray'
-    Add-Line '  DISPLAY D desktop  S settings  V trajectory  Y efficiency  I instructions  E memories  K skills' 'DarkGray'
+    Add-Line '  DISPLAY D desktop  S settings  Y Analytics  I instructions  E memories  K skills' 'DarkGray'
     return $lines.ToArray()
 }
 function Read-DeckTerminalInput([string]$Prompt, [int]$MaxLength = 40) {
@@ -460,8 +460,7 @@ function Show-DeckTerminal {
                 'I' { if($name){Open-DeckAccountInstructions $SuiteRoot $name;$notice="$name account instructions opened."} }
                 'E' { if($name){Open-DeckMemories $SuiteRoot $name;$notice="$name memories editor opened."} }
                 'K' { if($name){Open-DeckSkillsFolder $SuiteRoot $name;$notice="$name skills folder opened."} }
-                'V' { try{[void](Open-DeckInspector $SuiteRoot 'Trajectory');$notice='Trajectory viewer opened.'}catch{$notice=$_.Exception.Message} }
-                'Y' { try{[void](Open-DeckInspector $SuiteRoot 'Efficiency');$notice='Efficiency analytics opened.'}catch{$notice=$_.Exception.Message} }
+                'Y' { try{[void](Open-DeckInspector $SuiteRoot 'Efficiency');$notice='Analytics opened.'}catch{$notice=$_.Exception.Message} }
                 'S' { Start-DeckCompanion $SuiteRoot -OpenSettings; $notice='Desktop Settings opened.' }
                 'D' { Start-DeckCompanion $SuiteRoot; $notice = 'Desktop Deck opened; use its settings for scheduling and warm-up.' }
                 default {

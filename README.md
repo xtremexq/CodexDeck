@@ -45,7 +45,7 @@ Always optional; Deck is free and open source.
 
 **Requires Windows, Windows PowerShell 5.1, and Codex CLI available as `codex`.** The desktop companion uses WPF and the Windows system tray. Linux and macOS are not supported. No administrator account is required.
 
-Download **[CodexDeck-1.7.1.zip](https://github.com/xtremexq/CodexDeck/releases/download/v1.7.1/CodexDeck-1.7.1.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
+Download **[CodexDeck-1.8.0.zip](https://github.com/xtremexq/CodexDeck/releases/download/v1.8.0/CodexDeck-1.8.0.zip)** from [the latest release](https://github.com/xtremexq/CodexDeck/releases/latest), extract it, then run the installer in that folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-CodexDeck.ps1
@@ -87,8 +87,7 @@ The installer adds command wrappers to your user PATH and preserves existing acc
 | **L** | Log in to the selected account |
 | **N** | Create a new profile and log in |
 | **D** | Open the desktop companion |
-| **V** | Open the opt-in trajectory viewer and live context manager |
-| **Y** | Open the independently opt-in efficiency analytics |
+| **Y** | Open Analytics |
 | **G** | Edit rules that apply globally |
 | **I** | Read or edit the selected account or pool's global `AGENTS.md` instructions |
 | **E** | Read or edit the selected account or pool's memory files |
@@ -198,13 +197,13 @@ Each profile has a separate `CODEX_HOME`. New profiles can inherit local configu
 
 ### Optional managed integrations
 
-**Settings → Integrations** can enable one context optimizer—**RTK** or **Headroom MCP**—and independently enable **CodeGraph** repository intelligence and **Browser Harness** browser automation. It also installs or updates the optional **AAS catalog index**. Fresh Deck installs do not install the AAS index or any AAS skill. Saving an enabled tool installs a missing package on demand. **Check & update** checks for a new version only when requested, and **Roll back** reactivates an earlier retained RTK, Headroom, or CodeGraph version. Deck recognizes an existing Browser Harness installation without replacing it; its update button requires a second click after showing the available version.
+**Settings → Integrations** installs or updates RTK, Headroom MCP, CodeGraph, Browser Harness, and the optional AAS catalog index. Fresh Deck installs do not install the AAS index or any AAS skill. **Check & update** checks for a new version only when requested, and **Roll back** reactivates an earlier retained version when available. Deck recognizes an existing Browser Harness installation without replacing it; its update button requires a second click after showing the available version. The context optimizer selector appears only for installed RTK or Headroom.
 
-Deck stores these tools under `.codex-loop/integrations/packages/<tool>/<version>` and injects their hook/MCP configuration only at launch. It does not rewrite account `config.toml` or `AGENTS.md`, so account and pool isolation remains intact. The selected integrations follow every Deck conversation path, including dashboard/account launches, pools, failover, routing and both auto-compaction modes. RTK and Headroom are deliberately exclusive because both optimize context; CodeGraph can run with either. Prefix a single shell command with `NO_RTK=1 ` to bypass RTK rewriting for that command.
+Deck stores managed packages under `.codex-loop/integrations/packages/<tool>/<version>` and injects their hook/MCP configuration only at launch. It does not rewrite account `config.toml` or `AGENTS.md`, so account and pool isolation remains intact. RTK and Headroom are exclusive context optimizer choices; CodeGraph can run with either. Prefix a single shell command with `NO_RTK=1 ` to bypass RTK rewriting for that command.
 
-When the CodeGraph MCP server starts for a Codex conversation, it automatically indexes that conversation's starting folder. Its tools are called by the agent when useful; it does not change the account's project. If every account starts in your home folder, CodeGraph will index that home folder for each launch. Start `codex-auth accountX` from the project's folder, or enable **Settings → Appearance → Always ask where to open the terminal** and choose the project folder for each desktop launch. The **CodeGraph tool profile** controls how many tools the agent sees, not which folder is indexed.
+After installing CodeGraph, use its **Project access** panel in Integrations to add project folders and choose the tool profile. CodeGraph attaches only when a conversation starts in one of those folders or its subfolders, including a folder chosen with `codex -C` or `--cd`. The list supports add, browse, remove, right-click open, and copy-path actions. Start `codex-auth accountX` from a chosen project folder, or enable **Settings → General → Always ask where to open the terminal** for desktop launches. Existing conversations retain the integrations they started with.
 
-The default Global Rules contain usage-efficiency guidance. The debug-swarm rule appears only when that skill is installed for the account; Browser Harness guidance appears only when its account-sharing switch is enabled and the tool and skill are available. Custom Global Rules remain editable. Browser Harness remains in its existing `uv` tool environment, and Deck preserves any user-owned Browser Harness skill. An account with its own Browser Harness skill can use that skill regardless of Deck's sharing switch.
+The default Global Rules contain usage-efficiency guidance. The debug-swarm rule appears only when that skill is installed for the account. When Browser Harness is detected, **Settings → Skills** shows its skill switch; the selected skill-access scope determines which accounts receive it. Custom Global Rules remain editable. Browser Harness remains in its existing `uv` tool environment, and Deck preserves user-owned Browser Harness skills.
 
 Deck keeps credentials, configuration, databases and histories isolated. Once a week, background storage maintenance leaves active account homes untouched, removes curated-plugin staging directories older than 24 hours from inactive homes, and hard-links verified-identical sandbox executables and managed plugin-cache files of at least 1 MiB. Each account retains its expected paths and Windows sandbox boundary; only immutable duplicate file contents share disk blocks. The result is recorded in `.codex-loop/deck/storage-maintenance.json`, and skipped active homes are retried later.
 

@@ -54,7 +54,7 @@ jobs:
           if (!(Test-Path "$destination/.codex-loop/Deck.Inspector.cjs")) { throw 'Missing installed trajectory and efficiency inspector' }
           if (!(Test-Path "$destination/.codex-loop/accounts/pool/skills/debug-swarm/SKILL.md")) { throw 'Missing globally enabled Deck skill' }
           if (!(Test-Path "$destination/.codex-loop/accounts/pool/skills/ui-design/SKILL.md")) { throw 'Missing UIZZE skill in pooled environment' }
-          if (!(Test-Path "$destination/.codex-loop/skill-catalog/aas-index.json")) { throw 'Missing offline AAS catalog' }
+          if (Test-Path "$destination/.codex-loop/deck/catalog/aas-index.json") { throw 'Optional AAS catalog was installed by default' }
           if (!(Test-Path "$destination/.local/bin/deck-skills.cmd")) { throw 'Missing skill catalog CLI' }
           foreach ($name in 'account','pool','usage','delay','schedule','check','deck') {
             if (!(Test-Path "$destination/.local/bin/$name.cmd")) { throw "Missing installed local shell command: $name" }

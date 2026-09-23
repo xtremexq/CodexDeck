@@ -1179,7 +1179,12 @@ try {
 $instructionSections=@()
 try{
     if($codexConversation -and $deckSettings){
-        $integrationLaunch=Get-DeckIntegrationLaunch $runtimeRoot $deckSettings
+        $startFolder=(Get-Location).Path
+        for($argIndex=0;$argIndex -lt $CodexArgs.Count;$argIndex++){
+            if($CodexArgs[$argIndex] -in @('-C','--cd') -and $argIndex+1 -lt $CodexArgs.Count){$startFolder=[IO.Path]::GetFullPath([IO.Path]::Combine($startFolder,[string]$CodexArgs[$argIndex+1]));break}
+            if([string]$CodexArgs[$argIndex] -match '^--cd=(.+)$'){$startFolder=[IO.Path]::GetFullPath([IO.Path]::Combine($startFolder,$Matches[1]));break}
+        }
+        $integrationLaunch=Get-DeckIntegrationLaunch $runtimeRoot $deckSettings $startFolder
         $sharedArgs+=@($integrationLaunch.Arguments)
         $instructionSections=@($integrationLaunch.InstructionSections)
         foreach($entry in $integrationLaunch.Environment.GetEnumerator()){[Environment]::SetEnvironmentVariable([string]$entry.Key,[string]$entry.Value,'Process')}
@@ -1188,7 +1193,7 @@ if(Test-Path -LiteralPath (Join-Path $runtimeRoot 'Deck.GlobalRules.ps1')){
     . (Join-Path $runtimeRoot 'Deck.GlobalRules.ps1')
     if($codexConversation){
         if($deckSettings){
-            try{Sync-DeckBrowserHarnessSkill $runtimeRoot $accountDir ([bool]$deckSettings.BrowserHarnessEnabled)}
+            try{Sync-DeckBrowserHarnessSkill $runtimeRoot $accountDir ([bool]$deckSettings.BrowserHarnessEnabled -and (Test-DeckSkillAccess $runtimeRoot $accountName $deckSettings.SkillAccessAccounts))}
             catch{Write-Warning "Browser Harness skill could not be attached: $($_.Exception.Message)"}
         }
         $globalRuleArgs=@(Get-DeckGlobalRuleArguments $runtimeRoot $accountDir (@($sharedArgs)+@($CodexArgs)) $instructionSections)

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.0 - 2026-09-23
+
+- Bundled the UIZZE skills and added an optional, searchable AAS catalog with direct skill installation and pagination.
+- Reduced Settings and account-check stalls by moving AAS search and other slow work off the UI thread.
+- Reorganized Settings into General, Checks & Warmup, Environments, Skills, Advanced, Integrations, Backup, and About; AAS appears before Skills only when its optional catalog is installed.
+- Made skill access selectable by account scope, moved Browser Harness sharing into Skills, and added AAS catalog right-click actions.
+- Scoped CodeGraph to selected project folders, with folder and profile controls in Integrations.
+- Tightened account rows and quota spacing, improved summary sizing, and updated dashboard shortcuts to show Analytics without the trajectory shortcut.
+- Corrected the Settings support prompt after tab reordering and aligned GitHub's installer check with the optional AAS catalog.
+
 ## 1.7.1 - 2026-09-22
 
 - Added four distinct codex-auth dashboard themes in Settings: Focus, Cards, Ledger and Split. The original layout remains the default, and the new layouts group shortcuts by task.

@@ -117,7 +117,16 @@ function Update-DeckAasCatalog([string]$SuiteRoot) {
         $catalog=ConvertTo-DeckAasCatalog $raw $commit
         $path=Join-Path $SuiteRoot 'deck/catalog/aas-index.json'
         [void][IO.Directory]::CreateDirectory((Split-Path -Parent $path))
+        if(Test-Path -LiteralPath $path -PathType Leaf){
+            $previous=Read-DeckAasCatalog $SuiteRoot
+            if($previous.commit -ne $commit){
+                $history=Join-Path $SuiteRoot 'deck/catalog/history'
+                [void][IO.Directory]::CreateDirectory($history)
+                Copy-Item -LiteralPath $path -Destination (Join-Path $history ([string]$previous.commit+'.json')) -Force
+            }
+        }
         Write-DeckEnvironmentJson $path $catalog
+        [IO.File]::WriteAllText((Join-Path $SuiteRoot 'deck/catalog/aas-version.txt'),$commit,[Text.UTF8Encoding]::new($false))
         return "AAS catalog updated: $(@($catalog.skills).Count) skills at $commit."
     }finally{if(Test-Path -LiteralPath $temporary){[IO.File]::Delete($temporary)}}
 }

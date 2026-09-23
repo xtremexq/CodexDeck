@@ -64,6 +64,17 @@ function Test-DeckBundledSkillDesired([string]$SuiteRoot,[string]$Entry,$Skill) 
     return [bool]$Skill.DefaultEnabled
 }
 
+function Test-DeckSkillAccess([string]$SuiteRoot,[string]$Entry,[string]$Scope='') {
+    if(-not $Scope){
+        $preferences=Read-DeckEnvironmentJson (Join-Path $SuiteRoot 'deck/settings.json')
+        $Scope=if($preferences -and $preferences.SkillAccessAccounts){[string]$preferences.SkillAccessAccounts}else{'*'}
+    }
+    if($Scope -eq '*'){return $true}
+    if($Scope -eq '*free'){return (Get-DeckPoolAccountPlan $SuiteRoot $Entry) -eq 'free'}
+    if($Scope -eq '*paid'){return (Get-DeckPoolAccountPlan $SuiteRoot $Entry) -in @('plus','pro','team','business','enterprise','edu')}
+    return $Entry -in @($Scope -split ',' | ForEach-Object {$_.Trim()} | Where-Object {$_})
+}
+
 function Test-DeckBundledSkillLink([string]$Target,[string]$Source) {
     if (-not (Test-Path -LiteralPath $Target -PathType Container)) { return $false }
     $item=Get-Item -LiteralPath $Target -Force
@@ -71,10 +82,12 @@ function Test-DeckBundledSkillLink([string]$Target,[string]$Source) {
     return [IO.Path]::GetFullPath([string]@($item.Target)[0]).TrimEnd('\') -eq [IO.Path]::GetFullPath($Source).TrimEnd('\')
 }
 
-function Get-DeckBundledSkillStatus([string]$SuiteRoot,[string]$Entry,$Skill) {
+function Get-DeckBundledSkillStatus([string]$SuiteRoot,[string]$Entry,$Skill,[string]$Scope='') {
     $directory=Get-DeckEntryDirectory $SuiteRoot $Entry
     $target=Join-Path $directory ('skills/'+$Skill.Name)
-    $desired=Test-DeckBundledSkillDesired $SuiteRoot $Entry $Skill
+    $access=Test-DeckSkillAccess $SuiteRoot $Entry $Scope
+    $configured=Test-DeckBundledSkillDesired $SuiteRoot $Entry $Skill
+    $desired=$configured -and $access
     $managed=Test-DeckBundledSkillLink $target $Skill.Path
     $exists=Test-Path -LiteralPath $target
     $binding=@((Get-DeckSharing $SuiteRoot $Entry).Bindings | Where-Object { $_.Resource -in @('skills','skills/'+$Skill.Name) } | Select-Object -First 1)
@@ -82,7 +95,7 @@ function Get-DeckBundledSkillStatus([string]$SuiteRoot,[string]$Entry,$Skill) {
     if($binding.Count){$blocked="Managed through resource sharing from $($binding[0].Source)."}
     elseif($exists -and -not $managed){$blocked='A user-owned skill with this name already exists.'}
     return [pscustomobject]@{
-        Name=$Skill.Name;Desired=$desired;Active=$managed;Exists=[bool]$exists
+        Name=$Skill.Name;Desired=$desired;Configured=$configured;Active=$managed;Exists=[bool]$exists;Access=$access
         Blocked=[bool]$blocked;BlockedReason=$blocked;Target=$target
     }
 }
@@ -136,8 +149,10 @@ function Sync-DeckBundledSkills([string]$SuiteRoot,[string]$Entry) {
         }
     }
     $messages=@()
+    $preferences=Read-DeckEnvironmentJson (Join-Path $SuiteRoot 'deck/settings.json')
+    $scope=if($preferences -and $preferences.SkillAccessAccounts){[string]$preferences.SkillAccessAccounts}else{'*'}
     foreach($skill in Get-DeckBundledSkills $SuiteRoot) {
-        $status=Get-DeckBundledSkillStatus $SuiteRoot $Entry $skill
+        $status=Get-DeckBundledSkillStatus $SuiteRoot $Entry $skill $scope
         if ($status.Blocked) {
             if($status.Desired){$messages+="$Entry / $($skill.Name): $($status.BlockedReason)"}
             continue

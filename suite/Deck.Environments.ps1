@@ -194,7 +194,12 @@ function Get-DeckIntegrationStatus([string]$SuiteRoot,[ValidateSet('rtk','headro
     if($Name -eq 'aas_catalog'){
         $path=Join-Path $SuiteRoot 'deck/catalog/aas-index.json'
         $valid=Test-Path -LiteralPath $path -PathType Leaf
-        return [pscustomobject]@{Name=$Name;DisplayName=$component.displayName;Installed=$valid;Valid=$valid;Version='catalog index';Executable=$path;Versions=@();ProjectUrl=$component.projectUrl;License=$component.license}
+        $versionFile=Join-Path $SuiteRoot 'deck/catalog/aas-version.txt'
+        $commit=if($valid -and (Test-Path -LiteralPath $versionFile -PathType Leaf)){[IO.File]::ReadAllText($versionFile).Trim()}else{''}
+        $version=if($commit -match '^[a-f0-9]{40}$'){$commit.Substring(0,12)}else{'index'}
+        $history=Join-Path $SuiteRoot 'deck/catalog/history'
+        $versions=@(Get-ChildItem -LiteralPath $history -Filter '*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | ForEach-Object BaseName)
+        return [pscustomobject]@{Name=$Name;DisplayName=$component.displayName;Installed=$valid;Valid=$valid;Version=$version;Executable=$path;Versions=@($version)+$versions;ProjectUrl=$component.projectUrl;License=$component.license}
     }
     if($Name -eq 'browser_harness'){
         $command=Get-Command browser-harness -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -377,8 +382,21 @@ function Install-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom
     Write-DeckIntegrationState $SuiteRoot ([ordered]@{schema=1;components=$components})
     return Get-DeckIntegrationStatus $SuiteRoot $Name
 }
-function Restore-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness')][string]$Name) {
+function Restore-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom','codegraph','browser_harness','aas_catalog')][string]$Name) {
     if($Name -eq 'browser_harness'){throw 'Browser Harness is installed outside Deck; use its own package manager to roll back.'}
+    if($Name -eq 'aas_catalog'){
+        $history=Join-Path $SuiteRoot 'deck/catalog/history'
+        $previous=Get-ChildItem -LiteralPath $history -Filter '*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+        if(-not $previous){throw 'No earlier catalog index is available.'}
+        $path=Get-DeckCatalogFile $SuiteRoot
+        $catalog=[IO.File]::ReadAllText($previous.FullName) | ConvertFrom-Json -ErrorAction Stop
+        if($catalog.schema -ne 1 -or $catalog.repository -cne 'sickn33/agentic-awesome-skills' -or [string]$catalog.commit -notmatch '^[a-f0-9]{40}$' -or @($catalog.skills).Count -lt 1000){throw 'The earlier catalog index is invalid.'}
+        $current=Read-DeckAasCatalog $SuiteRoot
+        Copy-Item -LiteralPath $path -Destination (Join-Path $history ([string]$current.commit+'.json')) -Force
+        Copy-Item -LiteralPath $previous.FullName -Destination $path -Force
+        [IO.File]::WriteAllText((Join-Path $SuiteRoot 'deck/catalog/aas-version.txt'),[string]$catalog.commit,[Text.UTF8Encoding]::new($false))
+        return Get-DeckIntegrationStatus $SuiteRoot $Name
+    }
     $status=Get-DeckIntegrationStatus $SuiteRoot $Name; $state=Get-DeckIntegrationState $SuiteRoot; $entry=$state.components.$Name
     $target=@($entry.history | Where-Object {$_ -and $_ -ne $entry.version -and (Test-Path -LiteralPath (Join-Path $SuiteRoot "integrations/packages/$Name/$_") -PathType Container)}) | Select-Object -First 1
     if(-not $target){throw 'No earlier installed version is available.'}
@@ -389,7 +407,7 @@ function Restore-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom
     return Get-DeckIntegrationStatus $SuiteRoot $Name
 }
 function Ensure-DeckIntegrationSelection([string]$SuiteRoot,$Settings) {
-    $names=@(); if($Settings.ContextOptimizer -eq 'RTK'){$names+='rtk'}elseif($Settings.ContextOptimizer -eq 'Headroom'){$names+='headroom'}; if($Settings.CodeGraphEnabled){$names+='codegraph'}; if($Settings.BrowserHarnessEnabled){$names+='browser_harness'}
+    $names=@(); if($Settings.ContextOptimizer -eq 'RTK'){$names+='rtk'}elseif($Settings.ContextOptimizer -eq 'Headroom'){$names+='headroom'}; if($Settings.CodeGraphProjects){$names+='codegraph'}; if($Settings.BrowserHarnessEnabled){$names+='browser_harness'}
     foreach($name in $names){if(-not (Get-DeckIntegrationStatus $SuiteRoot $name).Valid){Install-DeckIntegration $SuiteRoot $name | Out-Null}}
 }
 function Get-DeckIntegrationWorkerCode([string]$SuiteRoot,[string[]]$Names,[switch]$Update) {
@@ -428,7 +446,25 @@ function Sync-DeckBrowserHarnessSkill([string]$SuiteRoot,[string]$AccountDirecto
     [void][IO.Directory]::CreateDirectory((Split-Path -Parent $target))
     [void](New-Item -ItemType Junction -Path $target -Target (Split-Path -Parent $source))
 }
-function Get-DeckIntegrationLaunch([string]$SuiteRoot,$Settings) {
+function Get-DeckCodeGraphProjectPaths([string]$Value) {
+    $paths=@()
+    foreach($line in @($Value -split "`n")){
+        $path=$line.Trim().TrimEnd("`r")
+        if(-not $path){continue}
+        try{$path=[IO.Path]::GetFullPath($path);if($path -eq [IO.Path]::GetPathRoot($path)){continue};$path=$path.TrimEnd('\')}catch{continue}
+        if($path -and $path -notin $paths){$paths+=$path}
+    }
+    return $paths
+}
+function Test-DeckCodeGraphProject([string]$Folder,[string]$Projects) {
+    if(-not $Folder -or -not $Projects){return $false}
+    try{$current=[IO.Path]::GetFullPath($Folder).TrimEnd('\')}catch{return $false}
+    foreach($project in @(Get-DeckCodeGraphProjectPaths $Projects)){
+        if($current.Equals($project,[StringComparison]::OrdinalIgnoreCase) -or $current.StartsWith($project+'\',[StringComparison]::OrdinalIgnoreCase)){return $true}
+    }
+    return $false
+}
+function Get-DeckIntegrationLaunch([string]$SuiteRoot,$Settings,[string]$StartFolder='') {
     $arguments=@(); $sections=@(); $environment=@{}
     if($Settings.ContextOptimizer -eq 'RTK'){
         $status=Get-DeckIntegrationStatus $SuiteRoot rtk; if(-not $status.Valid){throw 'RTK is enabled but not installed. Open Deck Settings and install it.'}
@@ -443,7 +479,7 @@ function Get-DeckIntegrationLaunch([string]$SuiteRoot,$Settings) {
         $arguments+=@('-c',('mcp_servers.deck_headroom='+(ConvertTo-DeckTomlValue $definition)))
         $sections+='Deck Context Optimizer: For large tool output or data that would otherwise fill the prompt, use deck_headroom compression and retain the returned retrieval ID. Retrieve exact source material when fidelity is needed.'
     }
-    if($Settings.CodeGraphEnabled){
+    if(Test-DeckCodeGraphProject $StartFolder ([string]$Settings.CodeGraphProjects)){
         $status=Get-DeckIntegrationStatus $SuiteRoot codegraph; if(-not $status.Valid){throw 'CodeGraph is enabled but not installed. Open Deck Settings and install it.'}
         $profile=if($Settings.CodeGraphProfile -in @('core','graph','all')){$Settings.CodeGraphProfile}else{'core'}
         $definition=@{command=$status.Executable;args=@('--mcp','--profile',$profile);startup_timeout_sec=30;tool_timeout_sec=120}

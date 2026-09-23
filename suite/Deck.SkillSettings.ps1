@@ -5,27 +5,46 @@ $deckSkillPanel=[Windows.Controls.StackPanel]::new(); $deckSkillPanel.Margin='2,
 $deckSkillScroll=[Windows.Controls.ScrollViewer]::new(); $deckSkillScroll.VerticalScrollBarVisibility='Auto'; $deckSkillScroll.HorizontalScrollBarVisibility='Disabled'; $deckSkillScroll.Content=$deckSkillPanel
 $deckSkillTab.Content=$deckSkillScroll; [void]$tabs.Items.Add($deckSkillTab)
 [void]$deckSkillPanel.Children.Add((New-DeckText 'Deck skills' '#EDF1F7' 18))
-$deckSkillHelp=New-DeckText 'Reusable workflows maintained with Codex Deck. Enabled skills appear in new Codex sessions for the selected account or pool. User-owned skills are never overwritten.' '#929CA4'
+$deckSkillHelp=New-DeckText 'Choose which accounts can use Deck skills, then adjust individual skills below. User-owned skills are never overwritten.' '#929CA4'
 $deckSkillHelp.Margin='0,8,0,16'; [void]$deckSkillPanel.Children.Add($deckSkillHelp)
+$skillAccessLabel=New-DeckText 'Skill access' '#A2ADB5'; $skillAccessLabel.Margin='0,0,0,6'; [void]$deckSkillPanel.Children.Add($skillAccessLabel)
+$skillAccess=[Windows.Controls.StackPanel]::new(); $skillAccess.Margin='0,0,0,14'; [void]$deckSkillPanel.Children.Add($skillAccess)
+$skillMembership=[Windows.Controls.ComboBox]::new(); foreach($option in @('Use all accounts and pools (including future entries)','Use all free accounts','Use all Plus or higher accounts','Use selected accounts or pools')){[void]$skillMembership.Items.Add($option)}; [void]$skillAccess.Children.Add($skillMembership)
+$skillMembers=[Windows.Controls.ListBox]::new(); $skillMembers.SelectionMode='Multiple'; $skillMembers.MaxHeight=150; $skillMembers.Margin='0,8,0,0'; foreach($name in $environmentNames){[void]$skillMembers.Items.Add($name)}; [void]$skillAccess.Children.Add($skillMembers)
+$savedSkillScope=if($settings.SkillAccessAccounts){[string]$settings.SkillAccessAccounts}else{'*'}
+$skillMembership.SelectedIndex=if($savedSkillScope -eq '*'){0}elseif($savedSkillScope -eq '*free'){1}elseif($savedSkillScope -eq '*paid'){2}else{3}
+foreach($name in @($savedSkillScope -split ',' | Where-Object {$_})){if($skillMembers.Items.Contains($name)){[void]$skillMembers.SelectedItems.Add($name)}}
+$skillMembers.Visibility=if($skillMembership.SelectedIndex -eq 3){'Visible'}else{'Collapsed'}
+$skillMembership.Add_SelectionChanged({$skillMembers.Visibility=if($skillMembership.SelectedIndex -eq 3){'Visible'}else{'Collapsed'}}.GetNewClosure())
 $deckSkillTargetLabel=New-DeckText 'Account or pool' '#A2ADB5'; $deckSkillTargetLabel.Margin='0,0,0,6'; [void]$deckSkillPanel.Children.Add($deckSkillTargetLabel)
 $deckSkillTarget=[Windows.Controls.ComboBox]::new(); foreach($entryName in $environmentNames){[void]$deckSkillTarget.Items.Add($entryName)}; [void]$deckSkillPanel.Children.Add($deckSkillTarget)
 $deckSkillRows=[Windows.Controls.StackPanel]::new(); $deckSkillRows.Margin='0,14,0,0'; [void]$deckSkillPanel.Children.Add($deckSkillRows)
 $deckSkillStatus=New-DeckText '' '#929CA4'; $deckSkillStatus.Margin='0,12,0,0'; [void]$deckSkillPanel.Children.Add($deckSkillStatus)
+$browserSkillCard=[Windows.Controls.Border]::new(); $browserSkillCard.BorderBrush='#303A42'; $browserSkillCard.BorderThickness='1'; $browserSkillCard.CornerRadius='6'; $browserSkillCard.Padding='12'; $browserSkillCard.Margin='0,8,0,10'
+$browserSkillBody=[Windows.Controls.StackPanel]::new(); $browserSkillCard.Child=$browserSkillBody
+$browserSkillToggle=[Windows.Controls.CheckBox]::new(); $browserSkillToggle.Content='Browser Harness'; $browserSkillToggle.IsChecked=[bool]$settings.BrowserHarnessEnabled; $browserSkillToggle.FontWeight='SemiBold'; [void]$browserSkillBody.Children.Add($browserSkillToggle)
+$browserSkillNote=New-DeckText 'Share the detected Browser Harness skill with accounts and pools allowed by Skill access. It applies to new conversations; user-owned copies remain untouched.' '#A2ADB5' 11; $browserSkillNote.Margin='22,6,0,0'; [void]$browserSkillBody.Children.Add($browserSkillNote)
+[void]$deckSkillPanel.Children.Add($browserSkillCard); $controls.BrowserHarnessEnabled=$browserSkillToggle
+$currentSkillScope={
+    if($skillMembership.SelectedIndex -eq 3){$chosen=@($skillMembers.SelectedItems | ForEach-Object {[string]$_}) -join ',';return $(if($chosen){$chosen}else{'__none__'})}
+    return @('*','*free','*paid')[$skillMembership.SelectedIndex]
+}.GetNewClosure()
 $renderDeckSkills={
     $deckSkillRows.Children.Clear(); $deckSkillState.Controls=@{}
     $entry=[string]$deckSkillTarget.SelectedItem
     if(-not $entry){$deckSkillStatus.Text='Choose an account or pool.';return}
     $catalog=@(Get-DeckBundledSkills $suite)
     if(-not $catalog.Count){$deckSkillStatus.Text='No Deck skills are installed.';return}
+    $scope=& $currentSkillScope
     foreach($skill in $catalog){
         $key=$entry+'|'+$skill.Name
-        if($SmokeTest -and -not (Test-Path -LiteralPath (Join-Path $suite ('accounts/'+$entry)) -PathType Container)){$status=[pscustomobject]@{Desired=[bool]$skill.DefaultEnabled;Active=[bool]$skill.DefaultEnabled;Blocked=$false;BlockedReason=''}}
-        else{$status=Get-DeckBundledSkillStatus $suite $entry $skill}
+        if($SmokeTest -and -not (Test-Path -LiteralPath (Join-Path $suite ('accounts/'+$entry)) -PathType Container)){$status=[pscustomobject]@{Desired=[bool]$skill.DefaultEnabled;Active=[bool]$skill.DefaultEnabled;Blocked=$false;BlockedReason='';Access=$true}}
+        else{$status=Get-DeckBundledSkillStatus $suite $entry $skill $scope}
         $desired=if($deckSkillState.Changes.ContainsKey($key)){[bool]$deckSkillState.Changes[$key].Enabled}else{[bool]$status.Desired}
         $card=[Windows.Controls.Border]::new(); $card.BorderBrush='#303A42'; $card.BorderThickness='1'; $card.CornerRadius='6'; $card.Padding='12'; $card.Margin='0,0,0,10'
         $content=[Windows.Controls.StackPanel]::new(); $card.Child=$content
         $check=[Windows.Controls.CheckBox]::new(); $check.Content=$skill.DisplayName; $check.IsChecked=$desired; $check.FontWeight='SemiBold'
-        $check.IsEnabled=-not [bool]$status.Blocked
+        $check.IsEnabled=-not [bool]$status.Blocked -and [bool]$status.Access
         $check.Tag=@{Key=$key;Entry=$entry;Name=$skill.Name;Original=[bool]$status.Desired;State=$deckSkillState}
         $check.Add_Click({param($sender,$eventArgs)
             $item=$sender.Tag
@@ -34,13 +53,16 @@ $renderDeckSkills={
         }.GetNewClosure())
         [void]$content.Children.Add($check)
         $description=New-DeckText $skill.Description '#A2ADB5' 11; $description.Margin='22,6,0,0'; [void]$content.Children.Add($description)
-        if($status.Blocked){$reason=New-DeckText $status.BlockedReason '#F0B879' 11; $reason.Margin='22,6,0,0'; [void]$content.Children.Add($reason)}
+        if(-not $status.Access){$reason=New-DeckText 'This account is outside the selected skill access scope.' '#929CA4' 11; $reason.Margin='22,6,0,0'; [void]$content.Children.Add($reason)}
+        elseif($status.Blocked){$reason=New-DeckText $status.BlockedReason '#F0B879' 11; $reason.Margin='22,6,0,0'; [void]$content.Children.Add($reason)}
         elseif($desired -and -not $status.Active -and -not $SmokeTest){$pending=New-DeckText 'Will be linked on save or the next launch.' '#9BB5D9' 11; $pending.Margin='22,6,0,0'; [void]$content.Children.Add($pending)}
         [void]$deckSkillRows.Children.Add($card); $deckSkillState.Controls[$skill.Name]=$check
     }
-    $deckSkillStatus.Text='Changes apply with Save settings and affect new Codex sessions.'
+    $deckSkillStatus.Text=''
 }.GetNewClosure()
 $deckSkillTarget.Add_SelectionChanged($renderDeckSkills)
+$skillMembership.Add_SelectionChanged({& $renderDeckSkills}.GetNewClosure())
+$skillMembers.Add_SelectionChanged({if($skillMembership.SelectedIndex -eq 3){& $renderDeckSkills}}.GetNewClosure())
 $saveDeckSkills={
     param([switch]$ValidateOnly)
     foreach($key in @($deckSkillState.Changes.Keys)){
@@ -51,18 +73,21 @@ $saveDeckSkills={
 }.GetNewClosure()
 if($deckSkillTarget.Items.Count){$deckSkillTarget.SelectedIndex=0}
 
-$catalogDivider=[Windows.Controls.Border]::new(); $catalogDivider.BorderBrush='#303A42'; $catalogDivider.BorderThickness='0,1,0,0'; $catalogDivider.Margin='0,16,0,14'; [void]$deckSkillPanel.Children.Add($catalogDivider)
-[void]$deckSkillPanel.Children.Add((New-DeckText 'Agentic Awesome Skills catalog' '#EDF1F7' 18))
-$catalogHelp=New-DeckText 'Install or update the AAS index in Integrations, then search it here. Install only the skills you choose; Deck makes each selected skill available to all accounts and pools.' '#929CA4' 11
-$catalogHelp.Margin='0,7,0,13'; [void]$deckSkillPanel.Children.Add($catalogHelp)
-[void]$deckSkillPanel.Children.Add((New-DeckText 'Find a skill' '#A2ADB5' 11))
-$catalogSearch=[Windows.Controls.TextBox]::new(); $catalogSearch.Margin='0,0,0,8'; $catalogSearch.ToolTip='Search names, descriptions, categories and tags'; [void]$deckSkillPanel.Children.Add($catalogSearch)
-$catalogFilters=[Windows.Controls.WrapPanel]::new(); $catalogFilters.Margin='0,0,0,8'; [void]$deckSkillPanel.Children.Add($catalogFilters)
+$aasTab=[Windows.Controls.TabItem]::new(); $aasTab.Header='AAS'
+$aasPanel=[Windows.Controls.StackPanel]::new(); $aasPanel.Margin='2,0,12,0'
+$aasScroll=[Windows.Controls.ScrollViewer]::new(); $aasScroll.VerticalScrollBarVisibility='Auto'; $aasScroll.HorizontalScrollBarVisibility='Disabled'; $aasScroll.Content=$aasPanel; $aasTab.Content=$aasScroll
+if((Get-DeckIntegrationStatus $suite aas_catalog -SkipHash).Valid){[void]$tabs.Items.Add($aasTab)}
+[void]$aasPanel.Children.Add((New-DeckText 'Agentic Awesome Skills' '#EDF1F7' 18))
+$catalogHelp=New-DeckText 'Search the installed catalog and add individual skills. Account access follows the selection in Skills.' '#929CA4' 11
+$catalogHelp.Margin='0,7,0,13'; [void]$aasPanel.Children.Add($catalogHelp)
+[void]$aasPanel.Children.Add((New-DeckText 'Find a skill' '#A2ADB5' 11))
+$catalogSearch=[Windows.Controls.TextBox]::new(); $catalogSearch.Margin='0,0,0,8'; $catalogSearch.ToolTip='Search names, descriptions, categories and tags'; [void]$aasPanel.Children.Add($catalogSearch)
+$catalogFilters=[Windows.Controls.WrapPanel]::new(); $catalogFilters.Margin='0,0,0,8'; [void]$aasPanel.Children.Add($catalogFilters)
 $catalogCategory=[Windows.Controls.ComboBox]::new(); $catalogCategory.MinWidth=190; $catalogCategory.Margin='0,0,8,0'; [void]$catalogCategory.Items.Add('All categories'); $catalogCategory.SelectedIndex=0; [void]$catalogFilters.Children.Add($catalogCategory)
 $catalogRisk=[Windows.Controls.ComboBox]::new(); $catalogRisk.MinWidth=110; $catalogRisk.Margin='0,0,8,0'; foreach($risk in @('All risks','none','safe','critical','offensive','unknown')){[void]$catalogRisk.Items.Add($risk)}; $catalogRisk.SelectedIndex=0; [void]$catalogFilters.Children.Add($catalogRisk)
 $catalogRefresh=[Windows.Controls.Button]::new(); $catalogRefresh.Content='Refresh catalog'; $catalogRefresh.Padding='9,5'; [void]$catalogFilters.Children.Add($catalogRefresh)
-$catalogResults=[Windows.Controls.ListBox]::new(); $catalogResults.Height=230; $catalogResults.Margin='0,0,0,8'; $catalogResults.Background='#171C1F'; $catalogResults.Foreground='#EAF0FA'; $catalogResults.BorderBrush='#303A42'; $catalogResults.BorderThickness='1'; [Windows.Controls.VirtualizingStackPanel]::SetIsVirtualizing($catalogResults,$true); [void]$deckSkillPanel.Children.Add($catalogResults)
-$catalogToolbar=[Windows.Controls.Grid]::new(); $catalogToolbar.Margin='0,0,0,8'; [void]$deckSkillPanel.Children.Add($catalogToolbar)
+$catalogResults=[Windows.Controls.ListBox]::new(); $catalogResults.Height=230; $catalogResults.Margin='0,0,0,8'; $catalogResults.Background='#171C1F'; $catalogResults.Foreground='#EAF0FA'; $catalogResults.BorderBrush='#303A42'; $catalogResults.BorderThickness='1'; [Windows.Controls.VirtualizingStackPanel]::SetIsVirtualizing($catalogResults,$true); [void]$aasPanel.Children.Add($catalogResults)
+$catalogToolbar=[Windows.Controls.Grid]::new(); $catalogToolbar.Margin='0,0,0,8'; [void]$aasPanel.Children.Add($catalogToolbar)
 foreach($width in @('*','Auto')){$column=[Windows.Controls.ColumnDefinition]::new(); $column.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$catalogToolbar.ColumnDefinitions.Add($column)}
 $catalogActions=[Windows.Controls.StackPanel]::new(); $catalogActions.Orientation='Horizontal'; $catalogActions.HorizontalAlignment='Left'; $catalogActions.VerticalAlignment='Center'; [void]$catalogToolbar.Children.Add($catalogActions)
 $catalogInstall=[Windows.Controls.Button]::new(); $catalogInstall.Content='Install'; $catalogInstall.IsEnabled=$false; $catalogInstall.Padding='8,5'; $catalogInstall.Margin='0,0,8,0'; [void]$catalogActions.Children.Add($catalogInstall)
@@ -73,8 +98,8 @@ $catalogPageInput=[Windows.Controls.TextBox]::new(); $catalogPageInput.Text='1';
 $catalogPageGo=[Windows.Controls.Button]::new(); $catalogPageGo.Content='Go'; $catalogPageGo.Padding='9,5'; $catalogPageGo.Margin='0,0,8,0'; $catalogPageGo.IsEnabled=$false; [void]$catalogPager.Children.Add($catalogPageGo)
 $catalogNext=[Windows.Controls.Button]::new(); $catalogNext.Content='Next'; $catalogNext.Padding='9,5'; $catalogNext.Margin='0,0,10,0'; $catalogNext.IsEnabled=$false; [void]$catalogPager.Children.Add($catalogNext)
 $catalogPageLabel=New-DeckText 'Page 1 of 1' '#A2ADB5' 11; $catalogPageLabel.VerticalAlignment='Center'; [void]$catalogPager.Children.Add($catalogPageLabel)
-$catalogDetail=New-DeckText 'Select a skill to see its description, risk and setup notes.' '#A2ADB5' 11; $catalogDetail.Margin='0,0,0,8'; [void]$deckSkillPanel.Children.Add($catalogDetail)
-$catalogStatus=New-DeckText '' '#9BB5D9' 11; $catalogStatus.Margin='0,10,0,0'; [void]$deckSkillPanel.Children.Add($catalogStatus)
+$catalogDetail=New-DeckText 'Select a skill to see its description, risk and setup notes.' '#A2ADB5' 11; $catalogDetail.Margin='0,0,0,8'; [void]$aasPanel.Children.Add($catalogDetail)
+$catalogStatus=New-DeckText '' '#9BB5D9' 11; $catalogStatus.Margin='0,10,0,0'; [void]$aasPanel.Children.Add($catalogStatus)
 $catalogState=@{Loaded=$false;Busy=$false;Task=$null;Mode='';Selected=$null;SearchTask=$null;SearchKey='';WantedKey='';Commit='';UpdatingFilters=$false;Closed=$false;Page=1;PageCount=1}
 $catalogPoll=[Windows.Threading.DispatcherTimer]::new(); $catalogPoll.Interval=[TimeSpan]::FromMilliseconds(200)
 $renderCatalog={
@@ -110,7 +135,7 @@ $renderCatalog={
 }.GetNewClosure()
 $catalogDebounce=[Windows.Threading.DispatcherTimer]::new(); $catalogDebounce.Interval=[TimeSpan]::FromMilliseconds(350)
 $catalogDebounce.Add_Tick({$catalogDebounce.Stop(); & $renderCatalog}.GetNewClosure())
-$queueCatalogSearch={if(-not $catalogState.UpdatingFilters -and $tabs.SelectedItem -eq $deckSkillTab){$catalogState.Page=1;$catalogPageInput.Text='1';$catalogDebounce.Stop();$catalogDebounce.Start()}}.GetNewClosure()
+$queueCatalogSearch={if(-not $catalogState.UpdatingFilters -and $tabs.SelectedItem -eq $aasTab){$catalogState.Page=1;$catalogPageInput.Text='1';$catalogDebounce.Stop();$catalogDebounce.Start()}}.GetNewClosure()
 $catalogSearch.Add_TextChanged($queueCatalogSearch)
 $catalogCategory.Add_SelectionChanged($queueCatalogSearch)
 $catalogRisk.Add_SelectionChanged($queueCatalogSearch)
@@ -128,7 +153,7 @@ $catalogPageInput.Add_KeyDown({param($sender,$eventArgs)
     if($eventArgs.Key -eq [Windows.Input.Key]::Return){& $submitCatalogPage;$eventArgs.Handled=$true}
 }.GetNewClosure())
 $tabs.Add_SelectionChanged({param($sender,$eventArgs)
-    if($eventArgs.OriginalSource -eq $tabs -and $tabs.SelectedItem -eq $deckSkillTab -and -not $catalogState.Loaded -and -not $catalogState.SearchTask){& $renderCatalog}
+    if($eventArgs.OriginalSource -eq $tabs -and $tabs.SelectedItem -eq $aasTab -and -not $catalogState.Loaded -and -not $catalogState.SearchTask){& $renderCatalog}
 }.GetNewClosure())
 $catalogResults.Add_SelectionChanged({
     $selected=$catalogResults.SelectedItem
@@ -150,6 +175,24 @@ $catalogResults.Add_SelectionChanged({
 $catalogSource.Add_Click({
     $skill=$catalogState.Selected
     if($skill -and $catalogState.Commit){Start-Process ("https://github.com/sickn33/agentic-awesome-skills/tree/$($catalogState.Commit)/$($skill.path)")}
+}.GetNewClosure())
+$catalogMenu=[Windows.Controls.ContextMenu]::new(); $catalogMenu.Resources=$window.Resources
+$catalogMenuInstall=[Windows.Controls.MenuItem]::new(); $catalogMenuInstall.Header='Install or update'; $catalogMenuInstall.Add_Click({$catalogInstall.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))}.GetNewClosure()); [void]$catalogMenu.Items.Add($catalogMenuInstall)
+$catalogMenuInspect=[Windows.Controls.MenuItem]::new(); $catalogMenuInspect.Header='Inspect source'; $catalogMenuInspect.Add_Click({$catalogSource.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))}.GetNewClosure()); [void]$catalogMenu.Items.Add($catalogMenuInspect)
+$catalogMenuCopy=[Windows.Controls.MenuItem]::new(); $catalogMenuCopy.Header='Copy skill ID'; $catalogMenuCopy.Add_Click({if($catalogState.Selected){[Windows.Clipboard]::SetText([string]$catalogState.Selected.id)}}.GetNewClosure()); [void]$catalogMenu.Items.Add($catalogMenuCopy)
+$catalogMenuFolder=[Windows.Controls.MenuItem]::new(); $catalogMenuFolder.Header='Open installed folder'; $catalogMenuFolder.Add_Click({if($catalogState.Selected){$path=Join-Path $suite ('skills/'+$catalogState.Selected.id);if(Test-Path -LiteralPath $path -PathType Container){Start-Process explorer.exe -ArgumentList @($path)}}}.GetNewClosure()); [void]$catalogMenu.Items.Add($catalogMenuFolder)
+$catalogMenu.Add_Opened({
+    $catalogMenuInstall.IsEnabled=$catalogInstall.IsEnabled
+    $catalogMenuInstall.Header=if($catalogInstall.Content -eq 'Update'){'Update skill'}else{'Install skill'}
+    $catalogMenuInspect.IsEnabled=$catalogSource.IsEnabled
+    $catalogMenuCopy.IsEnabled=[bool]$catalogState.Selected
+    $catalogMenuFolder.IsEnabled=[bool]($catalogState.Selected -and (Test-Path -LiteralPath (Join-Path $suite ('skills/'+$catalogState.Selected.id)) -PathType Container))
+}.GetNewClosure())
+$catalogResults.ContextMenu=$catalogMenu
+$catalogResults.Add_PreviewMouseRightButtonDown({param($sender,$eventArgs)
+    $source=$eventArgs.OriginalSource
+    while($source -and $source -isnot [Windows.Controls.ListBoxItem]){$source=[Windows.Media.VisualTreeHelper]::GetParent($source)}
+    if($source){$catalogResults.SelectedItem=$source}
 }.GetNewClosure())
 $startCatalogJob={param([string]$Mode,[string]$Id)
     if($catalogState.Busy -or $catalogState.SearchTask){return}

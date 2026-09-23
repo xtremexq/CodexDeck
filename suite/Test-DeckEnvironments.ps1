@@ -100,11 +100,15 @@ try {
     Assert ((Get-DeckIntegrationStatus $fixture rtk).Valid) 'RTK status depended on Get-FileHash.'
     Assert ((Get-DeckIntegrationStatus $fixture codegraph).Valid) 'CodeGraph status depended on Get-FileHash.'
 } finally { Remove-Item Function:Get-FileHash -ErrorAction SilentlyContinue }
-$rtkLaunch=Get-DeckIntegrationLaunch $fixture ([pscustomobject]@{ContextOptimizer='RTK';CodeGraphEnabled=$true;CodeGraphProfile='core'})
+$project=Join-Path $fixture 'projects/example'
+[void][IO.Directory]::CreateDirectory($project)
+$rtkLaunch=Get-DeckIntegrationLaunch $fixture ([pscustomobject]@{ContextOptimizer='RTK';CodeGraphProjects=$project;CodeGraphProfile='core'}) $project
 Assert ($rtkLaunch.Environment.CODEX_DECK_RTK_EXE -match 'rtk\.exe$') 'RTK hook environment was not isolated to the managed binary.'
 Assert (($rtkLaunch.Arguments -join ' ') -match 'hooks\.PreToolUse=' -and ($rtkLaunch.Arguments -join ' ') -match 'mcp_servers\.deck_codegraph=') 'RTK and CodeGraph launch overrides were not composed.'
 Assert (@($rtkLaunch.InstructionSections).Count -eq 1) 'CodeGraph launch guidance was not merged once.'
-$headroomLaunch=Get-DeckIntegrationLaunch $fixture ([pscustomobject]@{ContextOptimizer='Headroom';CodeGraphEnabled=$false;CodeGraphProfile='core'})
+$outsideLaunch=Get-DeckIntegrationLaunch $fixture ([pscustomobject]@{ContextOptimizer='Off';CodeGraphProjects=$project;CodeGraphProfile='core'}) $fixture
+Assert (($outsideLaunch.Arguments -join ' ') -notmatch 'deck_codegraph') 'CodeGraph attached outside its selected project.'
+$headroomLaunch=Get-DeckIntegrationLaunch $fixture ([pscustomobject]@{ContextOptimizer='Headroom';CodeGraphProjects='';CodeGraphProfile='core'}) $fixture
 Assert (($headroomLaunch.Arguments -join ' ') -match 'mcp_servers\.deck_headroom=' -and ($headroomLaunch.Arguments -join ' ') -notmatch 'hooks\.PreToolUse=') 'Headroom was not exclusive with RTK.'
 Assert (-not (Test-Path -LiteralPath (Join-Path $fixture 'accounts/account3/config.toml'))) 'Managed integrations rewrote account configuration.'
 Write-Output 'PASS: pooled membership, ordering, isolation, sharing, MCP overrides, path guards and managed integration composition.'

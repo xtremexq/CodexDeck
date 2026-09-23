@@ -30,7 +30,7 @@ function Get-DeckDefaults {
         ShowSessionCount=$false; ShowUptime=$false; ShowProcessIds=$false
         ShowFolder=$false; ShowSource=$false; ShowCheckedAt=$false; ShowCredits=$false
         ShowWarmup=$true; MaskEmail=$false; CloseToTray=$true
-        ShowModel=$false; AccountPickerUsage=$false
+        ShowModel=$false; AccountPickerUsage=$false; SkillAccessAccounts='*'
         ViewMode='Widget'; DashboardTheme='Default'; WidgetOneLine=$true; WidgetShowEmail=$false; WidgetShowResets=$true; WidgetAutoHeight=$true
         WidgetWidth=238; WidgetHeight=0
         WarmupEnabled=$false; WarmupSchedulingEnabled=$false; WarmupPlanTypes=''; WarmupAccounts=''; WarmupModel='gpt-5.6-luna'
@@ -40,7 +40,7 @@ function Get-DeckDefaults {
         FailoverEnabled=$false; FailoverMode='Ordered'; FailoverAccounts=''
         AutoCompactLaunchEnabled=$false; AutoCompactMode='Native'; AutoCompactThresholdPercent=55
         AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.'
-        ContextOptimizer='Off'; CodeGraphEnabled=$false; CodeGraphProfile='core'; BrowserHarnessEnabled=$false
+        ContextOptimizer='Off'; CodeGraphEnabled=$false; CodeGraphProjects=''; CodeGraphProfile='core'; BrowserHarnessEnabled=$false
         TrajectoryEnabled=$false; ContextManagerEnabled=$false; ContextManagerAutoOpen=$false; ContextManagerProtected=$false
         EfficiencyAnalyticsEnabled=$true; EfficiencySessionLimit=600; EfficiencyLimitVersion=3
     }
@@ -228,6 +228,9 @@ function Get-DeckSettings([string]$Root) {
     if ($settings.AutoCompactMode -notin @('Native','Custom')) { $settings.AutoCompactMode='Native' }
     if ($settings.ContextOptimizer -notin @('Off','RTK','Headroom')) { $settings.ContextOptimizer='Off' }
     if ($settings.CodeGraphProfile -notin @('core','graph','all')) { $settings.CodeGraphProfile='core' }
+    if ($saved -and $saved.CodeGraphEnabled -and -not $saved.PSObject.Properties['CodeGraphProjects'] -and (Test-Path -LiteralPath $settings.DefaultFolder -PathType Container)) {
+        $settings.CodeGraphProjects=[IO.Path]::GetFullPath($settings.DefaultFolder).TrimEnd('\')
+    }
     $oldHandoff='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information.'
     if ($settings.AutoCompactHandoffPrompt -eq $oldHandoff) {
         # Preserve user-edited prompts, but migrate Deck's previous stock prompt.
@@ -239,6 +242,7 @@ function Get-DeckSettings([string]$Root) {
     if ($settings.FailoverMode -notin @('Ordered','Best')) { $settings.FailoverMode='Ordered' }
     if ($settings.ViewMode -notin @('Panel','Widget','Tray')) { $settings.ViewMode='Widget' }
     if ($settings.DashboardTheme -notin @('Default','Focus','Cards','Ledger','Split')) { $settings.DashboardTheme='Default' }
+    if ($settings.SkillAccessAccounts -notmatch '^(?:\*|\*free|\*paid|[a-zA-Z][a-zA-Z0-9_-]{0,39}(?:,[a-zA-Z][a-zA-Z0-9_-]{0,39})*)$') { $settings.SkillAccessAccounts='*' }
     $settings.WarmupPlanTypes=ConvertTo-DeckWarmupPlanTypes $settings.WarmupPlanTypes
     return $settings
 }
