@@ -438,6 +438,12 @@ function Get-DeckIntegrationLaunch([string]$SuiteRoot,$Settings) {
         $arguments+=@('-c',('mcp_servers.deck_codegraph='+(ConvertTo-DeckTomlValue $definition)))
         $sections+='Deck Code Intelligence: Prefer deck_codegraph for repository discovery and relationship queries when it avoids broad file reads or repeated searches. Verify exact source before editing.'
     }
+    if($Settings.UizzeMcpEnabled){
+        if(-not $env:UIZZE_AGENT_TOKEN){throw 'UIZZE reference search is enabled. Set UIZZE_AGENT_TOKEN in the launcher environment and restart Deck, or turn off the UIZZE MCP setting.'}
+        $definition=@{url='https://uizze.com/mcp';bearer_token_env_var='UIZZE_AGENT_TOKEN';startup_timeout_sec=20;tool_timeout_sec=60}
+        $arguments+=@('-c',('mcp_servers.deck_uizze='+(ConvertTo-DeckTomlValue $definition)))
+        $sections+='UIZZE references: Use deck_uizze only for a concrete UI design question. Reuse this product''s components and visual language; do not retry an empty reference result.'
+    }
     return [pscustomobject]@{Arguments=@($arguments);InstructionSections=@($sections);Environment=$environment}
 }
 function Get-DeckMcpDefinition([string]$Directory, [string]$Server) {

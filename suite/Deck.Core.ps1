@@ -12,6 +12,7 @@ if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.AccountResources.ps1'))
 if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Storage.ps1')){. (Join-Path $PSScriptRoot 'Deck.Storage.ps1')}
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Environments.ps1')) { . (Join-Path $PSScriptRoot 'Deck.Environments.ps1') }
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.BundledSkills.ps1')) { . (Join-Path $PSScriptRoot 'Deck.BundledSkills.ps1') }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.SkillCatalog.ps1')) { . (Join-Path $PSScriptRoot 'Deck.SkillCatalog.ps1') }
 # Codex Deck - local state and scheduling. No credentials are written to Deck state.
 function Get-DeckDueAccounts($Automatic, $Manual, $NextCheck, [DateTimeOffset]$Now) {
     $manualDue=@($Manual.Keys | Where-Object { $Manual[$_] -le $Now } | Sort-Object { $Manual[$_] })
@@ -39,7 +40,7 @@ function Get-DeckDefaults {
         FailoverEnabled=$false; FailoverMode='Ordered'; FailoverAccounts=''
         AutoCompactLaunchEnabled=$false; AutoCompactMode='Native'; AutoCompactThresholdPercent=55
         AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.'
-        ContextOptimizer='Off'; CodeGraphEnabled=$false; CodeGraphProfile='core'; BrowserHarnessEnabled=$false
+        ContextOptimizer='Off'; CodeGraphEnabled=$false; CodeGraphProfile='core'; BrowserHarnessEnabled=$false; UizzeMcpEnabled=$false
         TrajectoryEnabled=$false; ContextManagerEnabled=$false; ContextManagerAutoOpen=$false; ContextManagerProtected=$false
         EfficiencyAnalyticsEnabled=$true; EfficiencySessionLimit=600; EfficiencyLimitVersion=3
     }

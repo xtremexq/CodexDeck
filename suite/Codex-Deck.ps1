@@ -694,7 +694,7 @@ function Show-DeckSettings {
         Details=@('ShowEmail','MaskEmail','ShowPlan','AccountPickerUsage','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
         Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
         Compaction=@('AutoCompactMode','AutoCompactThresholdPercent','AutoCompactHandoffPrompt')
-        Integrations=@('ContextOptimizer','CodeGraphEnabled','CodeGraphProfile','BrowserHarnessEnabled')
+        Integrations=@('ContextOptimizer','CodeGraphEnabled','CodeGraphProfile','BrowserHarnessEnabled','UizzeMcpEnabled')
         Trajectory=@('TrajectoryEnabled','ContextManagerEnabled','ContextManagerAutoOpen','ContextManagerProtected')
         Efficiency=@('EfficiencyAnalyticsEnabled','EfficiencySessionLimit')
         'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupPlanTypes','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
@@ -709,6 +709,7 @@ function Show-DeckSettings {
     $labels.CodeGraphEnabled='Enable CodeGraph for new conversations (indexes their start folder)'
     $labels.CodeGraphProfile='CodeGraph tool profile'
     $labels.BrowserHarnessEnabled='Enable Browser Harness for new conversations'
+    $labels.UizzeMcpEnabled='Enable UIZZE reference search (paid MCP; requires UIZZE_AGENT_TOKEN)'
     $labels.TrajectoryEnabled='Enable local trajectory viewer'
     $labels.ContextManagerEnabled='Enable live context suppression and editing for new conversations'
     $labels.ContextManagerAutoOpen='Automatically open Live Context when opening accounts'
@@ -1002,7 +1003,7 @@ function Show-DeckSettings {
         } catch { $settingsError.Text='Settings were not saved: '+$_.Exception.Message; $settingsError.BringIntoView(); $save.Content='Save settings' }
         finally {if(-not $worker){$save.IsEnabled=$true}}
     }.GetNewClosure())
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState}}}
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState;Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus}}}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -1518,6 +1519,11 @@ try{
         if ($settingsTest.Controls.TrajectoryEnabled.IsChecked -or $settingsTest.Controls.ContextManagerEnabled.IsChecked -or $settingsTest.Controls.ContextManagerAutoOpen.IsChecked -or -not $settingsTest.Controls.EfficiencyAnalyticsEnabled.IsChecked) { throw 'Trajectory/context defaults or enabled-by-default efficiency analytics are incorrect.' }
         if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '600') { throw 'Efficiency analytics session limit default failed.' }
         if ($headers -notcontains 'Skills' -or -not $settingsTest.Skills.State.Controls.ContainsKey('debug-swarm') -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked) { throw 'Globally enabled Deck skills Settings tab missing or invalid.' }
+        if(-not $settingsTest.Controls.ContainsKey('UizzeMcpEnabled') -or $settingsTest.Controls.UizzeMcpEnabled.IsChecked){throw 'UIZZE MCP must be separately opt-in.'}
+        $settingsTest.Tabs.SelectedItem=@($settingsTest.Tabs.Items | Where-Object Header -eq 'Skills')[0]
+        if($settingsTest.Skills.Catalog.Results.Items.Count -lt 1 -or -not $settingsTest.Skills.Catalog.Search -or -not $settingsTest.Skills.Catalog.Refresh){throw 'Native AAS skill catalog did not load in Skills settings.'}
+        $settingsTest.Skills.Catalog.Results.SelectedIndex=0
+        if(-not $settingsTest.Skills.Catalog.Install.IsEnabled){throw 'AAS catalog selection did not enable direct installation.'}
         $environmentUI=$settingsTest.Environment
         if($environmentUI.Name.Text -ne 'pool' -or $environmentUI.Name.SelectedItem -ne 'pool'){throw 'Environment picker did not select its default pool.'}
         [void]$environmentUI.Name.ApplyTemplate(); $environmentEditor=$environmentUI.Name.Template.FindName('PART_EditableTextBox',$environmentUI.Name)

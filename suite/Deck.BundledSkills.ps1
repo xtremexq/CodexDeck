@@ -1,7 +1,7 @@
 ﻿# Deck-provided skills are stored once under <suite>/skills and exposed to
 # account and pool CODEX_HOME directories through verified junctions.
 function Assert-DeckBundledSkillName([string]$Name) {
-    if ($Name -notmatch '^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$' -and $Name -notmatch '^[a-z0-9]$') { throw 'Invalid Deck skill name.' }
+    if ($Name -notmatch '^[a-z0-9][a-z0-9_-]{0,62}[a-z0-9]$' -and $Name -notmatch '^[a-z0-9]$') { throw 'Invalid Deck skill name.' }
 }
 
 function Get-DeckBundledSkillCatalogRoot([string]$SuiteRoot) {

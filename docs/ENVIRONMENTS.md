@@ -50,7 +50,7 @@ To opt into a one-time bootstrap when creating an account, use `codex-auth accou
 
 ## Deck skills
 
-Open **Settings > Skills** to manage reusable workflows shipped with Codex Deck. Catalog skills are enabled globally by default, including for future accounts and pools on their first launch. You can disable or re-enable each skill independently for an account or pool; the change takes effect in new Codex sessions.
+Open **Settings > Skills** to manage reusable workflows shipped with Codex Deck and selected skills from the Agentic Awesome Skills catalog. Installed skills are enabled globally by default, including for future accounts and pools on their first launch. You can disable or re-enable each skill independently for an account or pool; the change takes effect in new Codex sessions. See [skills and catalog](SKILL-CATALOG.md) for the GUI, CLI and UIZZE MCP setup.
 
 Deck stores one maintained copy under `.codex-loop/skills` and exposes enabled skills through verified junctions in each environment's `skills` folder. Updates therefore reach every enabled environment without copying the skill into each account. If an environment already has a user-owned skill with the same name, Deck reports the collision and leaves it untouched. Environments that share their whole `skills` directory continue to manage skills through that sharing source.
 

@@ -18,6 +18,8 @@ param(
     [string]$ResumePrompt,
     [string]$ResumePromptEnvironment,
     [switch]$GlobalRules,
+    [string]$Category,
+    [string]$Risk,
     [string]$RenameTo,
     [ValidateSet('Off','Ordered','Best')]
     [string]$Failover = 'Off',
@@ -37,6 +39,14 @@ param(
 $accountsRoot = Join-Path $HOME ".codex-loop\accounts"
 $defaultConfigPath = Join-Path $HOME ".codex\config.toml"
 $ErrorActionPreference = 'Stop'
+if($Account -eq 'skills'){
+    $skillOptions=@()
+    if($PSBoundParameters.ContainsKey('Category')){$skillOptions+=@('-Category',$Category)}
+    if($PSBoundParameters.ContainsKey('Risk')){$skillOptions+=@('-Risk',$Risk)}
+    & (Join-Path $PSScriptRoot 'deck-skills.ps1') @CodexArgs @skillOptions
+    if($LASTEXITCODE){exit $LASTEXITCODE}
+    exit 0
+}
 if($GlobalRules){
     $rulesSuite=Split-Path -Parent $accountsRoot
     . (Join-Path $rulesSuite 'Deck.GlobalRules.ps1')

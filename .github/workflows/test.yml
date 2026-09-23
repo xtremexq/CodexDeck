@@ -26,6 +26,7 @@ jobs:
           ./suite/Test-DeckFailover.ps1
           ./suite/Test-DeckEnvironments.ps1
           ./suite/Test-DeckBundledSkills.ps1
+          ./suite/Test-DeckSkillCatalog.ps1
           ./suite/Test-DeckEnvironmentLaunch.ps1
           ./suite/Test-CodexAuth.ps1
           ./suite/Test-DeckTerminal.ps1
@@ -52,6 +53,9 @@ jobs:
           if (!(Test-Path "$destination/.codex-loop/Deck.AutoCompact.Sidecar.cjs")) { throw 'Missing installed native auto-compact sidecar' }
           if (!(Test-Path "$destination/.codex-loop/Deck.Inspector.cjs")) { throw 'Missing installed trajectory and efficiency inspector' }
           if (!(Test-Path "$destination/.codex-loop/accounts/pool/skills/debug-swarm/SKILL.md")) { throw 'Missing globally enabled Deck skill' }
+          if (!(Test-Path "$destination/.codex-loop/accounts/pool/skills/ui-design/SKILL.md")) { throw 'Missing UIZZE skill in pooled environment' }
+          if (!(Test-Path "$destination/.codex-loop/skill-catalog/aas-index.json")) { throw 'Missing offline AAS catalog' }
+          if (!(Test-Path "$destination/.local/bin/deck-skills.cmd")) { throw 'Missing skill catalog CLI' }
           foreach ($name in 'account','pool','usage','delay','schedule','check','deck') {
             if (!(Test-Path "$destination/.local/bin/$name.cmd")) { throw "Missing installed local shell command: $name" }
             if ($name -ne 'deck' -and (Test-Path "$destination/.codex-loop/accounts/pool/skills/$name/.codexdeck-managed")) { throw "Legacy AI-backed command skill remains: $name" }

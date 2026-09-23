@@ -9,7 +9,7 @@ function Assert($Condition,[string]$Message){if(-not $Condition){throw $Message}
 function Reject([scriptblock]$Action,[string]$Message){$failed=$false;try{& $Action}catch{$failed=$true};if(-not $failed){throw $Message}}
 try {
     $catalog=@(Get-DeckBundledSkills $fixture)
-    Assert ($catalog.Count -eq 1 -and $catalog[0].Name -eq 'debug-swarm' -and $catalog[0].DefaultEnabled) 'Deck skill catalog was not discovered.'
+    Assert ($catalog.Count -eq 4 -and @($catalog | Where-Object Name -eq 'debug-swarm').Count -eq 1 -and @($catalog | Where-Object { $_.Name -in @('ui-design','anti-ui-slop','ui-radar') }).Count -eq 3) 'Deck skill catalog was not discovered.'
     $invocationPolicy=[IO.File]::ReadAllText((Join-Path $fixture 'skills/debug-swarm/agents/openai.yaml'))
     Assert ($invocationPolicy -match '(?m)^\s*allow_implicit_invocation:\s*false\s*$') 'Debug Swarm must require explicit user invocation.'
     $skillInstructions=[IO.File]::ReadAllText((Join-Path $fixture 'skills/debug-swarm/SKILL.md'))
@@ -18,18 +18,19 @@ try {
     Assert ($skillInstructions -match 'wt\.exe -w new new-tab' -and $skillInstructions -match 'normal visible desktop process') 'Debug Swarm must document a visible Windows foreground launch.'
 
     Sync-DeckBundledSkills $fixture account1 | Out-Null
-    $status=Get-DeckBundledSkillStatus $fixture account1 $catalog[0]
+    $debugSkill=@($catalog | Where-Object Name -eq 'debug-swarm')[0]
+    $status=Get-DeckBundledSkillStatus $fixture account1 $debugSkill
     Assert ($status.Desired -and $status.Active -and -not $status.Blocked) 'Default Deck skill was not activated.'
     Assert (Test-Path -LiteralPath (Join-Path $fixture 'accounts/account1/skills/debug-swarm/SKILL.md') -PathType Leaf) 'Activated Deck skill is unavailable to CODEX_HOME.'
 
     Set-DeckBundledSkillEnabled $fixture account1 debug-swarm $false | Out-Null
-    $status=Get-DeckBundledSkillStatus $fixture account1 $catalog[0]
+    $status=Get-DeckBundledSkillStatus $fixture account1 $debugSkill
     Assert (-not $status.Desired -and -not $status.Active -and -not (Test-Path -LiteralPath $status.Target)) 'Per-entry disable did not remove the managed link.'
     Sync-DeckBundledSkills $fixture account1 | Out-Null
     Assert (-not (Test-Path -LiteralPath $status.Target)) 'Launch synchronization ignored a disabled override.'
 
     Set-DeckBundledSkillEnabled $fixture account1 debug-swarm $true | Out-Null
-    Assert ((Get-DeckBundledSkillStatus $fixture account1 $catalog[0]).Active) 'Re-enabling a Deck skill failed.'
+    Assert ((Get-DeckBundledSkillStatus $fixture account1 $debugSkill).Active) 'Re-enabling a Deck skill failed.'
 
     $private=Join-Path $fixture 'accounts/account2/skills/debug-swarm'
     [void][IO.Directory]::CreateDirectory($private)
@@ -40,7 +41,7 @@ try {
 
     [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'accounts/future'))
     Sync-DeckBundledSkills $fixture future | Out-Null
-    Assert ((Get-DeckBundledSkillStatus $fixture future $catalog[0]).Active) 'A future account did not receive the globally enabled skill.'
+    Assert ((Get-DeckBundledSkillStatus $fixture future $debugSkill).Active) 'A future account did not receive the globally enabled skill.'
     'PASS: Deck skills are global by default, configurable per entry, launch-synchronized, and preserve user-owned collisions.'
 } finally {
     $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')

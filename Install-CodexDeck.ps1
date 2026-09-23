@@ -3,11 +3,17 @@ $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Codex Deck requires Windows and Windows PowerShell 5.1 with WPF.' }
 $suiteRoot = Join-Path $InstallHome '.codex-loop'
 $binRoot = Join-Path $InstallHome '.local/bin'
-$files = @('Codex-Deck.ps1','Deck.Core.ps1','Deck.Commands.ps1','Deck.WarmupWorker.ps1','Deck.Background.vbs','Deck.ScheduledMessages.ps1','Deck.DelayedMessageWorker.ps1','Deck.ScheduledMessageWorker.ps1','Deck.GlobalRules.ps1','Deck.GlobalRules.cjs','Deck.Integrations.json','Deck.RtkHook.cjs','Deck.Memories.ps1','Deck.AccountResources.ps1','Deck.Storage.ps1','Deck.Environments.ps1','Deck.BundledSkills.ps1','Deck.EnvironmentSettings.ps1','Deck.SkillSettings.ps1','Deck.AccountTools.ps1','Deck.Failover.ps1','Deck.Failover.cjs','Deck.Terminal.ps1','Deck.Backup.ps1','Deck.Crypto.cs','Deck.SettingsExtras.ps1','Deck.Theme.xaml','Run-CodexLoopUsage.cmd',
+$files = @('Codex-Deck.ps1','Deck.Core.ps1','Deck.Commands.ps1','Deck.WarmupWorker.ps1','Deck.Background.vbs','Deck.ScheduledMessages.ps1','Deck.DelayedMessageWorker.ps1','Deck.ScheduledMessageWorker.ps1','Deck.GlobalRules.ps1','Deck.GlobalRules.cjs','Deck.Integrations.json','Deck.RtkHook.cjs','Deck.Memories.ps1','Deck.AccountResources.ps1','Deck.Storage.ps1','Deck.Environments.ps1','Deck.BundledSkills.ps1','Deck.SkillCatalog.ps1','Deck.EnvironmentSettings.ps1','Deck.SkillSettings.ps1','Deck.AccountTools.ps1','Deck.Failover.ps1','Deck.Failover.cjs','Deck.Terminal.ps1','Deck.Backup.ps1','Deck.Crypto.cs','Deck.SettingsExtras.ps1','Deck.Theme.xaml','Run-CodexLoopUsage.cmd',
     'Test-Deck.ps1','Test-DeckCommands.ps1','Test-DeckEnvironments.ps1','Test-DeckEnvironmentLaunch.ps1','Test-DeckAccountTools.ps1','Test-DeckFailover.ps1','Test-DeckScheduler.ps1','Test-DeckStorage.ps1','Test-DeckBackup.ps1','Test-CodexAuth.ps1','Test-CodexLoopUsage.ps1',
-    'Test-DeckBundledSkills.ps1','Test-DeckScheduledMessages.ps1','deck/assets/codex-deck.png','deck/assets/codex-deck.ico','skills/debug-swarm/SKILL.md','skills/debug-swarm/agents/openai.yaml','skills/debug-swarm/.codexdeck.json')
+    'Test-DeckBundledSkills.ps1','Test-DeckSkillCatalog.ps1','Test-DeckScheduledMessages.ps1','deck/assets/codex-deck.png','deck/assets/codex-deck.ico','skill-catalog/aas-index.json','skills/debug-swarm/SKILL.md','skills/debug-swarm/agents/openai.yaml','skills/debug-swarm/.codexdeck.json')
+$files += @(foreach($skillName in @('ui-design','anti-ui-slop','ui-radar')){
+    $directory=Join-Path $PSScriptRoot "suite/skills/$skillName"
+    foreach($file in Get-ChildItem -LiteralPath $directory -Recurse -File -Force){
+        'skills/'+$skillName+'/'+$file.FullName.Substring($directory.Length).TrimStart('\').Replace('\','/')
+    }
+})
 $files += @('Deck.AutoCompact.cjs','Deck.AutoCompact.Sidecar.cjs','Deck.Inspector.cjs','Test-DeckAutoCompact.cjs','Test-DeckInspector.cjs','Test-DeckRtkHook.cjs','Deck.DefaultGlobalRules.md','Test-DeckBrowserHarness.ps1')
-$wrappers = @('codex-auth.ps1','codex-auth.cmd','codex-check.cmd','codex-deck.cmd','codex-deck-session.ps1','codex-deck-session.cmd','account.cmd','pool.cmd','usage.cmd','delay.cmd','schedule.cmd','check.cmd','deck.cmd','context.cmd')
+$wrappers = @('codex-auth.ps1','codex-auth.cmd','deck-skills.ps1','deck-skills.cmd','codex-check.cmd','codex-deck.cmd','codex-deck-session.ps1','codex-deck-session.cmd','account.cmd','pool.cmd','usage.cmd','delay.cmd','schedule.cmd','check.cmd','deck.cmd','context.cmd')
 # Validate the complete payload before changing an existing installation.
 foreach ($name in $files) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "suite/$name") -PathType Leaf)) { throw "Missing suite file: $name" } }
 foreach ($name in $wrappers) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "bin/$name") -PathType Leaf)) { throw "Missing command: $name" } }
