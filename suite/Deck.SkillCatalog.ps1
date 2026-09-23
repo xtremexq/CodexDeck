@@ -54,17 +54,40 @@ function Search-DeckAasSkills([string]$SuiteRoot,[string]$Query='', [string]$Cat
         if($count -ge $maximum){break}
     }
 }
-function Get-DeckAasCatalogPage([string]$SuiteRoot,[string]$Query='', [string]$Category='', [string]$Risk='', [int]$Limit=30,[switch]$IncludeCategories) {
+function Get-DeckAasCatalogPage([string]$SuiteRoot,[string]$Query='', [string]$Category='', [string]$Risk='', [int]$Limit=30,[int]$Page=1,[switch]$IncludeCategories) {
     $catalog=Read-DeckAasCatalog $SuiteRoot
-    $matches=@(Search-DeckAasSkills $SuiteRoot $Query $Category $Risk $Limit)
+    $pageSize=[Math]::Max(1,[Math]::Min(100,$Limit))
+    $terms=@($Query.Trim().ToLowerInvariant() -split '\s+' | Where-Object {$_})
+    $matches=[Collections.Generic.List[object]]::new()
+    foreach($skill in $catalog.skills){
+        if($Category -and $skill.category -cne $Category){continue}
+        if($Risk -and $skill.risk -cne $Risk){continue}
+        if($terms.Count){
+            $blob=([string]$skill.id+' '+[string]$skill.name+' '+[string]$skill.description+' '+[string]$skill.category+' '+(@($skill.tags) -join ' ')).ToLowerInvariant()
+            $found=$true
+            foreach($term in $terms){if($blob.IndexOf($term,[StringComparison]::Ordinal) -lt 0){$found=$false;break}}
+            if(-not $found){continue}
+        }
+        $matches.Add($skill)
+    }
+    $pageCount=[Math]::Max(1,[int][Math]::Ceiling($matches.Count / $pageSize))
+    $pageNumber=[Math]::Max(1,[Math]::Min($pageCount,$Page))
+    $first=($pageNumber-1)*$pageSize
+    $last=[Math]::Min($first+$pageSize,$matches.Count)
+    $pageSkills=@(for($index=$first;$index -lt $last;$index++){
+        $skill=$matches[$index]
+        [ordered]@{id=[string]$skill.id;path=[string]$skill.path;category=[string]$skill.category;risk=[string]$skill.risk;description=[string]$skill.description;setupSummary=[string]$skill.setupSummary;license=[string]$skill.license}
+    })
     $categories=if($IncludeCategories){@($catalog.skills | ForEach-Object category | Where-Object {$_} | Sort-Object -Unique)}else{@()}
     return [ordered]@{
         commit=[string]$catalog.commit
         total=@($catalog.skills).Count
+        matchCount=$matches.Count
+        page=$pageNumber
+        pageCount=$pageCount
+        pageSize=$pageSize
         categories=$categories
-        skills=@($matches | ForEach-Object {
-            [ordered]@{id=[string]$_.id;path=[string]$_.path;category=[string]$_.category;risk=[string]$_.risk;description=[string]$_.description;setupSummary=[string]$_.setupSummary;license=[string]$_.license}
-        })
+        skills=$pageSkills
     }
 }
 function Get-DeckAasSkill([string]$SuiteRoot,[string]$Id) {

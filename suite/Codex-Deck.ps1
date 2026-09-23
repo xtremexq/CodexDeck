@@ -1003,7 +1003,7 @@ function Show-DeckSettings {
         } catch { $settingsError.Text='Settings were not saved: '+$_.Exception.Message; $settingsError.BringIntoView(); $save.Content='Save settings' }
         finally {if(-not $worker){$save.IsEnabled=$true}}
     }.GetNewClosure())
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState;Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus}}}}
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState;Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus;Previous=$catalogPrevious;Next=$catalogNext;PageInput=$catalogPageInput;PageGo=$catalogPageGo;PageLabel=$catalogPageLabel}}}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -1532,6 +1532,18 @@ try{
             [Windows.Threading.Dispatcher]::PushFrame($frame);$pump.Stop()
         }
         if($settingsTest.Skills.Catalog.Results.Items.Count -lt 1 -or -not $settingsTest.Skills.Catalog.Search -or -not $settingsTest.Skills.Catalog.Refresh){throw 'Native AAS skill catalog did not load in Skills settings.'}
+        $catalogUI=$settingsTest.Skills.Catalog
+        if(-not $catalogUI.Next.IsEnabled -or $catalogUI.PageLabel.Text -notlike 'Page 1 of *'){throw 'AAS catalog pagination is unavailable.'}
+        $firstSkillId=[string]$catalogUI.Results.Items[0].Tag.id
+        $catalogUI.Next.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        $pageDeadline=[DateTimeOffset]::UtcNow.AddSeconds(12)
+        while($catalogUI.PageLabel.Text -notlike 'Page 2 of *' -and [DateTimeOffset]::UtcNow -lt $pageDeadline){
+            $frame=[Windows.Threading.DispatcherFrame]::new()
+            $pump=[Windows.Threading.DispatcherTimer]::new();$pump.Interval=[TimeSpan]::FromMilliseconds(50)
+            $pump.Add_Tick({$frame.Continue=$false}.GetNewClosure());$pump.Start()
+            [Windows.Threading.Dispatcher]::PushFrame($frame);$pump.Stop()
+        }
+        if($catalogUI.PageLabel.Text -notlike 'Page 2 of *' -or $catalogUI.Results.Items.Count -lt 1 -or [string]$catalogUI.Results.Items[0].Tag.id -ceq $firstSkillId -or -not $catalogUI.Previous.IsEnabled){throw 'AAS catalog did not advance to the next page.'}
         $settingsTest.Skills.Catalog.Results.SelectedIndex=0
         if(-not $settingsTest.Skills.Catalog.Install.IsEnabled){throw 'AAS catalog selection did not enable direct installation.'}
         $environmentUI=$settingsTest.Environment

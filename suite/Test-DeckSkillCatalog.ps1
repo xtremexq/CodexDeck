@@ -13,6 +13,14 @@ try{
     if(-not @($found | Where-Object id -eq 'brainstorming').Count){throw 'Catalog search missed an exact ID.'}
     $page=Get-DeckAasCatalogPage $fixture 'brainstorming' '' '' 30 -IncludeCategories
     if($page.total -ne $catalog.skills.Count -or -not @($page.categories).Count -or -not @($page.skills | Where-Object id -eq 'brainstorming').Count){throw 'Bounded GUI catalog page is incomplete.'}
+    $firstPage=Get-DeckAasCatalogPage $fixture '' '' '' 30 1
+    $secondPage=Get-DeckAasCatalogPage $fixture '' '' '' 30 2
+    $lastPage=Get-DeckAasCatalogPage $fixture '' '' '' 30 $firstPage.pageCount
+    if($firstPage.matchCount -ne $catalog.skills.Count -or $firstPage.pageCount -ne [Math]::Ceiling($catalog.skills.Count/30) -or
+       $firstPage.skills.Count -ne 30 -or $secondPage.page -ne 2 -or $secondPage.skills[0].id -cne $catalog.skills[30].id -or
+       $lastPage.page -ne $firstPage.pageCount -or $lastPage.skills.Count -lt 1){throw 'AAS catalog pagination skipped skills.'}
+    $emptyPage=Get-DeckAasCatalogPage $fixture '__no_such_skill__' '' '' 30 1
+    if($emptyPage.matchCount -ne 0 -or $emptyPage.pageCount -ne 1 -or @($emptyPage.skills).Count){throw 'Empty AAS catalog page is invalid.'}
     $skill=Get-DeckAasSkill $fixture 'brainstorming'
     if($skill.path -notmatch '^skills/' -or -not $skill.description){throw 'Catalog detail is incomplete.'}
     $filtered=@(Search-DeckAasSkills $fixture 'brainstorming' '__no_such_category__' '' 60)

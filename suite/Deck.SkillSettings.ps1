@@ -62,19 +62,25 @@ $catalogCategory=[Windows.Controls.ComboBox]::new(); $catalogCategory.MinWidth=1
 $catalogRisk=[Windows.Controls.ComboBox]::new(); $catalogRisk.MinWidth=110; $catalogRisk.Margin='0,0,8,0'; foreach($risk in @('All risks','none','safe','critical','offensive','unknown')){[void]$catalogRisk.Items.Add($risk)}; $catalogRisk.SelectedIndex=0; [void]$catalogFilters.Children.Add($catalogRisk)
 $catalogRefresh=[Windows.Controls.Button]::new(); $catalogRefresh.Content='Refresh catalog'; $catalogRefresh.Padding='9,5'; [void]$catalogFilters.Children.Add($catalogRefresh)
 $catalogResults=[Windows.Controls.ListBox]::new(); $catalogResults.Height=230; $catalogResults.Margin='0,0,0,8'; $catalogResults.Background='#171C1F'; $catalogResults.Foreground='#EAF0FA'; $catalogResults.BorderBrush='#303A42'; $catalogResults.BorderThickness='1'; [Windows.Controls.VirtualizingStackPanel]::SetIsVirtualizing($catalogResults,$true); [void]$deckSkillPanel.Children.Add($catalogResults)
+$catalogPager=[Windows.Controls.WrapPanel]::new(); $catalogPager.Margin='0,0,0,8'; [void]$deckSkillPanel.Children.Add($catalogPager)
+$catalogPrevious=[Windows.Controls.Button]::new(); $catalogPrevious.Content='Previous'; $catalogPrevious.Padding='9,5'; $catalogPrevious.Margin='0,0,8,0'; $catalogPrevious.IsEnabled=$false; [void]$catalogPager.Children.Add($catalogPrevious)
+$catalogPageInput=[Windows.Controls.TextBox]::new(); $catalogPageInput.Text='1'; $catalogPageInput.Width=48; $catalogPageInput.MaxLength=6; $catalogPageInput.VerticalContentAlignment='Center'; $catalogPageInput.Margin='0,0,5,0'; $catalogPageInput.IsEnabled=$false; [void]$catalogPager.Children.Add($catalogPageInput)
+$catalogPageGo=[Windows.Controls.Button]::new(); $catalogPageGo.Content='Go'; $catalogPageGo.Padding='9,5'; $catalogPageGo.Margin='0,0,8,0'; $catalogPageGo.IsEnabled=$false; [void]$catalogPager.Children.Add($catalogPageGo)
+$catalogNext=[Windows.Controls.Button]::new(); $catalogNext.Content='Next'; $catalogNext.Padding='9,5'; $catalogNext.Margin='0,0,10,0'; $catalogNext.IsEnabled=$false; [void]$catalogPager.Children.Add($catalogNext)
+$catalogPageLabel=New-DeckText 'Page 1 of 1' '#A2ADB5' 11; $catalogPageLabel.VerticalAlignment='Center'; [void]$catalogPager.Children.Add($catalogPageLabel)
 $catalogDetail=New-DeckText 'Select a skill to see its description, risk and setup notes.' '#A2ADB5' 11; $catalogDetail.Margin='0,0,0,8'; [void]$deckSkillPanel.Children.Add($catalogDetail)
 $catalogActions=[Windows.Controls.WrapPanel]::new(); [void]$deckSkillPanel.Children.Add($catalogActions)
 $catalogInstall=[Windows.Controls.Button]::new(); $catalogInstall.Content='Install selected'; $catalogInstall.IsEnabled=$false; $catalogInstall.Padding='11,7'; $catalogInstall.Margin='0,0,8,0'; [void]$catalogActions.Children.Add($catalogInstall)
 $catalogSource=[Windows.Controls.Button]::new(); $catalogSource.Content='Inspect source'; $catalogSource.IsEnabled=$false; $catalogSource.Padding='11,7'; [void]$catalogActions.Children.Add($catalogSource)
 $catalogStatus=New-DeckText '' '#9BB5D9' 11; $catalogStatus.Margin='0,10,0,0'; [void]$deckSkillPanel.Children.Add($catalogStatus)
-$catalogState=@{Loaded=$false;Busy=$false;Task=$null;Mode='';Selected=$null;SearchTask=$null;SearchKey='';WantedKey='';Commit='';UpdatingFilters=$false;Closed=$false}
+$catalogState=@{Loaded=$false;Busy=$false;Task=$null;Mode='';Selected=$null;SearchTask=$null;SearchKey='';WantedKey='';Commit='';UpdatingFilters=$false;Closed=$false;Page=1;PageCount=1}
 $catalogPoll=[Windows.Threading.DispatcherTimer]::new(); $catalogPoll.Interval=[TimeSpan]::FromMilliseconds(200)
 $renderCatalog={
     if($catalogState.Closed -or $catalogState.Busy){return}
     $category=if($catalogCategory.SelectedIndex -gt 0){[string]$catalogCategory.SelectedItem}else{''}
     $risk=if($catalogRisk.SelectedIndex -gt 0){[string]$catalogRisk.SelectedItem}else{''}
     $query=[string]$catalogSearch.Text
-    $key=(@($query,$category,$risk,$catalogState.Loaded) | ConvertTo-Json -Compress)
+    $key=(@($query,$category,$risk,$catalogState.Page,$catalogState.Loaded) | ConvertTo-Json -Compress)
     $catalogState.WantedKey=$key
     if($catalogState.SearchTask){return}
     try{
@@ -83,21 +89,35 @@ $renderCatalog={
         $escapedCategory=$category.Replace("'","''")
         $escapedRisk=$risk.Replace("'","''")
         $include=if($catalogState.Loaded){'$false'}else{'$true'}
-        $code="`$ErrorActionPreference='Stop';`$ProgressPreference='SilentlyContinue';try{. '$escapedSuite/Deck.Core.ps1'; `$page=Get-DeckAasCatalogPage '$escapedSuite' '$escapedQuery' '$escapedCategory' '$escapedRisk' 30 -IncludeCategories:$include; [Console]::Out.Write((ConvertTo-Json -InputObject `$page -Depth 5 -Compress))}catch{[Console]::Error.WriteLine(`$_.Exception.Message);exit 1}"
+        $code="`$ErrorActionPreference='Stop';`$ProgressPreference='SilentlyContinue';try{. '$escapedSuite/Deck.Core.ps1'; `$page=Get-DeckAasCatalogPage '$escapedSuite' '$escapedQuery' '$escapedCategory' '$escapedRisk' 30 $($catalogState.Page) -IncludeCategories:$include; [Console]::Out.Write((ConvertTo-Json -InputObject `$page -Depth 5 -Compress))}catch{[Console]::Error.WriteLine(`$_.Exception.Message);exit 1}"
         $catalogState.SearchTask=Start-DeckTask $code 'SkillCatalogSearch' ''
         try{$catalogState.SearchTask.Process.PriorityClass=[Diagnostics.ProcessPriorityClass]::BelowNormal}catch{}
         $catalogState.SearchKey=$key
         $catalogInstall.IsEnabled=$false; $catalogRefresh.IsEnabled=$false
+        $catalogPrevious.IsEnabled=$false; $catalogNext.IsEnabled=$false; $catalogPageGo.IsEnabled=$false; $catalogPageInput.IsEnabled=$false
         $catalogStatus.Text=if($catalogState.Loaded){'Searching AAS catalog…'}else{'Loading AAS catalog…'}
         $catalogPoll.Start()
     }catch{$catalogStatus.Text=$_.Exception.Message;$catalogRefresh.IsEnabled=$true}
 }.GetNewClosure()
 $catalogDebounce=[Windows.Threading.DispatcherTimer]::new(); $catalogDebounce.Interval=[TimeSpan]::FromMilliseconds(350)
 $catalogDebounce.Add_Tick({$catalogDebounce.Stop(); & $renderCatalog}.GetNewClosure())
-$queueCatalogSearch={if(-not $catalogState.UpdatingFilters -and $tabs.SelectedItem -eq $deckSkillTab){$catalogDebounce.Stop();$catalogDebounce.Start()}}.GetNewClosure()
+$queueCatalogSearch={if(-not $catalogState.UpdatingFilters -and $tabs.SelectedItem -eq $deckSkillTab){$catalogState.Page=1;$catalogPageInput.Text='1';$catalogDebounce.Stop();$catalogDebounce.Start()}}.GetNewClosure()
 $catalogSearch.Add_TextChanged($queueCatalogSearch)
 $catalogCategory.Add_SelectionChanged($queueCatalogSearch)
 $catalogRisk.Add_SelectionChanged($queueCatalogSearch)
+$goCatalogPage={param([int]$number)
+    if(-not $catalogState.Loaded -or $catalogState.Busy -or $catalogState.SearchTask){return}
+    $target=[Math]::Max(1,[Math]::Min($catalogState.PageCount,$number))
+    $catalogPageInput.Text=[string]$target
+    if($target -ne $catalogState.Page){$catalogState.Page=$target;& $renderCatalog}
+}.GetNewClosure()
+$catalogPrevious.Add_Click({& $goCatalogPage ($catalogState.Page-1)}.GetNewClosure())
+$catalogNext.Add_Click({& $goCatalogPage ($catalogState.Page+1)}.GetNewClosure())
+$submitCatalogPage={$number=0;if([int]::TryParse($catalogPageInput.Text,[ref]$number)){& $goCatalogPage $number}else{$catalogPageInput.Text=[string]$catalogState.Page}}.GetNewClosure()
+$catalogPageGo.Add_Click($submitCatalogPage)
+$catalogPageInput.Add_KeyDown({param($sender,$eventArgs)
+    if($eventArgs.Key -eq [Windows.Input.Key]::Return){& $submitCatalogPage;$eventArgs.Handled=$true}
+}.GetNewClosure())
 $tabs.Add_SelectionChanged({param($sender,$eventArgs)
     if($eventArgs.OriginalSource -eq $tabs -and $tabs.SelectedItem -eq $deckSkillTab -and -not $catalogState.Loaded -and -not $catalogState.SearchTask){& $renderCatalog}
 }.GetNewClosure())
@@ -105,7 +125,7 @@ $catalogResults.Add_SelectionChanged({
     $selected=$catalogResults.SelectedItem
     $catalogState.Selected=if($selected){$selected.Tag}else{$null}
     $skill=$catalogState.Selected
-    if(-not $skill){$catalogInstall.IsEnabled=$false;$catalogSource.IsEnabled=$false;return}
+    if(-not $skill){$catalogInstall.IsEnabled=$false;$catalogSource.IsEnabled=$false;$catalogDetail.Text='Select a skill to see its description, risk and setup notes.';return}
     $installed=Test-Path -LiteralPath (Join-Path $suite ('skills/'+$skill.id))
     $receipt=if($installed){try{Get-DeckManagedSkillReceipt $suite ([string]$skill.id)}catch{$null}}else{$null}
     $managed=$receipt -and $receipt.repository -eq 'sickn33/agentic-awesome-skills'
@@ -144,7 +164,7 @@ $catalogRefresh.Add_Click({try{& $startCatalogJob 'refresh' ''}catch{$catalogSta
 $catalogPoll.Add_Tick({
     if($catalogState.SearchTask){
         $worker=$catalogState.SearchTask
-        if(([DateTimeOffset]::UtcNow-$worker.Started).TotalSeconds -gt 12){Stop-DeckTask $worker;$catalogState.SearchTask=$null;Dispose-DeckTask $worker;$catalogStatus.Text='AAS search timed out.';$catalogRefresh.IsEnabled=$true}
+        if(([DateTimeOffset]::UtcNow-$worker.Started).TotalSeconds -gt 12){Stop-DeckTask $worker;$catalogState.SearchTask=$null;Dispose-DeckTask $worker;$catalogStatus.Text='AAS search timed out.';$catalogRefresh.IsEnabled=$true;$catalogPrevious.IsEnabled=$catalogState.Page -gt 1;$catalogNext.IsEnabled=$catalogState.Page -lt $catalogState.PageCount;$catalogPageGo.IsEnabled=$catalogState.PageCount -gt 1;$catalogPageInput.IsEnabled=$catalogPageGo.IsEnabled}
         elseif(Test-DeckTaskReady $worker){
             $catalogState.SearchTask=$null
             try{
@@ -153,6 +173,7 @@ $catalogPoll.Add_Tick({
                     $page=([string]$worker.Out.Result) | ConvertFrom-Json -ErrorAction Stop
                     if(-not $page.commit -or $page.total -lt 1){throw 'Invalid AAS search response.'}
                     $catalogState.Commit=[string]$page.commit
+                    $catalogState.Page=[int]$page.page; $catalogState.PageCount=[int]$page.pageCount
                     if(-not $catalogState.Loaded){
                         $catalogState.UpdatingFilters=$true
                         try{foreach($category in @($page.categories)){if($category){[void]$catalogCategory.Items.Add([string]$category)}}}
@@ -164,10 +185,18 @@ $catalogPoll.Add_Tick({
                         $item=[Windows.Controls.ListBoxItem]::new(); $item.Content=('{0}   ·   {1}   ·   {2}' -f $skill.id,$skill.category,$skill.risk); $item.Tag=$skill
                         [void]$catalogResults.Items.Add($item)
                     }
-                    $catalogStatus.Text="Showing $($catalogResults.Items.Count) results (up to 30 of $($page.total)) · pinned $($catalogState.Commit.Substring(0,12))."
+                    $catalogPageInput.Text=[string]$catalogState.Page
+                    $catalogPageLabel.Text="Page $($catalogState.Page) of $($catalogState.PageCount)"
+                    $catalogPrevious.IsEnabled=$catalogState.Page -gt 1
+                    $catalogNext.IsEnabled=$catalogState.Page -lt $catalogState.PageCount
+                    $catalogPageGo.IsEnabled=$catalogState.PageCount -gt 1
+                    $catalogPageInput.IsEnabled=$catalogPageGo.IsEnabled
+                    $first=if($page.matchCount){(($catalogState.Page-1)*$page.pageSize)+1}else{0}
+                    $last=if($page.matchCount){$first+$catalogResults.Items.Count-1}else{0}
+                    $catalogStatus.Text="Showing $first–$last of $($page.matchCount) matching skills ($($page.total) in catalog) · pinned $($catalogState.Commit.Substring(0,12))."
                     $catalogRefresh.IsEnabled=$true
                 }
-            }catch{$catalogStatus.Text=$_.Exception.Message;$catalogRefresh.IsEnabled=$true}
+            }catch{$catalogStatus.Text=$_.Exception.Message;$catalogRefresh.IsEnabled=$true;$catalogPrevious.IsEnabled=$catalogState.Page -gt 1;$catalogNext.IsEnabled=$catalogState.Page -lt $catalogState.PageCount;$catalogPageGo.IsEnabled=$catalogState.PageCount -gt 1;$catalogPageInput.IsEnabled=$catalogPageGo.IsEnabled}
             finally{Dispose-DeckTask $worker}
         }
         if(-not $catalogState.SearchTask -and $catalogState.SearchKey -ne $catalogState.WantedKey){& $renderCatalog}
@@ -179,7 +208,7 @@ $catalogPoll.Add_Tick({
             if($worker.Process.ExitCode -ne 0){throw (Get-DeckTaskFailureMessage $worker)}
             $catalogStatus.Text=([string]$worker.Out.Result).Trim()
             if($catalogState.Mode -eq 'refresh'){
-                $catalogState.Loaded=$false;$catalogState.Commit='';$catalogState.UpdatingFilters=$true
+                $catalogState.Loaded=$false;$catalogState.Commit='';$catalogState.Page=1;$catalogState.PageCount=1;$catalogPageInput.Text='1';$catalogState.UpdatingFilters=$true
                 try{$catalogCategory.Items.Clear();[void]$catalogCategory.Items.Add('All categories');$catalogCategory.SelectedIndex=0}
                 finally{$catalogState.UpdatingFilters=$false}
                 & $renderCatalog
