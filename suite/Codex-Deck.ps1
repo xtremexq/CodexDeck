@@ -896,7 +896,7 @@ function Show-DeckSettings {
         $optimizer.SelectedItem=if($optimizer.Items.Contains($selected)){$selected}else{'Off'}
         $fieldLabels.ContextOptimizer.Visibility=if($rtk -or $headroom){'Visible'}else{'Collapsed'}
         $optimizer.Visibility=$fieldLabels.ContextOptimizer.Visibility
-        $codeGraphPanel.Visibility=if($codegraph){'Visible'}else{'Collapsed'}
+        $integrationUI.codegraph.CodeGraphPanel.Visibility=if($codegraph){'Visible'}else{'Collapsed'}
         $browserSkillCard.Visibility=if(Get-Command browser-harness -CommandType Application -ErrorAction SilentlyContinue){'Visible'}else{'Collapsed'}
         if($browserSkillCard.Visibility -ne 'Visible'){$controls.BrowserHarnessEnabled.IsChecked=$false}
     }.GetNewClosure()
@@ -1011,7 +1011,7 @@ function Show-DeckSettings {
         [void]$panels.Integrations.Children.Add($card)
         $integrationUI[$integrationName]=@{Status=$statusText;Install=$install;Rollback=$rollback;Operation=$operation;Refresh=$refresh;Body=$body}
     }
-    $codeGraphPanel=[Windows.Controls.StackPanel]::new(); $codeGraphPanel.Margin='0,12,0,0'; [void]$integrationUI.codegraph.Body.Children.Add($codeGraphPanel)
+    $codeGraphPanel=[Windows.Controls.StackPanel]::new(); $codeGraphPanel.Margin='0,12,0,0'; [void]$integrationUI.codegraph.Body.Children.Add($codeGraphPanel); $integrationUI.codegraph.CodeGraphPanel=$codeGraphPanel
     $codeGraphTitle=New-DeckText 'Project access' '#EAF0FA' 13; $codeGraphTitle.FontWeight='SemiBold'; [void]$codeGraphPanel.Children.Add($codeGraphTitle)
     $codeGraphHelp=New-DeckText 'CodeGraph starts only when a Codex terminal opens in one of these folders or its subfolders. Open the terminal in the project you want indexed.' '#929CA4' 11; $codeGraphHelp.Margin='0,4,0,8'; [void]$codeGraphPanel.Children.Add($codeGraphHelp)
     $codeGraphProfileLabel=New-DeckText 'Tool profile' '#A2ADB5' 11; [void]$codeGraphPanel.Children.Add($codeGraphProfileLabel)
