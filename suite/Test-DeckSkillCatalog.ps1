@@ -11,6 +11,8 @@ try{
     if($catalog.skills.Count -lt 2000){throw 'Bundled catalog is incomplete.'}
     $found=@(Search-DeckAasSkills $fixture 'brainstorming' '' '' 60)
     if(-not @($found | Where-Object id -eq 'brainstorming').Count){throw 'Catalog search missed an exact ID.'}
+    $page=Get-DeckAasCatalogPage $fixture 'brainstorming' '' '' 30 -IncludeCategories
+    if($page.total -ne $catalog.skills.Count -or -not @($page.categories).Count -or -not @($page.skills | Where-Object id -eq 'brainstorming').Count){throw 'Bounded GUI catalog page is incomplete.'}
     $skill=Get-DeckAasSkill $fixture 'brainstorming'
     if($skill.path -notmatch '^skills/' -or -not $skill.description){throw 'Catalog detail is incomplete.'}
     $filtered=@(Search-DeckAasSkills $fixture 'brainstorming' '__no_such_category__' '' 60)

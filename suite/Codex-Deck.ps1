@@ -1520,7 +1520,17 @@ try{
         if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '600') { throw 'Efficiency analytics session limit default failed.' }
         if ($headers -notcontains 'Skills' -or -not $settingsTest.Skills.State.Controls.ContainsKey('debug-swarm') -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked) { throw 'Globally enabled Deck skills Settings tab missing or invalid.' }
         if(-not $settingsTest.Controls.ContainsKey('UizzeMcpEnabled') -or $settingsTest.Controls.UizzeMcpEnabled.IsChecked){throw 'UIZZE MCP must be separately opt-in.'}
+        $catalogOpenWatch=[Diagnostics.Stopwatch]::StartNew()
         $settingsTest.Tabs.SelectedItem=@($settingsTest.Tabs.Items | Where-Object Header -eq 'Skills')[0]
+        $catalogOpenWatch.Stop()
+        if($catalogOpenWatch.ElapsedMilliseconds -gt 500){throw 'Opening Skills blocked the UI thread.'}
+        $catalogDeadline=[DateTimeOffset]::UtcNow.AddSeconds(12)
+        while($settingsTest.Skills.Catalog.Results.Items.Count -lt 1 -and [DateTimeOffset]::UtcNow -lt $catalogDeadline){
+            $frame=[Windows.Threading.DispatcherFrame]::new()
+            $pump=[Windows.Threading.DispatcherTimer]::new();$pump.Interval=[TimeSpan]::FromMilliseconds(50)
+            $pump.Add_Tick({$frame.Continue=$false}.GetNewClosure());$pump.Start()
+            [Windows.Threading.Dispatcher]::PushFrame($frame);$pump.Stop()
+        }
         if($settingsTest.Skills.Catalog.Results.Items.Count -lt 1 -or -not $settingsTest.Skills.Catalog.Search -or -not $settingsTest.Skills.Catalog.Refresh){throw 'Native AAS skill catalog did not load in Skills settings.'}
         $settingsTest.Skills.Catalog.Results.SelectedIndex=0
         if(-not $settingsTest.Skills.Catalog.Install.IsEnabled){throw 'AAS catalog selection did not enable direct installation.'}

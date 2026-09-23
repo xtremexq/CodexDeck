@@ -54,6 +54,19 @@ function Search-DeckAasSkills([string]$SuiteRoot,[string]$Query='', [string]$Cat
         if($count -ge $maximum){break}
     }
 }
+function Get-DeckAasCatalogPage([string]$SuiteRoot,[string]$Query='', [string]$Category='', [string]$Risk='', [int]$Limit=30,[switch]$IncludeCategories) {
+    $catalog=Read-DeckAasCatalog $SuiteRoot
+    $matches=@(Search-DeckAasSkills $SuiteRoot $Query $Category $Risk $Limit)
+    $categories=if($IncludeCategories){@($catalog.skills | ForEach-Object category | Where-Object {$_} | Sort-Object -Unique)}else{@()}
+    return [ordered]@{
+        commit=[string]$catalog.commit
+        total=@($catalog.skills).Count
+        categories=$categories
+        skills=@($matches | ForEach-Object {
+            [ordered]@{id=[string]$_.id;path=[string]$_.path;category=[string]$_.category;risk=[string]$_.risk;description=[string]$_.description;setupSummary=[string]$_.setupSummary;license=[string]$_.license}
+        })
+    }
+}
 function Get-DeckAasSkill([string]$SuiteRoot,[string]$Id) {
     $skill=@((Read-DeckAasCatalog $SuiteRoot).skills | Where-Object id -CEQ $Id | Select-Object -First 1)
     if(-not $skill.Count){throw "Unknown AAS skill: $Id"}
