@@ -884,6 +884,8 @@ function Show-DeckSettings {
     $detailsTitle=New-DeckText 'Account and widget details' '#EDF1F7' 18; $detailsTitle.Margin='0,14,0,5'; [void]$panels.General.Children.Add($detailsTitle)
     $detailsHelp=New-DeckText $descriptions.Details '#929CA4' 11; $detailsHelp.Margin='0,0,0,16'; [void]$panels.General.Children.Add($detailsHelp)
     [void]$panels.General.Children.Add($detailWrap)
+    $integrationUI=@{}
+    $settingsTabRefs=@{}
     $integrationVisibility={
         $rtk=(Get-DeckIntegrationStatus $suite rtk -SkipHash).Valid
         $headroom=(Get-DeckIntegrationStatus $suite headroom -SkipHash).Valid
@@ -897,8 +899,8 @@ function Show-DeckSettings {
         $fieldLabels.ContextOptimizer.Visibility=if($rtk -or $headroom){'Visible'}else{'Collapsed'}
         $optimizer.Visibility=$fieldLabels.ContextOptimizer.Visibility
         $integrationUI.codegraph.CodeGraphPanel.Visibility=if($codegraph){'Visible'}else{'Collapsed'}
-        $browserSkillCard.Visibility=if(Get-Command browser-harness -CommandType Application -ErrorAction SilentlyContinue){'Visible'}else{'Collapsed'}
-        if($browserSkillCard.Visibility -ne 'Visible'){$controls.BrowserHarnessEnabled.IsChecked=$false}
+        $settingsTabRefs.BrowserSkillCard.Visibility=if(Get-Command browser-harness -CommandType Application -ErrorAction SilentlyContinue){'Visible'}else{'Collapsed'}
+        if($settingsTabRefs.BrowserSkillCard.Visibility -ne 'Visible'){$controls.BrowserHarnessEnabled.IsChecked=$false}
     }.GetNewClosure()
     $updateCompactModeVisibility={
         $visibility=if([string]$controls.AutoCompactMode.SelectedItem -eq 'Custom'){'Visible'}else{'Collapsed'}
@@ -925,15 +927,14 @@ function Show-DeckSettings {
     $specificAccountsToggle.Add_Checked({& $updateSpecificAccountsVisibility}.GetNewClosure())
     $specificAccountsToggle.Add_Unchecked({& $updateSpecificAccountsVisibility}.GetNewClosure())
     & $updateSpecificAccountsVisibility
-    $integrationUI=@{}
     $integrationCatalog=Get-DeckIntegrationCatalog $suite
     $syncAasTab={
         $installed=(Get-DeckIntegrationStatus $suite aas_catalog -SkipHash).Valid
-        if($installed -and -not $tabs.Items.Contains($aasTab)){
-            $skillsIndex=$tabs.Items.IndexOf($deckSkillTab)
-            if($skillsIndex -ge 0){$tabs.Items.Insert($skillsIndex,$aasTab)}
-        }elseif(-not $installed -and $tabs.Items.Contains($aasTab)){
-            [void]$tabs.Items.Remove($aasTab)
+        if($installed -and -not $tabs.Items.Contains($settingsTabRefs.AAS)){
+            $skillsIndex=$tabs.Items.IndexOf($settingsTabRefs.Skills)
+            if($skillsIndex -ge 0){$tabs.Items.Insert($skillsIndex,$settingsTabRefs.AAS)}
+        }elseif(-not $installed -and $tabs.Items.Contains($settingsTabRefs.AAS)){
+            [void]$tabs.Items.Remove($settingsTabRefs.AAS)
         }
     }.GetNewClosure()
     foreach($integrationName in @('rtk','headroom','codegraph','browser_harness','aas_catalog')){
@@ -1065,6 +1066,9 @@ function Show-DeckSettings {
         & $integrationVisibility
     }.GetNewClosure())
     . (Join-Path $suite 'Deck.SettingsExtras.ps1')
+    $settingsTabRefs.BrowserSkillCard=$browserSkillCard
+    $settingsTabRefs.AAS=$aasTab
+    $settingsTabRefs.Skills=$deckSkillTab
     & $integrationVisibility
     $orderedTabs=@('General','Checks & Warmup','Environments')
     if((Get-DeckIntegrationStatus $suite aas_catalog -SkipHash).Valid){$orderedTabs+='AAS'}
