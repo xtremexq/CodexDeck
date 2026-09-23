@@ -276,6 +276,9 @@ function Start-DeckBackgroundPowerShell([string]$ScriptPath, [string[]]$Argument
     $info.UseShellExecute=$false
     $info.CreateNoWindow=$true
     $info.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
+    # A PowerShell 7 parent can pass a module path that hides Windows
+    # PowerShell's built-in modules from the WPF companion.
+    [void]$info.EnvironmentVariables.Remove('PSModulePath')
     return [Diagnostics.Process]::Start($info)
 }
 function Start-DeckCompanion([string]$SuiteRoot, [switch]$OpenSettings) {
@@ -481,6 +484,9 @@ function Start-DeckTask([string]$Code, [string]$Kind, [string]$Account) {
     # Let powershell.exe construct its own Windows PowerShell module path.
     [void]$info.EnvironmentVariables.Remove('PSModulePath')
     $process = [Diagnostics.Process]::Start($info)
+    if($Kind -eq 'Check'){
+        try{$process.PriorityClass=[Diagnostics.ProcessPriorityClass]::BelowNormal}catch{}
+    }
     $job=$null
     try{$job=[DeckProcessJob]::new($process)}catch{}
     return @{ Process=$process; Out=$process.StandardOutput.ReadToEndAsync(); Err=$process.StandardError.ReadToEndAsync(); Job=$job; Kind=$Kind; Account=$Account; Started=[DateTimeOffset]::UtcNow; ExitObservedAt=$null }

@@ -163,7 +163,7 @@ $childPid=[int]$treeTask.Out.Result.Trim(); Dispose-DeckTask $treeTask; Start-Sl
 $childAlive=$false; try{$childProcess=Get-Process -Id $childPid -ErrorAction Stop;$childAlive=$true;$childProcess.Dispose()}catch{}
 Assert (-not $childAlive) 'Disposing a worker left its child process alive'
 $backgroundScript=Join-Path $fixture 'background worker.ps1'; $backgroundResult=Join-Path $fixture 'background-result.json'
-[IO.File]::WriteAllText($backgroundScript,'[IO.File]::WriteAllText($env:CODEX_DECK_BACKGROUND_TEST,($args | ConvertTo-Json -Compress)); exit 0',[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($backgroundScript,'[void](Get-FileHash -LiteralPath $PSHOME\powershell.exe); [IO.File]::WriteAllText($env:CODEX_DECK_BACKGROUND_TEST,($args | ConvertTo-Json -Compress)); exit 0',[Text.UTF8Encoding]::new($false))
 $oldBackgroundResult=$env:CODEX_DECK_BACKGROUND_TEST
 try{
     $env:CODEX_DECK_BACKGROUND_TEST=$backgroundResult
@@ -174,9 +174,21 @@ try{
 }finally{$env:CODEX_DECK_BACKGROUND_TEST=$oldBackgroundResult}
 $backgroundArguments=Get-Content -LiteralPath $backgroundResult -Raw | ConvertFrom-Json
 Assert (($backgroundArguments -join '|') -eq 'two words|model="quiet"|C:\path with space\') 'Background PowerShell lost arguments'
+$moduleScript=Join-Path $fixture 'background-module.ps1'; $moduleResult=Join-Path $fixture 'background-module.txt'
+[IO.File]::WriteAllText($moduleScript,'[IO.File]::WriteAllText($args[0],(Get-FileHash -LiteralPath $PSHOME\powershell.exe).Algorithm)',[Text.UTF8Encoding]::new($false))
+$previousModulePath=$env:PSModulePath
+try {
+    $env:PSModulePath='C:\invalid-power-shell-modules'
+    $moduleProcess=Start-DeckBackgroundPowerShell $moduleScript @($moduleResult)
+    Assert ($moduleProcess.WaitForExit(10000) -and $moduleProcess.ExitCode -eq 0) 'Background PowerShell inherited an incompatible module path'
+    $moduleProcess.Dispose()
+} finally { $env:PSModulePath=$previousModulePath }
+Assert ([IO.File]::ReadAllText($moduleResult) -eq 'SHA256') 'Background PowerShell could not load built-in modules'
 $scheduledResult=Join-Path $fixture 'scheduled-background-result.json'
+$previousModulePath=$env:PSModulePath
 try{
     $env:CODEX_DECK_BACKGROUND_TEST=$scheduledResult
+    $env:PSModulePath='C:\invalid-power-shell-modules'
     $vbsInfo=[Diagnostics.ProcessStartInfo]::new()
     $vbsInfo.FileName=Join-Path $env:SystemRoot 'System32\wscript.exe'
     $vbsInfo.Arguments=(@('//B','//Nologo',(Join-Path $PSScriptRoot 'Deck.Background.vbs'),$backgroundScript,'scheduled worker') | ForEach-Object { ConvertTo-DeckProcessArgument ([string]$_) }) -join ' '
@@ -184,7 +196,7 @@ try{
     $vbsProcess=[Diagnostics.Process]::Start($vbsInfo)
     Assert ($vbsProcess.WaitForExit(10000) -and $vbsProcess.ExitCode -eq 0) 'Scheduled background launcher did not finish'
     $vbsProcess.Dispose()
-}finally{$env:CODEX_DECK_BACKGROUND_TEST=$oldBackgroundResult}
+}finally{$env:CODEX_DECK_BACKGROUND_TEST=$oldBackgroundResult; $env:PSModulePath=$previousModulePath}
 $scheduledArguments=Get-Content -LiteralPath $scheduledResult -Raw | ConvertFrom-Json
 Assert (($scheduledArguments -join '|') -eq 'scheduled worker') 'Scheduled background launcher lost arguments'
 foreach($file in @('Deck.Core.ps1','Deck.WarmupWorker.ps1','Codex-Deck.ps1','../.local/bin/codex-auth.ps1')){

@@ -4,6 +4,9 @@ If WScript.Arguments.Count < 1 Then WScript.Quit 64
 
 Dim shell, powerShell, command, index
 Set shell = CreateObject("WScript.Shell")
+' A PowerShell 7 parent can supply a module path that hides Windows
+' PowerShell's built-in modules from the WPF companion.
+shell.Environment("Process").Remove "PSModulePath"
 powerShell = shell.ExpandEnvironmentStrings("%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe")
 
 Function QuoteArgument(value)

@@ -150,6 +150,16 @@ function ConvertTo-DeckCodexArguments([string[]]$Arguments) {
 
 # Optional managed integrations. Deck owns only the adapter and receipt; upstream
 # packages are downloaded into versioned folders after an explicit enable/update.
+function Get-DeckFileHash {
+    param([Parameter(Mandatory=$true)][string]$LiteralPath, [string]$Algorithm='SHA256')
+    if($Algorithm -ne 'SHA256'){throw 'Only SHA256 is supported.'}
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try {
+        $stream=[IO.File]::OpenRead($LiteralPath)
+        try { $bytes=$sha.ComputeHash($stream) } finally { $stream.Dispose() }
+        return [pscustomobject]@{Hash=([BitConverter]::ToString($bytes).Replace('-',''))}
+    } finally { $sha.Dispose() }
+}
 function Get-DeckIntegrationCatalog([string]$SuiteRoot) {
     $path=Join-Path $SuiteRoot 'Deck.Integrations.json'
     if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw 'Deck integration manifest is missing. Reinstall Codex Deck.'}
@@ -213,7 +223,7 @@ function Get-DeckIntegrationStatus([string]$SuiteRoot,[ValidateSet('rtk','headro
     $entry=$state.components.$Name
     $path=if($entry -and $entry.version){Join-Path $SuiteRoot ("integrations/packages/{0}/{1}/{2}" -f $Name,$entry.version,$component.executable)}else{$null}
     $valid=[bool]($path -and (Test-Path -LiteralPath $path -PathType Leaf))
-    if($valid -and $entry.sha256){$valid=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -eq [string]$entry.sha256}
+    if($valid -and $entry.sha256){$valid=(Get-DeckFileHash -LiteralPath $path -Algorithm SHA256).Hash -eq [string]$entry.sha256}
     if($valid -and $Name -eq 'codegraph'){$valid=Test-Path -LiteralPath (Join-Path (Split-Path -Parent $path) 'onnxruntime.dll') -PathType Leaf}
     $versions=@(Get-ChildItem -LiteralPath (Join-Path $SuiteRoot "integrations/packages/$Name") -Directory -ErrorAction SilentlyContinue | Where-Object {$_.Name -notlike '.stage-*'} | Sort-Object LastWriteTimeUtc -Descending | ForEach-Object Name)
     return [pscustomobject]@{Name=$Name;DisplayName=$component.displayName;Installed=$valid;Valid=$valid;Version=if($entry){[string]$entry.version}else{''};Executable=$path;Versions=$versions;ProjectUrl=$component.projectUrl;License=$component.license}
@@ -308,7 +318,7 @@ function Install-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom
                 $archive=Join-Path $stage $component.asset; $checksum=Join-Path $stage $component.checksumAsset
                 Invoke-DeckIntegrationDownload $downloads[[string]$component.asset] $archive; Invoke-DeckIntegrationDownload $downloads[[string]$component.checksumAsset] $checksum
                 $expected=Get-DeckIntegrationExpectedHash $checksum $component.asset
-                if((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected){throw 'RTK download failed checksum verification.'}
+                if((Get-DeckFileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected){throw 'RTK download failed checksum verification.'}
                 $expanded=Join-Path $stage 'expanded'; Expand-Archive -LiteralPath $archive -DestinationPath $expanded
                 $binary=Get-ChildItem -LiteralPath $expanded -Filter rtk.exe -File -Recurse | Select-Object -First 1
                 if(-not $binary){throw 'RTK archive did not contain rtk.exe.'}
@@ -317,13 +327,13 @@ function Install-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom
                 foreach($pair in @(@($component.asset,$component.checksumAsset,'codegraph-server.exe'),@($component.supportAsset,$component.supportChecksumAsset,'onnxruntime.dll'))){
                     $source=Join-Path $stage $pair[0]; $checksum=Join-Path $stage $pair[1]
                     Invoke-DeckIntegrationDownload $downloads[[string]$pair[0]] $source; Invoke-DeckIntegrationDownload $downloads[[string]$pair[1]] $checksum
-                    if((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne (Get-DeckIntegrationExpectedHash $checksum $pair[0])){throw "CodeGraph download failed checksum verification for $($pair[0])."}
+                    if((Get-DeckFileHash -LiteralPath $source -Algorithm SHA256).Hash -ne (Get-DeckIntegrationExpectedHash $checksum $pair[0])){throw "CodeGraph download failed checksum verification for $($pair[0])."}
                     if($pair[0] -ne $pair[2]){Move-Item -LiteralPath $source -Destination (Join-Path $stage $pair[2])}
                 }
             }else{
                 $wheelPath=Join-Path $stage $wheel.filename
                 Invoke-DeckIntegrationDownload $wheel.url $wheelPath
-                if((Get-FileHash -LiteralPath $wheelPath -Algorithm SHA256).Hash -ne ([string]$wheel.digests.sha256).ToUpperInvariant()){throw 'Headroom wheel failed PyPI checksum verification.'}
+                if((Get-DeckFileHash -LiteralPath $wheelPath -Algorithm SHA256).Hash -ne ([string]$wheel.digests.sha256).ToUpperInvariant()){throw 'Headroom wheel failed PyPI checksum verification.'}
                 $python=$null
                 foreach($candidate in @('py.exe','python.exe')){try{$python=(Get-Command $candidate -ErrorAction Stop).Source;break}catch{}}
                 if(-not $python){throw 'Headroom MCP requires Python 3.10 or newer.'}
@@ -351,7 +361,7 @@ function Install-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom
     $old=Get-DeckIntegrationState $SuiteRoot; $components=[ordered]@{}
     foreach($property in @($old.components.PSObject.Properties)){$components[$property.Name]=$property.Value}
     $previous=@(); if($components.Contains($Name)){$previous=@($components[$Name].history)+@([string]$components[$Name].version) | Where-Object {$_ -and $_ -ne $version} | Select-Object -Unique}
-    $components[$Name]=[ordered]@{version=$version;sha256=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash;installedAt=[DateTimeOffset]::UtcNow.ToString('o');history=@($previous)}
+    $components[$Name]=[ordered]@{version=$version;sha256=(Get-DeckFileHash -LiteralPath $executable -Algorithm SHA256).Hash;installedAt=[DateTimeOffset]::UtcNow.ToString('o');history=@($previous)}
     Write-DeckIntegrationState $SuiteRoot ([ordered]@{schema=1;components=$components})
     return Get-DeckIntegrationStatus $SuiteRoot $Name
 }
@@ -362,7 +372,7 @@ function Restore-DeckIntegration([string]$SuiteRoot,[ValidateSet('rtk','headroom
     if(-not $target){throw 'No earlier installed version is available.'}
     $component=Get-DeckIntegrationComponent $SuiteRoot $Name; $executable=Join-Path $SuiteRoot "integrations/packages/$Name/$target/$($component.executable)"
     if(-not (Test-Path -LiteralPath $executable -PathType Leaf)){throw 'The earlier installation is incomplete.'}
-    $entry.history=@(@([string]$entry.version)+@($entry.history | Where-Object {$_ -ne $target}) | Select-Object -Unique); $entry.version=[string]$target; $entry.sha256=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash
+    $entry.history=@(@([string]$entry.version)+@($entry.history | Where-Object {$_ -ne $target}) | Select-Object -Unique); $entry.version=[string]$target; $entry.sha256=(Get-DeckFileHash -LiteralPath $executable -Algorithm SHA256).Hash
     Write-DeckIntegrationState $SuiteRoot $state
     return Get-DeckIntegrationStatus $SuiteRoot $Name
 }
@@ -501,7 +511,7 @@ function Set-DeckResourceSharing([string]$SuiteRoot, [string]$Source, [string[]]
                             $path=Get-DeckResourcePath $dir $resource
                             if ($resource -eq 'AGENTS.md') {
                                 Assert-DeckPlainResource $path
-                                if ((Test-Path -LiteralPath $path) -and (Get-FileHash -LiteralPath $path).Hash -ne $binding.Hash) { throw 'Shared instructions were edited locally. Preserve those edits before unsharing.' }
+                                if ((Test-Path -LiteralPath $path) -and (Get-DeckFileHash -LiteralPath $path).Hash -ne $binding.Hash) { throw 'Shared instructions were edited locally. Preserve those edits before unsharing.' }
                             } else { Assert-DeckResourceLink $SuiteRoot $dir $binding }
                         }
                         $plans += @{Name=$name; Dir=$dir; Resource=$resource; Binding=$binding; State=$state}
@@ -540,7 +550,7 @@ function Set-DeckResourceSharing([string]$SuiteRoot, [string]$Source, [string[]]
                     if ($binding.Backup -and -not (Test-Path -LiteralPath $backup)) { throw 'Private backup is missing; nothing was detached.' }
                     if ($resource -eq 'AGENTS.md') {
                         Assert-DeckPlainResource $path
-                        if ((Test-Path -LiteralPath $path) -and (Get-FileHash -LiteralPath $path).Hash -ne $binding.Hash) { throw 'Shared instructions were edited locally. Preserve those edits before unsharing.' }
+                        if ((Test-Path -LiteralPath $path) -and (Get-DeckFileHash -LiteralPath $path).Hash -ne $binding.Hash) { throw 'Shared instructions were edited locally. Preserve those edits before unsharing.' }
                         if (Test-Path -LiteralPath $path) { [IO.File]::Delete($path) }
                     } else {
                         Assert-DeckResourceLink $SuiteRoot $dir $binding
@@ -565,7 +575,7 @@ function Set-DeckResourceSharing([string]$SuiteRoot, [string]$Source, [string[]]
                     }
                     try {
                         [void][IO.Directory]::CreateDirectory((Split-Path $path -Parent))
-                        if ($resource -eq 'AGENTS.md') { Copy-Item -LiteralPath $sourcePath -Destination $path; $binding.Hash=(Get-FileHash -LiteralPath $path).Hash }
+                        if ($resource -eq 'AGENTS.md') { Copy-Item -LiteralPath $sourcePath -Destination $path; $binding.Hash=(Get-DeckFileHash -LiteralPath $path).Hash }
                         else { [void](New-Item -ItemType Junction -Path $path -Target $sourcePath) }
                         $state.Bindings = @($state.Bindings)+@($binding)
                         Write-DeckEnvironmentJson $statePath $state
@@ -611,12 +621,12 @@ function Get-DeckSharedArguments([string]$SuiteRoot, [string]$Name) {
         } elseif ($binding.Resource -eq 'AGENTS.md') {
             $path = Get-DeckResourcePath $dir $binding.Resource
             Assert-DeckPlainResource $path
-            if ((Get-FileHash -LiteralPath $path).Hash -ne $binding.Hash) { throw 'Shared instructions were edited locally. Preserve those edits before launching.' }
+            if ((Get-DeckFileHash -LiteralPath $path).Hash -ne $binding.Hash) { throw 'Shared instructions were edited locally. Preserve those edits before launching.' }
             $source = Get-DeckResourcePath $sourceDir $binding.Resource
             Assert-DeckPlainResource $source
-            if ((Get-FileHash -LiteralPath $source).Hash -ne $binding.Hash) {
+            if ((Get-DeckFileHash -LiteralPath $source).Hash -ne $binding.Hash) {
                 Copy-Item -LiteralPath $source -Destination $path -Force
-                $binding.Hash = (Get-FileHash -LiteralPath $path).Hash
+                $binding.Hash = (Get-DeckFileHash -LiteralPath $path).Hash
                 Write-DeckEnvironmentJson (Join-Path $dir 'deck-sharing.json') $state
             }
         } else { Assert-DeckResourceLink $SuiteRoot $dir $binding }

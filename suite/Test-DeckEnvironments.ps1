@@ -95,6 +95,11 @@ foreach($integrationName in @('rtk','headroom','codegraph')){
     $components[$integrationName]=[ordered]@{version='1.2.3';sha256=(Get-FileHash -LiteralPath $executable).Hash;history=@()}
 }
 Write-DeckIntegrationState $fixture ([ordered]@{schema=1;components=$components})
+function Get-FileHash { throw 'Get-FileHash is unavailable in this shell.' }
+try {
+    Assert ((Get-DeckIntegrationStatus $fixture rtk).Valid) 'RTK status depended on Get-FileHash.'
+    Assert ((Get-DeckIntegrationStatus $fixture codegraph).Valid) 'CodeGraph status depended on Get-FileHash.'
+} finally { Remove-Item Function:Get-FileHash -ErrorAction SilentlyContinue }
 $rtkLaunch=Get-DeckIntegrationLaunch $fixture ([pscustomobject]@{ContextOptimizer='RTK';CodeGraphEnabled=$true;CodeGraphProfile='core'})
 Assert ($rtkLaunch.Environment.CODEX_DECK_RTK_EXE -match 'rtk\.exe$') 'RTK hook environment was not isolated to the managed binary.'
 Assert (($rtkLaunch.Arguments -join ' ') -match 'hooks\.PreToolUse=' -and ($rtkLaunch.Arguments -join ' ') -match 'mcp_servers\.deck_codegraph=') 'RTK and CodeGraph launch overrides were not composed.'

@@ -23,6 +23,7 @@ if (-not $created -and -not $SmokeTest -and -not $Demo) {
 . (Join-Path $PSScriptRoot 'Deck.Core.ps1')
 . (Join-Path $PSScriptRoot 'Deck.Backup.ps1')
 $script:settings = if($SmokeTest -or $Demo){Get-DeckDefaults}else{Get-DeckSettings $root}
+$script:autoCheckReadyAt=[DateTimeOffset]::UtcNow.AddMinutes($settings.PollMinutes)
 $script:settingsStamp=0
 if(-not $SmokeTest -and -not $Demo){$settingsItem=Get-Item -LiteralPath (Join-Path $root 'settings.json') -ErrorAction SilentlyContinue;if($settingsItem){$script:settingsStamp=$settingsItem.LastWriteTimeUtc.Ticks}}
 $script:cache = @{}; $script:nextCheck = @{}; $script:resets = @{}; $script:history = @{}
@@ -465,7 +466,10 @@ function Sync-DeckUsageCache {
     if($changed){$script:cacheVersion++;$script:lastRender='';$script:lastPicker=[DateTimeOffset]::MinValue}
 }
 function Save-DeckDesktopUsageCache {
-    $script:cache=Save-DeckUsageCache $root $cache 'cache.json'
+    # Sync-DeckUsageCache already merged the terminal's separate file at the
+    # start of this tick. Re-reading both large JSON files on every result
+    # blocks the WPF thread while checks are completing.
+    Write-DeckJson (Join-Path $root 'cache.json') @(Get-DeckMapValues $cache)
     $script:usageCacheStamp=Get-DeckUsageCacheStamp
 }
 function Get-DeckPickerPoolEntry([string]$Name) {
@@ -863,7 +867,11 @@ function Show-DeckSettings {
             catch{$statusText.Text='Rollback failed: '+$_.Exception.Message}
             finally{$rollback.IsEnabled=$true}
         }.GetNewClosure())
-        & $refresh; [void]$panels.Integrations.Children.Add($card)
+        try{& $refresh}catch{
+            $statusText.Text='Status unavailable: '+$_.Exception.Message
+            $install.Content='Status unavailable'; $install.IsEnabled=$false; $rollback.IsEnabled=$false
+        }
+        [void]$panels.Integrations.Children.Add($card)
         $integrationUI[$integrationName]=@{Status=$statusText;Install=$install;Rollback=$rollback;Operation=$operation}
     }
     . (Join-Path $suite 'Deck.SettingsExtras.ps1')
@@ -1244,7 +1252,7 @@ function Invoke-DeckTick {
     }
     if($tasks.Count -lt 8 -and ($settings.AutoCheck -or $manualChecks.Count)){
         if($tasks.Count -lt 8){
-            $automatic=@(); if($settings.AutoCheck){$automatic=@(Get-DeckVisibleAccounts)}
+            $automatic=@(); if($settings.AutoCheck -and $now -ge $autoCheckReadyAt){$automatic=@(Get-DeckVisibleAccounts)}
             $due=@(Get-DeckDueAccounts $automatic $manualChecks $nextCheck $now)
             foreach($account in $due){
                 if (Get-DeckPoolEntry $suite $account) { $manualChecks.Remove($account); continue }
@@ -1263,7 +1271,11 @@ function Invoke-DeckTick {
 
         }
     }
-    if($cacheDirty){Write-DeckJson (Join-Path $root 'warmup-resets.json') $resets; Save-DeckDesktopUsageCache; $script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker -Force}
+    if($cacheDirty){
+        Write-DeckJson (Join-Path $root 'warmup-resets.json') $resets
+        Save-DeckDesktopUsageCache
+        if($settings.AccountPickerUsage){$script:lastPicker=[DateTimeOffset]::MinValue; Update-DeckPicker -Force}
+    }
     if($batchAccounts.Count -and -not @($batchAccounts | Where-Object { $tasks.ContainsKey($_) -or $manualChecks.ContainsKey($_) }).Count){
         $script:batchAccounts=@(); $script:batchUntil=$now.AddSeconds($settings.MinimumGapSeconds)
         $script:notice='List check complete'

@@ -26,9 +26,12 @@ $suite=$PSScriptRoot; $settings=Get-DeckDefaults; $tasks=@{}; $manualChecks=@{};
 $cache=@{}; $history=@{}; $resets=@{}; $batchAccounts=@(); $batchUntil=[DateTimeOffset]::MinValue
 $StatusButton=[pscustomobject]@{IsEnabled=$true}
 $visibleAccounts=@('work-main'); $widget=$false; $started=@(); $failStarts=@(); $scheduleRepairStarts=0
+$autoCheckReadyAt=[DateTimeOffset]::UtcNow.AddMinutes($settings.PollMinutes)
 Invoke-DeckTick; Assert ($started.Count -eq 0) 'Disabled auto-check started a request'
 Assert ($scheduleRepairStarts -eq 1) 'Initial background schedule repair was not requested'
 $settings.AutoCheck=$true
+Invoke-DeckTick; Assert ($started.Count -eq 0) 'Auto-check ran immediately on Deck startup'
+$autoCheckReadyAt=[DateTimeOffset]::UtcNow.AddSeconds(-1)
 Invoke-DeckTick; Assert ($started.Count -eq 1 -and $started[0] -eq 'work-main') 'Auto-check missed connected account'
 Invoke-DeckTick; Assert ($started.Count -eq 1) 'Duplicate in-flight check'
 $tasks['work-main'].Process.HasExited=$true
