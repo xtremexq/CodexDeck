@@ -119,6 +119,8 @@ Auto-compaction is opt-in. Press **C** before entering an account or pool, or cl
 
 **Settings → Advanced → Compaction** selects the implementation. **Native** is the default: Deck converts the free-context percentage into Codex's native token threshold for the selected model's effective context window, then launches the normal Codex TUI. It works through ordinary accounts, pools, configured quota failover, manual `!account` switching, resumed conversations and one-shot `exec` commands because the setting travels with the complete Deck launch. **Custom** preserves Deck's existing observer workflow: when context reaches the threshold, Deck requests a visible `DECK_HANDOFF`, compacts the thread, and sends the handoff back quoted with “Please go on.” Its multiline handoff setting appears only while Custom is selected. `-Direct` still keeps an exact account without routing.
 
+Run `!compact` inside a managed interactive `codex-auth` conversation to compact on demand, even when automatic compaction is off. In Custom mode, Deck requests the configured handoff from the active agent, compacts after the handoff, and replays it to continue. In Native mode, Codex compacts the thread after the current turn finishes. The command applies to the active conversation and does not change the saved automatic threshold.
+
 ## Desktop companion
 
 Run **`codex-deck`**, or press **D** in the terminal dashboard.
@@ -185,7 +187,7 @@ codex-check -Json                # Machine-readable usage report
 codex-check -NoColor             # Plain-text usage report
 ```
 
-Inside a signed-in `codex-auth` conversation, Codex's local `!` shell prefix gives you these controls without submitting a model turn:
+Inside a signed-in `codex-auth` conversation, Codex's local `!` shell prefix gives you these controls. The command text runs locally; `!compact` then initiates the selected compaction workflow:
 
 | Command | Action |
 | --- | --- |
@@ -193,6 +195,7 @@ Inside a signed-in `codex-auth` conversation, Codex's local `!` shell prefix giv
 | `!pool`, then `!pool 2` | List the current pool and choose a member |
 | `!usage` / `!check` | Check the active account / run the complete `codex-check` report |
 | `!context` / `!deck` | Open the enabled live context companion / desktop panel |
+| `!compact` | Compact the active conversation using the selected Native or Custom implementation |
 | `!delay 15m go on` | Send `go on` to this still-open conversation after 15 minutes |
 | `!schedule 6h go on` | Resume this conversation in a new visible terminal after six hours and send `go on` |
 

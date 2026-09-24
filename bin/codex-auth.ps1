@@ -637,6 +637,7 @@ function Show-Usage {
     Write-Host "  codex-auth -Failover Best -FailoverAccounts account1,account2"
     Write-Host "  codex-auth account15 -Direct -CodexArgs @('exec',...)  Launch without Deck's local routing proxy"
     Write-Host "  codex-auth account1 -AutoCompact 50%   Use the selected Native/Custom mode at 50% context remaining"
+    Write-Host "  !compact (inside a conversation)   Compact now using the selected Native/Custom mode"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  codex-auth account1"
@@ -1157,10 +1158,12 @@ $useRoutingProxy = $codexConversation -and $failoverChoice -and @($failoverChoic
 $originalCodexHome = $env:CODEX_HOME
 $originalDeckSessionUrl = $env:CODEX_DECK_SESSION_URL
 $originalDeckSessionPath = $env:CODEX_DECK_SESSION_PATH
+$originalDeckCompactUrl = $env:CODEX_DECK_COMPACT_URL
 $originalDeckRtkExe = $env:CODEX_DECK_RTK_EXE
 $originalRtkTelemetryDisabled = $env:RTK_TELEMETRY_DISABLED
 $env:CODEX_HOME = $accountDir
 Remove-Item Env:CODEX_DECK_SESSION_PATH -ErrorAction SilentlyContinue
+Remove-Item Env:CODEX_DECK_COMPACT_URL -ErrorAction SilentlyContinue
 if ($Direct) { Remove-Item Env:CODEX_DECK_SESSION_URL -ErrorAction SilentlyContinue }
 $deckSession = $null
 $deckSettings = $null
@@ -1200,11 +1203,13 @@ if(Test-Path -LiteralPath (Join-Path $runtimeRoot 'Deck.GlobalRules.ps1')){
     }
 }
 }catch{
-    $env:CODEX_HOME=$originalCodexHome; $env:CODEX_DECK_SESSION_URL=$originalDeckSessionUrl; $env:CODEX_DECK_SESSION_PATH=$originalDeckSessionPath
+    $env:CODEX_HOME=$originalCodexHome; $env:CODEX_DECK_SESSION_URL=$originalDeckSessionUrl; $env:CODEX_DECK_SESSION_PATH=$originalDeckSessionPath; $env:CODEX_DECK_COMPACT_URL=$originalDeckCompactUrl
     $env:CODEX_DECK_RTK_EXE=$originalDeckRtkExe; $env:RTK_TELEMETRY_DISABLED=$originalRtkTelemetryDisabled
     throw
 }
 $deckInteractiveConversation = $codexConversation -and (-not $CodexArgs -or $CodexArgs[0] -notin @('exec','e'))
+$originalDeckCommandPath=$env:PATH
+if($deckInteractiveConversation){$env:PATH=$PSScriptRoot+[IO.Path]::PathSeparator+$env:PATH}
 if ($deckInteractiveConversation -and $deckSettings -and $deckSettings.AutoCompactLaunchEnabled) { $AutoCompact=$true }
 function Open-DeckLaunchInspector {
     if (-not $deckInteractiveConversation -or -not $deckSettings) { return }
@@ -1227,20 +1232,19 @@ $codexExitCode = -1
 $codexStartedAt = [DateTimeOffset]::Now
 $deckCustomAutoCompact=$false
 $nativeAutoCompactArgs=@()
-$compactSettings=$null
+$compactSettings=if($deckInteractiveConversation -or $AutoCompact){if($deckSettings){$deckSettings}else{Get-DeckSettings (Join-Path $runtimeRoot 'deck')}}else{$null}
 $threshold=$null
-if($AutoCompact){
-    $compactSettings=if($deckSettings){$deckSettings}else{Get-DeckSettings (Join-Path $runtimeRoot 'deck')}
+if($compactSettings){
     $threshold=if($null -ne $autoCompactThresholdOverride){$autoCompactThresholdOverride}else{$compactSettings.AutoCompactThresholdPercent}
-    $deckCustomAutoCompact=$compactSettings.AutoCompactMode -eq 'Custom'
-    if(-not $deckCustomAutoCompact){
+    $deckCustomAutoCompact=$AutoCompact -and $compactSettings.AutoCompactMode -eq 'Custom'
+    if($AutoCompact -and -not $deckCustomAutoCompact){
         $nativeCompact=Get-DeckNativeAutoCompactConfiguration $accountDir $CodexArgs $threshold
         $nativeAutoCompactArgs=@($nativeCompact.Arguments)
         Write-Host ("Codex native auto-compact ON at {0}% free ({1}% used): {2} tokens for {3}." -f $threshold,(100-$threshold),$nativeCompact.TokenLimit,$nativeCompact.Model)
     }
 }
 try {
-    if ($deckCustomAutoCompact) {
+    if ($deckInteractiveConversation -or $deckCustomAutoCompact) {
         $clientPath = Join-Path $runtimeRoot 'Deck.AutoCompact.cjs'
         if (-not (Test-Path -LiteralPath $clientPath -PathType Leaf)) { throw 'Deck.AutoCompact.cjs is missing. Reinstall Codex Deck.' }
         $codexCommand = Get-Command codex -ErrorAction Stop | Select-Object -First 1
@@ -1286,9 +1290,9 @@ try {
         } else {
             $sidecarPath = Join-Path $runtimeRoot 'Deck.AutoCompact.Sidecar.cjs'
             if (-not (Test-Path -LiteralPath $sidecarPath -PathType Leaf)) { throw 'Deck.AutoCompact.Sidecar.cjs is missing. Reinstall Codex Deck.' }
-            $serverConfigJson = ConvertTo-Json -InputObject ([object[]](@($sharedArgs) + @($postConfigArgs))) -Compress -Depth 10
+            $serverConfigJson = ConvertTo-Json -InputObject ([object[]](@($sharedArgs) + @($nativeAutoCompactArgs) + @($postConfigArgs))) -Compress -Depth 10
             $serverConfigEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($serverConfigJson))
-            $sidecarArgs = @($sidecarPath,'--codex-exe',$codexExecutable,'--threshold',[string]$threshold,'--cwd',(Get-Location).Path,'--handoff-base64',$handoffEncoded,'--server-config-base64',$serverConfigEncoded)
+            $sidecarArgs = @($sidecarPath,'--codex-exe',$codexExecutable,'--threshold',[string]$threshold,'--cwd',(Get-Location).Path,'--handoff-base64',$handoffEncoded,'--server-config-base64',$serverConfigEncoded,'--mode',$compactSettings.AutoCompactMode,'--auto-enabled',([string][bool]$deckCustomAutoCompact).ToLowerInvariant())
             if ($codexEntry) { $sidecarArgs += @('--codex-entry',$codexEntry) }
             $nodeExecutable = (Get-Command node.exe -ErrorAction Stop).Source
             $startInfo = [Diagnostics.ProcessStartInfo]::new()
@@ -1303,12 +1307,13 @@ try {
             $observer = [Diagnostics.Process]::Start($startInfo)
             try {
                 $ready = $observer.StandardOutput.ReadLine()
-                if ($ready -notmatch '^READY (ws://127\.0\.0\.1:\d+)$') {
+                if ($ready -notmatch '^READY (ws://127\.0\.0\.1:\d+) (http://127\.0\.0\.1:\d+/[a-f0-9]{64}/compact)$') {
                     $detail = if ($ready) { $ready } else { $observer.StandardError.ReadToEnd() }
                     throw "Could not start Deck auto-compact observer: $detail"
                 }
                 $remoteUrl = $Matches[1]
-                $launchArgs = @($sharedArgs) + @($CodexArgs) + @($globalRuleArgs)
+                $env:CODEX_DECK_COMPACT_URL = $Matches[2]
+                $launchArgs = @($sharedArgs) + @($nativeAutoCompactArgs) + @($CodexArgs) + @($globalRuleArgs)
                 if ($failoverProxy) { $launchArgs += @(Get-DeckSessionRoutingArguments $failoverProxy ([bool]$poolEntry)) }
                 $launchArgs += @('--remote',$remoteUrl)
                 Invoke-DeckCodex $launchArgs
@@ -1350,6 +1355,8 @@ try {
     $env:CODEX_HOME = $originalCodexHome
     $env:CODEX_DECK_SESSION_URL = $originalDeckSessionUrl
     $env:CODEX_DECK_SESSION_PATH = $originalDeckSessionPath
+    $env:CODEX_DECK_COMPACT_URL = $originalDeckCompactUrl
+    $env:PATH = $originalDeckCommandPath
     $env:CODEX_DECK_RTK_EXE = $originalDeckRtkExe
     $env:RTK_TELEMETRY_DISABLED = $originalRtkTelemetryDisabled
     $proxyExitedEarly = $false

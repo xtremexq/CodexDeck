@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const {AutoCompactController,HANDOFF,HANDOFF_REQUEST,replayPrompt,parseArgs,translateLaunchArgs} = require('./Deck.AutoCompact.cjs');
-const {ThreadObserver,optionsFromArgs} = require('./Deck.AutoCompact.Sidecar.cjs');
+const {ThreadObserver,optionsFromArgs,createCompactControl} = require('./Deck.AutoCompact.Sidecar.cjs');
 
 async function main() {
   assert.equal(HANDOFF_REQUEST,"Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you're currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will \"definitely\" be useful/necessary for continuing, as to avoid the need for re-investigation.",'Default handoff request is incorrect');
@@ -36,6 +36,36 @@ async function main() {
   assert.equal(controller.phase,'normal');
   await controller.onTurnCompleted({threadId:'thread-1',turn:{id:'turn-2',status:'completed'}});
   assert.equal(calls.at(-1).params.input[0].text,'A later user message.');
+
+  const manualCalls=[];
+  const manual=new AutoCompactController(async(method,params)=>{manualCalls.push({method,params});if(method==='turn/start')return {turn:{id:'manual-turn'}};return {};},70,()=>{},HANDOFF_REQUEST,'Custom',false);
+  manual.threadId='manual-thread'; manual.activeTurnId='working-turn';
+  await manual.onUsage({threadId:'manual-thread',turnId:'working-turn',tokenUsage:{last:{totalTokens:90},modelContextWindow:100}});
+  assert.equal(manualCalls.length,0,'manual-only mode must not trigger at the automatic threshold');
+  assert.equal(await manual.requestCompact(),true);
+  assert.equal(manualCalls.at(-1).method,'turn/steer','manual custom compaction must steer the active turn');
+  assert.equal(manualCalls.at(-1).params.input[0].text,HANDOFF_REQUEST);
+  assert.equal(await manual.requestCompact(),false,'a second request must not start another cycle');
+  await manual.onItem({turnId:'working-turn',item:{type:'agentMessage',phase:'final_answer',text:`${HANDOFF}: manual state`}});
+  await manual.onTurnCompleted({threadId:'manual-thread',turn:{id:'working-turn',status:'completed'}});
+  assert.equal(manualCalls.at(-1).method,'thread/compact/start');
+  await manual.onItem({turnId:'manual-compact',item:{type:'contextCompaction'}});
+  await manual.onTurnCompleted({threadId:'manual-thread',turn:{id:'manual-compact',status:'completed'}});
+  assert.equal(manualCalls.at(-1).params.input[0].text,replayPrompt(`${HANDOFF}: manual state`));
+
+  const nativeCalls=[];
+  const native=new AutoCompactController(async(method,params)=>{nativeCalls.push({method,params});return {};},70,()=>{},HANDOFF_REQUEST,'Native',false);
+  native.threadId='native-manual-thread'; native.activeTurnId='native-working';
+  assert.equal(await native.requestCompact(),true);
+  assert.equal(nativeCalls.length,0,'native compaction must wait for the active turn to finish');
+  await native.onTurnCompleted({threadId:'native-manual-thread',turn:{id:'native-working',status:'completed'}});
+  assert.deepEqual(nativeCalls.map(call=>call.method),['thread/compact/start'],'native mode must use Codex compaction directly');
+  await native.onTurnCompleted({threadId:'native-manual-thread',turn:{id:'native-compact',status:'completed'}});
+  await native.onItem({turnId:'native-compact',item:{type:'contextCompaction'}});
+  assert.equal(native.phase,'normal');
+  assert.equal(nativeCalls.length,1,'native compaction must not replay a Deck handoff');
+  assert.equal(await native.requestCompact(),true,'native compaction may be requested again after completion');
+  assert.equal(nativeCalls.length,2,'idle native compaction must start immediately');
 
   const skipped=[];
   const noHandoff=new AutoCompactController(async(method,params)=>{
@@ -90,10 +120,11 @@ async function main() {
   const failoverConfig=['-c','model="gpt-5.6-luna"','-c','model_provider="deck_failover"','-c','model_providers.deck_failover.base_url="http://127.0.0.1:1234/token"'];
   const nativeOptions=optionsFromArgs(['--codex-exe','codex','--threshold','70','--handoff-base64',Buffer.from(custom).toString('base64'),'--server-config-base64',encoded(failoverConfig)]);
   assert.deepEqual(nativeOptions.serverConfig,failoverConfig,'native auto-compact must preserve the routing proxy so !account switches remain on the observed app-server');
-  const nativeCalls=[];
+  assert.equal(optionsFromArgs(['--codex-exe','codex','--mode','Native','--auto-enabled','false','--handoff-base64',Buffer.from(custom).toString('base64')]).autoEnabled,false);
+  const observerCalls=[];
   let persisted=false;
   const observer=new ThreadObserver(async(method,params)=>{
-    nativeCalls.push({method,params});
+    observerCalls.push({method,params});
     if(method==='thread/resume') { if(!persisted) throw Error('no rollout found for thread id native-thread'); return {thread:{id:'native-thread'}}; }
     if(method==='turn/start') return {turn:{id:'replay-turn'}};
     return {};
@@ -108,7 +139,7 @@ async function main() {
   persisted=true;
   await observer.retry();
   assert.equal(observer.subscribed.has('native-thread'),true,'the observer must subscribe so it receives native TUI usage events');
-  assert.equal(nativeCalls.some(call=>call.method==='thread/loaded/list'),false,'the observer must never scan and resume unrelated history threads');
+  assert.equal(observerCalls.some(call=>call.method==='thread/loaded/list'),false,'the observer must never scan and resume unrelated history threads');
   observer.pending.add('observer-resume-thread');
   observer.onNotification({method:'thread/started',params:{thread:{id:'observer-resume-thread',parentThreadId:null}}});
   observer.pending.delete('observer-resume-thread');
@@ -116,24 +147,39 @@ async function main() {
   observer.onNotification({method:'turn/started',params:{threadId:'native-thread',turn:{id:'native-turn'}}});
   observer.onNotification({method:'thread/tokenUsage/updated',params:{threadId:'native-thread',turnId:'native-turn',tokenUsage:{last:{totalTokens:70},modelContextWindow:100}}});
   await observer.serial.get('native-thread');
-  assert.equal(nativeCalls.at(-1).method,'turn/steer','the native TUI turn must receive Deck handoff steering');
+  assert.equal(observerCalls.at(-1).method,'turn/steer','the native TUI turn must receive Deck handoff steering');
   observer.onNotification({method:'item/completed',params:{threadId:'native-thread',turnId:'native-turn',item:{type:'agentMessage',phase:'commentary',text:`${HANDOFF}: native state`}}});
   await observer.serial.get('native-thread');
-  assert.equal(nativeCalls.at(-1).method,'turn/interrupt');
+  assert.equal(observerCalls.at(-1).method,'turn/interrupt');
   observer.onNotification({method:'turn/completed',params:{threadId:'native-thread',turn:{id:'native-turn',status:'interrupted'}}});
   await observer.serial.get('native-thread');
-  assert.equal(nativeCalls.at(-1).method,'thread/compact/start');
+  assert.equal(observerCalls.at(-1).method,'thread/compact/start');
   observer.onNotification({method:'turn/started',params:{threadId:'native-thread',turn:{id:'compact-turn'}}});
   assert.equal(observer.controllers.get('native-thread').activeTurnId,null,'compaction must not replace the active conversation turn');
   observer.onNotification({method:'item/completed',params:{threadId:'native-thread',turnId:'compact-turn',item:{type:'contextCompaction'}}});
   observer.onNotification({method:'turn/completed',params:{threadId:'native-thread',turn:{id:'compact-turn',status:'completed'}}});
   await observer.serial.get('native-thread');
-  assert.equal(nativeCalls.at(-1).params.input[0].text,replayPrompt(`${HANDOFF}: native state`));
+  assert.equal(observerCalls.at(-1).params.input[0].text,replayPrompt(`${HANDOFF}: native state`));
   observer.onNotification({method:'thread/started',params:{thread:{id:'next-thread',parentThreadId:null}}});
   await observer.selection;
   assert.equal(observer.targetThreadId,'next-thread','a TUI history switch must select the newly resumed conversation');
   assert.deepEqual([...observer.controllers.keys()],['next-thread'],'only the active TUI conversation may remain observed');
-  assert.ok(nativeCalls.some(call=>call.method==='thread/unsubscribe' && call.params.threadId==='native-thread'),'switching history must unsubscribe the previous conversation');
+  assert.ok(observerCalls.some(call=>call.method==='thread/unsubscribe' && call.params.threadId==='native-thread'),'switching history must unsubscribe the previous conversation');
+  const routedCalls=[];
+  const routed=new ThreadObserver(async(method,params)=>{routedCalls.push({method,params});return {};},70,custom,()=>{},'Native',false);
+  routed.onNotification({method:'thread/started',params:{thread:{id:'routed-thread',parentThreadId:null}}});
+  await routed.selection;
+  routed.onNotification({method:'turn/started',params:{threadId:'routed-thread',turn:{id:'routed-turn'}}});
+  const control=await createCompactControl(routed);
+  try {
+    assert.equal((await fetch(control.url,{method:'POST'})).status,202);
+    assert.equal(routedCalls.filter(call=>call.method==='thread/compact/start').length,0,'the local native command must wait for the active turn');
+    routed.onNotification({method:'turn/completed',params:{threadId:'routed-thread',turn:{id:'routed-turn',status:'completed'}}});
+    await routed.serial.get('routed-thread');
+    assert.equal(routedCalls.filter(call=>call.method==='thread/compact/start').length,1,'the local control endpoint must compact the active thread');
+    assert.equal((await fetch(control.url,{method:'GET'})).status,403,'the control endpoint must reject reads');
+    assert.equal((await fetch(control.url.replace(/\/[a-f0-9]{64}\/compact$/,'/wrong/compact'),{method:'POST'})).status,403,'the control endpoint must require its capability');
+  } finally { await new Promise(resolve=>control.server.close(resolve)); }
   console.log('Deck auto-compact controller tests passed');
 }
 

@@ -10,9 +10,9 @@ const textInput = text => [{type:'text',text,text_elements:[]}];
 const replayPrompt = handoff => `${JSON.stringify(handoff)}\n\nPlease go on.`;
 
 class AutoCompactController {
-  constructor(rpc, threshold, report = () => {}, handoffRequest = HANDOFF_REQUEST) {
+  constructor(rpc, threshold, report = () => {}, handoffRequest = HANDOFF_REQUEST, mode = 'Custom', autoEnabled = true) {
     this.rpc=rpc; this.threshold=threshold; this.report=report;
-    this.handoffRequest=handoffRequest;
+    this.handoffRequest=handoffRequest; this.mode=mode; this.autoEnabled=autoEnabled;
     this.threadId=null; this.activeTurnId=null; this.phase='normal'; this.armed=true;
     this.handoff=''; this.checkpointTurnId=null; this.compactionTurnId=null;
     this.checkpointInterrupted=false;
@@ -35,10 +35,27 @@ class AutoCompactController {
     const usedLimit=100-this.threshold;
     this.usagePercent=Math.round(exactPercent);
     if(!this.armed && exactPercent < usedLimit*0.8) this.armed=true;
-    if(this.phase!=='normal' || !this.armed || exactPercent < usedLimit) return;
-    this.armed=false; this.phase='checkpoint'; this.handoff=''; this.checkpointInterrupted=false;
+    if(!this.autoEnabled || this.mode!=='Custom' || this.phase!=='normal' || !this.armed || exactPercent < usedLimit) return;
+    this.armed=false;
     this.report(`Context ${this.usagePercent}% used / ${100-this.usagePercent}% free (limit ${this.threshold}% free): requesting task-state handoff.`);
-    if(this.activeTurnId && event.turnId===this.activeTurnId) {
+    await this.startCustomCompact(event.turnId);
+  }
+  async requestCompact() {
+    if(this.phase!=='normal') return false;
+    if(this.mode==='Native') {
+      this.phase='native-pending';
+      this.report('Native compaction requested; waiting for the active turn to finish.');
+      if(!this.activeTurnId) await this.startNativeCompact();
+    } else {
+      this.armed=false;
+      this.report('Manual compaction requested: requesting task-state handoff.');
+      await this.startCustomCompact();
+    }
+    return this.phase!=='normal';
+  }
+  async startCustomCompact(turnId = this.activeTurnId) {
+    this.phase='checkpoint'; this.handoff=''; this.checkpointTurnId=null; this.checkpointInterrupted=false;
+    if(this.activeTurnId && turnId===this.activeTurnId) {
       try {
         await this.rpc('turn/steer',{threadId:this.threadId,expectedTurnId:this.activeTurnId,input:textInput(this.handoffRequest)});
         this.checkpointTurnId=this.activeTurnId;
@@ -53,6 +70,12 @@ class AutoCompactController {
       const result=await this.rpc('turn/start',{threadId:this.threadId,input:textInput(this.handoffRequest)});
       this.activeTurnId=result.turn.id; this.checkpointTurnId=result.turn.id;
     } catch(error) { this.phase='normal'; this.failCycle(`Handoff could not start; no compaction performed: ${error.message}`); }
+  }
+  async startNativeCompact() {
+    if(this.phase!=='native-pending' || this.activeTurnId) return;
+    this.phase='native-compacting'; this.compactionItemDone=false; this.compactionTurnDone=false; this.compactionTurnId=null;
+    try { await this.rpc('thread/compact/start',{threadId:this.threadId}); }
+    catch(error) { this.phase='normal'; this.failCycle(`Native compaction failed: ${error.message}`); await this.drain(); }
   }
   failCycle(message) {
     this.report(message);
@@ -69,7 +92,7 @@ class AutoCompactController {
         catch(error) { this.report(`The handoff turn ended while it was being stopped: ${error.message}`); }
       }
     }
-    if(this.phase==='compacting' && item.type==='contextCompaction') {
+    if((this.phase==='compacting' || this.phase==='native-compacting') && item.type==='contextCompaction') {
       this.compactionTurnId=event.turnId; this.compactionItemDone=true;
       await this.finishCompactionIfReady();
     }
@@ -77,13 +100,14 @@ class AutoCompactController {
   async onTurnCompleted(event) {
     if(event.threadId!==this.threadId) return;
     const turn=event.turn || {};
-    if(this.phase==='compacting' && (!this.compactionTurnId || turn.id===this.compactionTurnId)) {
+    if((this.phase==='compacting' || this.phase==='native-compacting') && (!this.compactionTurnId || turn.id===this.compactionTurnId)) {
       this.compactionTurnId=turn.id; this.compactionTurnDone=turn.status==='completed';
-      if(turn.status!=='completed') { this.phase='normal'; this.failCycle(`Compaction ${turn.status}; handoff was not replayed.`); }
+      if(turn.status!=='completed') { const native=this.phase==='native-compacting'; this.phase='normal'; this.failCycle(native?`Native compaction ${turn.status}.`:`Compaction ${turn.status}; handoff was not replayed.`); }
       else await this.finishCompactionIfReady();
       return;
     }
     if(turn.id===this.activeTurnId) this.activeTurnId=null;
+    if(this.phase==='native-pending') { await this.startNativeCompact(); return; }
     if(this.phase==='checkpoint') {
       if(!this.checkpointTurnId) { await this.startCheckpoint(); return; }
       if(turn.id!==this.checkpointTurnId) return;
@@ -106,7 +130,8 @@ class AutoCompactController {
     }
   }
   async finishCompactionIfReady() {
-    if(this.phase!=='compacting' || !this.compactionItemDone || !this.compactionTurnDone) return;
+    if(!['compacting','native-compacting'].includes(this.phase) || !this.compactionItemDone || !this.compactionTurnDone) return;
+    if(this.phase==='native-compacting') { this.phase='normal'; this.report('Native compaction completed.'); await this.drain(); return; }
     this.phase='replaying';
     this.report('Compaction completed. Replaying the quoted handoff and continuing.');
     try {

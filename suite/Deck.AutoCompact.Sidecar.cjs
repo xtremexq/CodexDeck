@@ -2,11 +2,13 @@
 
 const {spawn} = require('node:child_process');
 const net = require('node:net');
+const http = require('node:http');
+const crypto = require('node:crypto');
 const {AutoCompactController, HANDOFF} = require('./Deck.AutoCompact.cjs');
 
 function optionsFromArgs(args) {
-  const options = {threshold:55, cwd:process.cwd(), codexExe:null, codexEntry:null, handoffRequest:null, serverConfig:[]};
-  const names = {'--threshold':'threshold','--cwd':'cwd','--codex-exe':'codexExe','--codex-entry':'codexEntry'};
+  const options = {threshold:55, cwd:process.cwd(), codexExe:null, codexEntry:null, handoffRequest:null, serverConfig:[], mode:'Custom', autoEnabled:false};
+  const names = {'--threshold':'threshold','--cwd':'cwd','--codex-exe':'codexExe','--codex-entry':'codexEntry','--mode':'mode','--auto-enabled':'autoEnabled'};
   for(let i=0;i<args.length;i++) {
     const name=args[i];
     if(i+1>=args.length) throw Error(`Missing value for ${name}.`);
@@ -17,7 +19,9 @@ function optionsFromArgs(args) {
     else throw Error(`Unknown sidecar option: ${name}`);
   }
   options.threshold=Number(options.threshold);
+  options.autoEnabled=options.autoEnabled===true || options.autoEnabled==='true';
   if(!Number.isInteger(options.threshold) || options.threshold<30 || options.threshold>90) throw Error('Auto-compact remaining-context threshold must be 30-90%.');
+  if(!['Custom','Native'].includes(options.mode)) throw Error('Compaction mode must be Native or Custom.');
   if(!options.codexExe) throw Error('Missing Codex executable.');
   if(!options.handoffRequest?.includes(HANDOFF)) throw Error(`Auto-compact handoff prompt must contain ${HANDOFF}.`);
   if(!Array.isArray(options.serverConfig) || options.serverConfig.some(value=>typeof value!=='string')) throw Error('Invalid server configuration arguments.');
@@ -69,8 +73,8 @@ class RpcClient {
 }
 
 class ThreadObserver {
-  constructor(rpc, threshold, handoffRequest, report=()=>{}) {
-    this.rpc=rpc; this.threshold=threshold; this.handoffRequest=handoffRequest; this.report=report;
+  constructor(rpc, threshold, handoffRequest, report=()=>{}, mode='Custom', autoEnabled=true) {
+    this.rpc=rpc; this.threshold=threshold; this.handoffRequest=handoffRequest; this.report=report; this.mode=mode; this.autoEnabled=autoEnabled;
     this.controllers=new Map(); this.pending=new Set(); this.subscribed=new Set(); this.serial=new Map();
     this.targetThreadId=null; this.selection=Promise.resolve();
   }
@@ -83,7 +87,7 @@ class ThreadObserver {
         this.controllers.delete(previous); this.subscribed.delete(previous); this.serial.delete(previous);
       }
       if(!this.controllers.has(threadId)) {
-        const controller=new AutoCompactController(this.rpc,this.threshold,this.report,this.handoffRequest);
+        const controller=new AutoCompactController(this.rpc,this.threshold,this.report,this.handoffRequest,this.mode,this.autoEnabled);
         controller.threadId=threadId;
         this.controllers.set(threadId,controller);
       }
@@ -93,7 +97,7 @@ class ThreadObserver {
       }
     }
     if(!this.controllers.has(threadId)) {
-      const controller=new AutoCompactController(this.rpc,this.threshold,this.report,this.handoffRequest);
+      const controller=new AutoCompactController(this.rpc,this.threshold,this.report,this.handoffRequest,this.mode,this.autoEnabled);
       controller.threadId=threadId;
       this.controllers.set(threadId,controller);
     }
@@ -113,6 +117,24 @@ class ThreadObserver {
   async retry() {
     if(this.targetThreadId) await this.attach(this.targetThreadId);
   }
+  async requestCompact() {
+    await this.selection;
+    const threadId=this.targetThreadId;
+    if(!threadId) throw Error('The active Codex thread is not available yet.');
+    for(let attempt=0;attempt<10 && !this.subscribed.has(threadId);attempt++) {
+      if(this.targetThreadId!==threadId) throw Error('The active Codex thread changed; try again.');
+      await this.attach(threadId);
+      if(!this.subscribed.has(threadId)) await new Promise(resolve=>setTimeout(resolve,250));
+    }
+    if(!this.subscribed.has(threadId)) throw Error('The active Codex thread is not ready yet; try again.');
+    const previous=this.serial.get(threadId) || Promise.resolve();
+    const next=previous.then(async()=>{
+      if(this.targetThreadId!==threadId) throw Error('The active Codex thread changed; try again.');
+      if(!await this.controllers.get(threadId).requestCompact()) throw Error('Compaction could not start or is already in progress.');
+    });
+    this.serial.set(threadId,next.catch(()=>{}));
+    return next;
+  }
   onNotification(message) {
     const event=message.params || {};
     if(message.method==='thread/started' && event.thread?.id) {
@@ -130,7 +152,7 @@ class ThreadObserver {
     const controller=this.controllers.get(event.threadId);
     if(!controller) return;
     if(message.method==='turn/started') {
-      if(controller.phase==='normal' || controller.phase==='checkpoint') controller.activeTurnId=event.turn?.id || null;
+      if(['normal','checkpoint','native-pending'].includes(controller.phase)) controller.activeTurnId=event.turn?.id || null;
       return;
     }
     if(!['item/completed','thread/tokenUsage/updated','turn/completed'].includes(message.method)) return;
@@ -146,15 +168,30 @@ class ThreadObserver {
   }
 }
 
+async function createCompactControl(observer) {
+  const secret=crypto.randomBytes(32).toString('hex');
+  const server=http.createServer((req,res)=>{
+    const port=server.address().port;
+    if(req.headers.host!==`127.0.0.1:${port}` || req.headers.origin || req.url!==`/${secret}/compact` || req.method!=='POST' || Number(req.headers['content-length'] || 0)>0) {
+      res.writeHead(403); res.end('Forbidden.'); return;
+    }
+    req.resume();
+    observer.requestCompact().then(()=>{res.writeHead(202);res.end('Compaction requested.');},error=>{res.writeHead(409);res.end(error.message);});
+  });
+  await new Promise((resolve,reject)=>server.once('error',reject).listen(0,'127.0.0.1',resolve));
+  return {server,url:`http://127.0.0.1:${server.address().port}/${secret}/compact`};
+}
+
 async function main() {
   const options=optionsFromArgs(process.argv.slice(2));
   const url=`ws://127.0.0.1:${await availablePort()}`;
   const args=[...(options.codexEntry?[options.codexEntry]:[]),'app-server','--listen',url,...options.serverConfig];
   const child=spawn(options.codexExe,args,{cwd:options.cwd,env:process.env,windowsHide:true,stdio:'ignore'});
-  let stopped=false, socket=null, poll=null, serverError=null;
+  let stopped=false, socket=null, poll=null, control=null, serverError=null;
   function stop() {
     if(stopped) return;
     stopped=true; if(poll) clearInterval(poll);
+    if(control) control.server.close();
     if(socket && socket.readyState===WebSocket.OPEN) socket.close();
     child.kill();
     setTimeout(()=>process.exit(process.exitCode || 0),2000).unref();
@@ -188,7 +225,7 @@ async function main() {
       reportedBytes+=Buffer.byteLength(line);
       process.stderr.write(line);
     };
-    observer=new ThreadObserver((method,params)=>client.call(method,params),options.threshold,options.handoffRequest,report);
+    observer=new ThreadObserver((method,params)=>client.call(method,params),options.threshold,options.handoffRequest,report,options.mode,options.autoEnabled);
     let retrying=false;
     poll=setInterval(async()=>{
       if(retrying) return;
@@ -197,9 +234,10 @@ async function main() {
       catch(error) { report(`Thread subscription retry failed: ${error.message}`); }
       finally { retrying=false; }
     },500);
-    process.stdout.write(`READY ${url}\n`);
+    control=await createCompactControl(observer);
+    process.stdout.write(`READY ${url} ${control.url}\n`);
   } catch(error) { process.stdout.write(`ERROR ${error.message}\n`); process.exitCode=1; stop(); }
 }
 
-module.exports={optionsFromArgs,ThreadObserver};
+module.exports={optionsFromArgs,ThreadObserver,createCompactControl};
 if(require.main===module) main().catch(error=>{process.stdout.write(`ERROR ${error.message}\n`);process.exitCode=1;});

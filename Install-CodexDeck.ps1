@@ -13,7 +13,7 @@ $files += @(foreach($skillName in @('ui-design','anti-ui-slop','ui-radar')){
     }
 })
 $files += @('Deck.AutoCompact.cjs','Deck.AutoCompact.Sidecar.cjs','Deck.Inspector.cjs','Test-DeckAutoCompact.cjs','Test-DeckInspector.cjs','Test-DeckRtkHook.cjs','Deck.DefaultGlobalRules.md','Test-DeckBrowserHarness.ps1')
-$wrappers = @('codex-auth.ps1','codex-auth.cmd','deck-skills.ps1','deck-skills.cmd','codex-check.cmd','codex-deck.cmd','codex-deck-session.ps1','codex-deck-session.cmd','account.cmd','pool.cmd','usage.cmd','delay.cmd','schedule.cmd','check.cmd','deck.cmd','context.cmd')
+$wrappers = @('codex-auth.ps1','codex-auth.cmd','deck-skills.ps1','deck-skills.cmd','codex-check.cmd','codex-deck.cmd','codex-deck-session.ps1','codex-deck-session.cmd','account.cmd','pool.cmd','usage.cmd','delay.cmd','schedule.cmd','check.cmd','deck.cmd','context.cmd','compact.cmd')
 # Validate the complete payload before changing an existing installation.
 foreach ($name in $files) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "suite/$name") -PathType Leaf)) { throw "Missing suite file: $name" } }
 foreach ($name in $wrappers) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "bin/$name") -PathType Leaf)) { throw "Missing command: $name" } }

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added `!compact` for managed interactive conversations. Custom mode requests a task-state handoff, compacts, and replays it; Native mode invokes Codex compaction after the active turn. The command works even when automatic compaction is off.
+
 ## 1.8.0 - 2026-09-23
 
 - Bundled the UIZZE skills and added an optional, searchable AAS catalog with direct skill installation and pagination.

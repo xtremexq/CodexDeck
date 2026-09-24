@@ -19,10 +19,15 @@ try {
         if(Test-Path -LiteralPath (Join-Path $pool "skills/$name")){throw "Legacy AI-backed command skill was not removed: $name"}
     }
     if([IO.File]::ReadAllText((Join-Path $custom 'skills/account/SKILL.md')) -ne 'user-owned'){throw 'An unmanaged same-name skill was removed.'}
-    foreach($name in @('account','pool','usage','delay','schedule','check','deck','context')){
+    foreach($name in @('account','pool','usage','delay','schedule','check','deck','context','compact')){
         $wrapper=Join-Path $PSScriptRoot "../bin/$name.cmd"
         if(-not (Test-Path -LiteralPath $wrapper -PathType Leaf)){throw "Missing local shell command: $name"}
     }
+    $savedPath=$env:PATH
+    try{
+        $env:PATH=(Join-Path $PSScriptRoot '../bin')+[IO.Path]::PathSeparator+$savedPath
+        if((Get-Command compact -ErrorAction Stop).Name -ne 'compact.cmd'){throw 'Deck !compact must take precedence over Windows compact.exe in managed sessions.'}
+    }finally{$env:PATH=$savedPath}
     if([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../bin/deck.cmd')) -notmatch 'codex-deck\.cmd'){
         throw '!deck does not open the desktop companion.'
     }

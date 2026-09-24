@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('account','pool','usage','delay','schedule','context')]
+    [ValidateSet('account','pool','usage','delay','schedule','context','compact')]
     [string]$Command = 'account',
 
     [Parameter(Position = 1)]
@@ -86,6 +86,22 @@ function Write-DeckSessionStatus([object]$Status) {
 }
 
 $requested = if ($UseAccount) { $UseAccount } else { $Selection }
+if($Command -eq 'compact'){
+    if($requested -or $MessageParts -or $Json){throw '!compact does not accept arguments.'}
+    $compactUrl=[string]$env:CODEX_DECK_COMPACT_URL
+    if($compactUrl -notmatch '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/compact$'){throw 'This terminal has no attached compaction control. Start a new managed codex-auth conversation.'}
+    if(-not $env:CODEX_HOME){throw 'This command must run inside a managed codex-auth conversation.'}
+    $accountDir=Get-Item -LiteralPath $env:CODEX_HOME -ErrorAction Stop
+    if(-not $accountDir.PSIsContainer -or $accountDir.Parent.Name -ne 'accounts'){throw 'This command must run inside a managed codex-auth conversation.'}
+    try{[void](Invoke-RestMethod -Uri $compactUrl -Method Post -TimeoutSec 35)}
+    catch{
+        $detail=$_.Exception.Message
+        if($_.ErrorDetails.Message){$detail=$_.ErrorDetails.Message}
+        throw "Compaction request failed: $detail"
+    }
+    Write-Output 'Compaction requested for this conversation.'
+    exit 0
+}
 $status = Invoke-DeckSessionAccount
 
 if($Command -eq 'context'){
