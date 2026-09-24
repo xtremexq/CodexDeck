@@ -53,6 +53,27 @@ try {
         Remove-Item -LiteralPath $sessionPath
         $compactOutput=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '../bin/codex-deck-session.ps1') autocompact 2>&1
         if($LASTEXITCODE -eq 0 -or ($compactOutput -join ' ') -notmatch 'no attached compaction control'){throw 'Compaction command accepted a missing session marker.'}
+        $serverScript=Join-Path $fixture 'compact-error.cjs'
+        $serverOutput=Join-Path $fixture 'compact-error-port.txt'
+        [IO.File]::WriteAllText($serverScript,@'
+const http=require('node:http');
+http.createServer((request,response)=>{response.writeHead(409);response.end('The active Codex thread is not available yet.');}).listen(0,'127.0.0.1',function(){console.log(this.address().port);});
+'@)
+        $server=Start-Process -FilePath (Get-Command node.exe -ErrorAction Stop).Source -ArgumentList $serverScript -PassThru -RedirectStandardOutput $serverOutput -WindowStyle Hidden
+        try{
+            $port=''
+            for($attempt=0;$attempt -lt 30;$attempt++){
+                if(Test-Path -LiteralPath $serverOutput){$port=[string](Get-Content -LiteralPath $serverOutput -Raw);if($port){$port=$port.Trim()}}
+                if($port -match '^\d+$'){break}
+                Start-Sleep -Milliseconds 100
+            }
+            if($port -notmatch '^\d+$'){throw 'Compaction error fixture did not start.'}
+            $env:CODEX_DECK_COMPACT_URL='http://127.0.0.1:'+ $port+'/'+('a'*64)+'/compact'
+            $compactOutput=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '../bin/codex-deck-session.ps1') autocompact 2>&1
+            if($LASTEXITCODE -eq 0 -or ($compactOutput -join ' ') -notmatch 'Compaction request failed: The active Codex thread is not available yet'){
+                throw 'Compaction command hid the observer rejection reason.'
+            }
+        }finally{$server.Kill();$server.Dispose()}
     }finally{$ErrorActionPreference='Stop';$env:CODEX_HOME=$oldHome;$env:CODEX_DECK_SESSION_PATH=$oldSession;$env:CODEX_DECK_COMPACT_URL=$oldCompact}
     Write-Output 'PASS: local shell commands, including delayed and scheduled messages, are packaged and legacy AI-backed command skills are removed without touching unmanaged skills.'
 } finally {

@@ -115,10 +115,30 @@ class ThreadObserver {
     } finally { this.pending.delete(threadId); }
   }
   async retry() {
-    if(this.targetThreadId) await this.attach(this.targetThreadId);
+    await this.selection;
+    if(this.targetThreadId) { await this.attach(this.targetThreadId); return; }
+    // A remote TUI does not always broadcast thread/started when it resumes an
+    // existing conversation. This app-server belongs to one managed terminal,
+    // so its sole loaded thread is the TUI conversation we can safely attach.
+    const loaded=await this.rpc('thread/loaded/list',{});
+    const ids=loaded?.data || [];
+    let threadId=ids.length===1?ids[0]:null;
+    if(ids.length>1) {
+      const threads=await Promise.all(ids.map(async id=>{
+        try { return (await this.rpc('thread/read',{threadId:id,includeTurns:false})).thread; }
+        catch { return null; }
+      }));
+      const roots=threads.filter(thread=>thread && !thread.parentThreadId && thread.originator==='codex-tui');
+      if(roots.length===1) threadId=roots[0].id;
+    }
+    if(typeof threadId==='string') {
+      this.selection=this.attach(threadId);
+      await this.selection;
+    }
   }
   async requestCompact() {
     await this.selection;
+    if(!this.targetThreadId) await this.retry();
     const threadId=this.targetThreadId;
     if(!threadId) throw Error('The active Codex thread is not available yet.');
     for(let attempt=0;attempt<10 && !this.subscribed.has(threadId);attempt++) {

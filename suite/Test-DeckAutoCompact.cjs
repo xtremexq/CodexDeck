@@ -140,6 +140,25 @@ async function main() {
   await observer.retry();
   assert.equal(observer.subscribed.has('native-thread'),true,'the observer must subscribe so it receives native TUI usage events');
   assert.equal(observerCalls.some(call=>call.method==='thread/loaded/list'),false,'the observer must never scan and resume unrelated history threads');
+  const resumedCalls=[];
+  const resumed=new ThreadObserver(async(method,params)=>{
+    resumedCalls.push({method,params});
+    if(method==='thread/loaded/list') return {data:['resumed-thread'],nextCursor:null};
+    if(method==='thread/resume') return {thread:{id:'resumed-thread'}};
+    return {};
+  },70,custom,()=>{},'Native',false);
+  assert.equal(await resumed.requestCompact(),undefined,'manual compaction should discover a resumed TUI without thread/started');
+  assert.equal(resumed.targetThreadId,'resumed-thread');
+  assert.equal(resumedCalls.some(call=>call.method==='thread/compact/start'),true,'the discovered resumed thread must receive the compaction request');
+  const withAgent=new ThreadObserver(async(method,params)=>{
+    if(method==='thread/loaded/list') return {data:['resumed-thread','child-thread']};
+    if(method==='thread/read') return {thread:{id:params.threadId,parentThreadId:params.threadId==='child-thread'?'resumed-thread':null,originator:'codex-tui'}};
+    return {};
+  },70,custom);
+  await withAgent.retry();
+  assert.equal(withAgent.targetThreadId,'resumed-thread','loaded subagent threads must not hide the active TUI');
+  const ambiguous=new ThreadObserver(async method=>method==='thread/loaded/list'?{data:['one','two']}: {},70,custom);
+  await assert.rejects(ambiguous.requestCompact(),/active Codex thread is not available/,'multiple loaded threads must never be guessed');
   observer.pending.add('observer-resume-thread');
   observer.onNotification({method:'thread/started',params:{thread:{id:'observer-resume-thread',parentThreadId:null}}});
   observer.pending.delete('observer-resume-thread');

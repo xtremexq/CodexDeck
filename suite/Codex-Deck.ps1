@@ -1856,9 +1856,10 @@ try{
         if($folderUI.PathBox.Text -ne $HOME -or $folderUI.Folders.Items.Count -eq 0){throw 'Folder picker initialization failed.'}
         $folderUI.Dialog.Close()
         if(-not $settings.WidgetOneLine){throw 'One-line widget entries must default on'}
-        $quotaReset=[DateTimeOffset]::FromUnixTimeSeconds([long]$cache.account1.Windows[0].ResetsAtUnix).ToLocalTime().ToString('HH:mm')
+        $quotaReset=Format-DeckCompactQuotaReset $cache.account1.Windows[0]
         $healthText=((New-DeckHealthSummary 'account1' $cache.account1 9).Inlines | ForEach-Object Text) -join ''
         if($healthText -notmatch [regex]::Escape($quotaReset)){throw 'Collapsed usage omitted its adjacent reset time.'}
+        $quotaReset=[DateTimeOffset]::FromUnixTimeSeconds([long]$cache.account1.Windows[0].ResetsAtUnix).ToLocalTime().ToString('HH:mm')
         $quotaTrack=New-DeckQuotaTrack $cache.account1.Windows[0] '#69DEC0' $true
         if($quotaTrack.Resources['ResetText'].Text -notmatch [regex]::Escape($quotaReset)){throw 'Expanded usage meter omitted its adjacent reset time.'}
         $single=New-DeckWidgetCard 'account1' $cache.account1 $profiles.account1 1

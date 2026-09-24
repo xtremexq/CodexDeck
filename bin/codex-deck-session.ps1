@@ -113,6 +113,13 @@ if($Command -eq 'autocompact'){
     catch{
         $detail=$_.Exception.Message
         if($_.ErrorDetails.Message){$detail=$_.ErrorDetails.Message}
+        if($_.Exception.Response -and $_.Exception.Response -is [System.Net.WebResponse]){
+            try{
+                $reader=[IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+                try{$responseText=$reader.ReadToEnd()}finally{$reader.Dispose()}
+                if($responseText){$detail=$responseText}
+            }catch{}
+        }
         throw "Compaction request failed: $detail"
     }
     Write-Output 'Compaction requested for this conversation.'
