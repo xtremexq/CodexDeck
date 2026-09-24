@@ -1313,6 +1313,7 @@ try {
                 }
                 $remoteUrl = $Matches[1]
                 $env:CODEX_DECK_COMPACT_URL = $Matches[2]
+                if ($deckSession) { Set-DeckSessionCompactControl $deckSession $env:CODEX_DECK_COMPACT_URL }
                 $launchArgs = @($sharedArgs) + @($nativeAutoCompactArgs) + @($CodexArgs) + @($globalRuleArgs)
                 if ($failoverProxy) { $launchArgs += @(Get-DeckSessionRoutingArguments $failoverProxy ([bool]$poolEntry)) }
                 $launchArgs += @('--remote',$remoteUrl)

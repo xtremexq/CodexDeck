@@ -17,6 +17,11 @@ $accountAssignment='$accountsRoot = '''+(Join-Path $fixture 'accounts').Replace(
 $defaultAssignment='$defaultConfigPath = '''+(Join-Path $fixture 'default.toml').Replace("'","''")+''''
 $launcher=[regex]::Replace($launcher,'(?m)^\$accountsRoot =.*$', [Text.RegularExpressions.MatchEvaluator]{param($m) $accountAssignment})
 $launcher=[regex]::Replace($launcher,'(?m)^\$defaultConfigPath =.*$', [Text.RegularExpressions.MatchEvaluator]{param($m) $defaultAssignment})
+# This fixture uses an inert Codex function, so exercise account routing without
+# starting the interactive app-server observer (covered by Test-DeckAutoCompact.cjs).
+$interactivePattern='(?m)^\$deckInteractiveConversation = .*$'
+if ($launcher -notmatch $interactivePattern) { throw 'Synthetic launcher could not isolate interactive supervision.' }
+$launcher=[regex]::Replace($launcher,$interactivePattern,[Text.RegularExpressions.MatchEvaluator]{param($m) '$deckInteractiveConversation = $false'})
 [IO.File]::WriteAllText((Join-Path $fixture 'codex-auth.ps1'),$launcher,[Text.UTF8Encoding]::new($true))
 [IO.File]::WriteAllText((Join-Path $fixture 'default.toml'),'model = "must-not-inherit"')
 $harness=@'

@@ -88,11 +88,27 @@ function Write-DeckSessionStatus([object]$Status) {
 $requested = if ($UseAccount) { $UseAccount } else { $Selection }
 if($Command -eq 'autocompact'){
     if($requested -or $MessageParts -or $Json){throw '!autocompact does not accept arguments.'}
-    $compactUrl=[string]$env:CODEX_DECK_COMPACT_URL
-    if($compactUrl -notmatch '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/compact$'){throw 'This terminal has no attached compaction control. Start a new managed codex-auth conversation.'}
     if(-not $env:CODEX_HOME){throw 'This command must run inside a managed codex-auth conversation.'}
     $accountDir=Get-Item -LiteralPath $env:CODEX_HOME -ErrorAction Stop
     if(-not $accountDir.PSIsContainer -or $accountDir.Parent.Name -ne 'accounts'){throw 'This command must run inside a managed codex-auth conversation.'}
+    $compactUrl=[string]$env:CODEX_DECK_COMPACT_URL
+    if($compactUrl -notmatch '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/compact$'){
+        $sessionPath=[string]$env:CODEX_DECK_SESSION_PATH
+        if($sessionPath){
+            $sessionRoot=[IO.Path]::GetFullPath((Join-Path $accountDir.Parent.Parent.FullName 'deck/sessions'))
+            $sessionFull=[IO.Path]::GetFullPath($sessionPath)
+            if([IO.Path]::GetDirectoryName($sessionFull) -eq $sessionRoot -and (Test-Path -LiteralPath $sessionFull -PathType Leaf)){
+                try{
+                    $marker=Get-Content -LiteralPath $sessionFull -Raw | ConvertFrom-Json
+                    $ownerProcess=Get-Process -Id ([int]$marker.ProcessId) -ErrorAction Stop
+                    try{$sameProcess=$ownerProcess.StartTime.ToUniversalTime().Ticks -eq [long]$marker.ProcessStartTicks}
+                    finally{$ownerProcess.Dispose()}
+                    if($sameProcess -and $marker.Account -eq $accountDir.Name){$compactUrl=[string]$marker.CompactUrl}
+                }catch{}
+            }
+        }
+    }
+    if($compactUrl -notmatch '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/compact$'){throw 'This conversation has no attached compaction control. Resume it in a new managed Codex Deck terminal.'}
     try{[void](Invoke-RestMethod -Uri $compactUrl -Method Post -TimeoutSec 35)}
     catch{
         $detail=$_.Exception.Message

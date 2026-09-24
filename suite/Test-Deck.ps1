@@ -61,6 +61,11 @@ $models=@(Get-DeckModelNames @('gpt-5.6-luna',@('gpt-5.6-sol','gpt-5.6-luna'),'S
 Assert ($models.Count -eq 2 -and $models[1] -eq 'gpt-5.6-sol') 'Nested model list was not flattened'
 $namedSession=Register-DeckSession $fixture 'work-main' 'C:\example'
 Assert (@(Get-DeckSessions $fixture | Where-Object Account -eq 'work-main').Count -eq 1) 'Custom account session missing'
+$compactControl='http://127.0.0.1:65534/'+('a'*64)+'/compact'
+Set-DeckSessionCompactControl $namedSession $compactControl
+Assert ((Read-DeckJson $namedSession).CompactUrl -eq $compactControl) 'Interactive session did not record its compaction control'
+Set-DeckSessionCompactControl $namedSession 'http://example.com/compact'
+Assert ((Read-DeckJson $namedSession).CompactUrl -eq $compactControl) 'Session accepted a nonlocal compaction control'
 $sessionRead=Start-DeckSessionRead $fixture
 Assert (@(Complete-DeckSessionRead $sessionRead | Where-Object Account -eq 'work-main').Count -eq 1) 'Background session refresh lost a live session'
 Remove-Item -LiteralPath $namedSession

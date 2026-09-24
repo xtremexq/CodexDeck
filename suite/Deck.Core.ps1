@@ -323,6 +323,13 @@ function Set-DeckSessionContext([string]$Path, [string]$ContextUrl) {
     $entry | Add-Member -NotePropertyName ContextUrl -NotePropertyValue $ContextUrl -Force
     Write-DeckJson $Path $entry
 }
+function Set-DeckSessionCompactControl([string]$Path, [string]$CompactUrl) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf) -or $CompactUrl -notmatch '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/compact$') { return }
+    $entry=Read-DeckJson $Path
+    if (-not $entry) { return }
+    $entry | Add-Member -NotePropertyName CompactUrl -NotePropertyValue $CompactUrl -Force
+    Write-DeckJson $Path $entry
+}
 function Get-DeckBackgroundPowerShellArguments([string]$ScriptPath, [string[]]$Arguments, [switch]$Sta) {
     $parts=@('-NoLogo','-NoProfile','-NonInteractive','-WindowStyle','Hidden')
     if($Sta){$parts+='-STA'}
