@@ -13,7 +13,7 @@ $files += @(foreach($skillName in @('ui-design','anti-ui-slop','ui-radar')){
     }
 })
 $files += @('Deck.AutoCompact.cjs','Deck.AutoCompact.Sidecar.cjs','Deck.Inspector.cjs','Test-DeckAutoCompact.cjs','Test-DeckInspector.cjs','Test-DeckRtkHook.cjs','Deck.DefaultGlobalRules.md','Test-DeckBrowserHarness.ps1')
-$wrappers = @('codex-auth.ps1','codex-auth.cmd','deck-skills.ps1','deck-skills.cmd','codex-check.cmd','codex-deck.cmd','codex-deck-session.ps1','codex-deck-session.cmd','account.cmd','pool.cmd','usage.cmd','delay.cmd','schedule.cmd','check.cmd','deck.cmd','context.cmd','compact.cmd')
+$wrappers = @('codex-auth.ps1','codex-auth.cmd','deck-skills.ps1','deck-skills.cmd','codex-check.cmd','codex-deck.cmd','codex-deck-session.ps1','codex-deck-session.cmd','account.cmd','pool.cmd','usage.cmd','delay.cmd','schedule.cmd','check.cmd','deck.cmd','context.cmd','autocompact.cmd')
 # Validate the complete payload before changing an existing installation.
 foreach ($name in $files) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "suite/$name") -PathType Leaf)) { throw "Missing suite file: $name" } }
 foreach ($name in $wrappers) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "bin/$name") -PathType Leaf)) { throw "Missing command: $name" } }
@@ -25,6 +25,16 @@ foreach ($group in @(@('suite',$suiteRoot,$files), @('bin',$binRoot,$wrappers)))
         $source = Join-Path $PSScriptRoot ($group[0]+'/'+$name)
         if ((Test-Path -LiteralPath $target) -and (Get-FileHash -LiteralPath $source).Hash -eq (Get-FileHash -LiteralPath $target).Hash) { continue }
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot ($group[0]+'/'+$name)) -Destination $target -Force
+    }
+}
+$legacyCompactWrapper = Join-Path $binRoot 'compact.cmd'
+if (Test-Path -LiteralPath $legacyCompactWrapper -PathType Leaf) {
+    $legacyLines = @([IO.File]::ReadAllLines($legacyCompactWrapper))
+    if ($legacyLines.Count -eq 3 -and
+        $legacyLines[0] -eq '@echo off' -and
+        $legacyLines[1] -eq 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0codex-deck-session.ps1" compact %*' -and
+        $legacyLines[2] -eq 'exit /b %errorlevel%') {
+        Remove-Item -LiteralPath $legacyCompactWrapper
     }
 }
 [void][IO.Directory]::CreateDirectory((Join-Path $suiteRoot 'accounts'))

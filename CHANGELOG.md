@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Added `!compact` for managed interactive conversations. Custom mode requests a task-state handoff, compacts, and replays it; Native mode invokes Codex compaction after the active turn. The command works even when automatic compaction is off.
+- Added `!autocompact` for managed interactive conversations. Custom mode requests a task-state handoff, compacts, and replays it; Native mode invokes Codex compaction after the active turn. The command works even when automatic compaction is off.
 
 ## 1.8.0 - 2026-09-23
 

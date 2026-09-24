@@ -637,7 +637,7 @@ function Show-Usage {
     Write-Host "  codex-auth -Failover Best -FailoverAccounts account1,account2"
     Write-Host "  codex-auth account15 -Direct -CodexArgs @('exec',...)  Launch without Deck's local routing proxy"
     Write-Host "  codex-auth account1 -AutoCompact 50%   Use the selected Native/Custom mode at 50% context remaining"
-    Write-Host "  !compact (inside a conversation)   Compact now using the selected Native/Custom mode"
+    Write-Host "  !autocompact (inside a conversation)   Compact now using the selected Native/Custom mode"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  codex-auth account1"

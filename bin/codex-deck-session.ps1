@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('account','pool','usage','delay','schedule','context','compact')]
+    [ValidateSet('account','pool','usage','delay','schedule','context','autocompact')]
     [string]$Command = 'account',
 
     [Parameter(Position = 1)]
@@ -86,8 +86,8 @@ function Write-DeckSessionStatus([object]$Status) {
 }
 
 $requested = if ($UseAccount) { $UseAccount } else { $Selection }
-if($Command -eq 'compact'){
-    if($requested -or $MessageParts -or $Json){throw '!compact does not accept arguments.'}
+if($Command -eq 'autocompact'){
+    if($requested -or $MessageParts -or $Json){throw '!autocompact does not accept arguments.'}
     $compactUrl=[string]$env:CODEX_DECK_COMPACT_URL
     if($compactUrl -notmatch '^http://127\.0\.0\.1:[0-9]+/[a-f0-9]{64}/compact$'){throw 'This terminal has no attached compaction control. Start a new managed codex-auth conversation.'}
     if(-not $env:CODEX_HOME){throw 'This command must run inside a managed codex-auth conversation.'}
