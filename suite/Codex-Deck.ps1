@@ -1191,7 +1191,7 @@ function Show-DeckSettings {
         } catch { $settingsError.Text='Settings were not saved: '+$_.Exception.Message; $settingsError.BringIntoView(); $save.Content='Save settings' }
         finally {if(-not $worker){$save.IsEnabled=$true}}
     }.GetNewClosure())
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;TargetPicker=$skillTargetPicker;Membership=$skillMembership;Members=$skillMembers;AccountPanel=$skillAccountPanel;AccountItems=$skillAccountItems;AccountChecks=$skillAccountChecks;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;Workspace=$skillWorkspace;Scroll=$deckSkillScroll;State=$deckSkillState;Previous=$deckSkillPrevious;Next=$deckSkillNext;PageLabel=$deckSkillPageLabel;Plugin=@{Marketplace=$pluginMarketplaceSource;AddMarketplace=$pluginMarketplaceAdd;Selector=$pluginSelector;Install=$pluginInstall;Status=$pluginStatus};Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus;Previous=$catalogPrevious;Next=$catalogNext;PageInput=$catalogPageInput;PageGo=$catalogPageGo;PageLabel=$catalogPageLabel}}}}
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;TargetPicker=$skillTargetPicker;Membership=$skillMembership;Members=$skillMembers;AccountPanel=$skillAccountPanel;AccountItems=$skillAccountItems;AccountChecks=$skillAccountChecks;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;Workspace=$skillWorkspace;DebugHost=$debugSkillHost;BrowserCard=$browserSkillCard;BrowserTitle=$browserSkillTitle;BrowserNote=$browserSkillNote;Scroll=$deckSkillScroll;State=$deckSkillState;Previous=$deckSkillPrevious;Next=$deckSkillNext;PageLabel=$deckSkillPageLabel;Plugin=@{Marketplace=$pluginMarketplaceSource;AddMarketplace=$pluginMarketplaceAdd;Selector=$pluginSelector;Install=$pluginInstall;Status=$pluginStatus};Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus;Previous=$catalogPrevious;Next=$catalogNext;PageInput=$catalogPageInput;PageGo=$catalogPageGo;PageLabel=$catalogPageLabel}}}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -1289,17 +1289,17 @@ function Set-DeckAccountFilter([string]$Filter) {
 }
 function Update-DeckSummaryOverflow {
     if(-not $SummaryViewport.ActualWidth){return}
-    if(-not $Summary.Text){$Summary.Width=0; $summaryMarquee.Stop(); return}
+    if(-not $Summary.Text){$summaryMarquee.Stop(); $script:summaryScroll=0; $Summary.RenderTransform.X=0; return}
     if($script:summaryMeasuredText -cne $Summary.Text){
-        $typeface=[Windows.Media.Typeface]::new($Summary.FontFamily,$Summary.FontStyle,$Summary.FontWeight,$Summary.FontStretch)
-        $pixelsPerDip=[Windows.Media.VisualTreeHelper]::GetDpi($Summary).PixelsPerDip
-        $measurement=[Windows.Media.FormattedText]::new($Summary.Text,[Globalization.CultureInfo]::CurrentUICulture,[Windows.FlowDirection]::LeftToRight,$typeface,$Summary.FontSize,$Summary.Foreground,$pixelsPerDip)
-        $Summary.Width=[Math]::Ceiling($measurement.WidthIncludingTrailingWhitespace)+6
         $script:summaryMeasuredText=$Summary.Text
+        $script:summaryScroll=0; $script:summaryDirection=1; $script:summaryPause=0; $Summary.RenderTransform.X=0
     }
-    $overflow=$Summary.Width-$SummaryViewport.ActualWidth
+    # Canvas measures its child without a width limit. Use the TextBlock's own
+    # layout width so no part of the last word is lost to font metric rounding.
+    $Summary.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity))
+    $overflow=$Summary.DesiredSize.Width-$SummaryViewport.ActualWidth
     if($overflow -le 2){$summaryMarquee.Stop(); $script:summaryScroll=0; $Summary.RenderTransform.X=0}
-    elseif(-not $summaryMarquee.IsEnabled){$script:summaryScroll=0; $summaryMarquee.Start()}
+    elseif(-not $summaryMarquee.IsEnabled){$summaryMarquee.Start()}
 }
 $script:summaryMarquee=[Windows.Threading.DispatcherTimer]::new()
 $summaryMarquee.Interval=[TimeSpan]::FromMilliseconds(35)
@@ -1307,7 +1307,7 @@ $script:summaryScroll=0.0
 $script:summaryPause=0
 $script:summaryDirection=1
 $summaryMarquee.Add_Tick({
-    $overflow=$Summary.Width-$SummaryViewport.ActualWidth
+    $overflow=$Summary.DesiredSize.Width-$SummaryViewport.ActualWidth
     if($overflow -le 2){$summaryMarquee.Stop(); $script:summaryScroll=0; $Summary.RenderTransform.X=0; return}
     if($script:summaryPause -gt 0){$script:summaryPause--;return}
     $script:summaryScroll=[Math]::Max(0,[Math]::Min($overflow,$script:summaryScroll+(1.1*$script:summaryDirection)))
@@ -1318,6 +1318,10 @@ function Start-DeckSummaryMarquee {
     Update-DeckSummaryOverflow
 }
 $SummaryViewport.Add_SizeChanged({Update-DeckSummaryOverflow})
+$SummaryButton.Add_MouseEnter({
+    $script:summaryScroll=0; $script:summaryDirection=1; $script:summaryPause=0; $Summary.RenderTransform.X=0
+    Update-DeckSummaryOverflow
+})
 function Render-Deck {
     $names=@(Get-DeckVisibleAccounts)
     $longestName=0
@@ -1758,6 +1762,14 @@ try{
         if($settingsTest.Skills.AccountPanel.Visibility -ne 'Collapsed' -or $settingsTest.Skills.TargetPicker -or $settingsTest.Skills.State.Controls['debug-swarm'].Tag.Global -ne $true){throw 'Preset skill access must use one shared skill selection without an account picker.'}
         if($settingsTest.Skills.State.PageCount -ne 1 -or $settingsTest.Skills.PageLabel.Text -ne 'Page 1 of 1' -or $settingsTest.Skills.State.Expanders['debug-swarm'].Tag.Details.Visibility -ne 'Collapsed'){throw 'Managed skills must be paginated and collapsed by default.'}
         if($settingsTest.Skills.Rows.Parent -ne $settingsTest.Skills.Workspace.Children[1] -or -not [double]::IsNaN($settingsTest.Skills.Workspace.Height) -or $settingsTest.Skills.Scroll.VerticalScrollBarVisibility -ne 'Auto'){throw 'Expanded skill descriptions must use the Skills tab scroll rather than an inner list scroll.'}
+        $skillHeightBinding=[Windows.Data.BindingOperations]::GetBinding($settingsTest.Skills.AccountPanel,[Windows.FrameworkElement]::HeightProperty)
+        if($skillHeightBinding.Source -ne $settingsTest.Skills.Workspace.Children[1] -or [Windows.Controls.ScrollViewer]::GetVerticalScrollBarVisibility($settingsTest.Skills.Members) -ne 'Auto'){throw 'The account list must scroll within the height of the skills column.'}
+        if($settingsTest.Skills.DebugHost.Children.Count -ne 1 -or $settingsTest.Skills.Rows.Children.Count -ne 3 -or $settingsTest.Skills.DebugHost.Parent.Children.IndexOf($settingsTest.Skills.DebugHost) -ge $settingsTest.Skills.DebugHost.Parent.Children.IndexOf($settingsTest.Skills.BrowserCard)){throw 'Debug Swarm must sit outside the paginated list immediately above Browser Harness.'}
+        $settingsTest.Skills.State.Titles['debug-swarm'].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        if($settingsTest.Skills.State.Expanders['debug-swarm'].Tag.Details.Visibility -ne 'Visible' -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked){throw 'Clicking a skill title must expand its description without changing its enabled state.'}
+        $settingsTest.Skills.State.Titles['debug-swarm'].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        $settingsTest.Skills.BrowserTitle.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        if($settingsTest.Skills.BrowserNote.Visibility -ne 'Visible'){throw 'Clicking the Browser Harness title must expand its description.'}
         $skillOrder=@(Get-DeckBundledSkills $suite | ForEach-Object Name)
         if($skillOrder[-1] -cne 'debug-swarm'){throw 'Debug Swarm must appear after the UIZZE skills.'}
         if($settingsTest.Controls.ContainsKey('UizzeMcpEnabled') -or -not $settingsTest.Integrations.ContainsKey('aas_catalog')){throw 'Integrations must show optional AAS catalog without paid UIZZE MCP.'}
@@ -1765,6 +1777,17 @@ try{
         $settingsTest.Tabs.SelectedItem=@($settingsTest.Tabs.Items | Where-Object Header -eq 'Skills')[0]
         $catalogOpenWatch.Stop()
         if($catalogOpenWatch.ElapsedMilliseconds -gt 500){throw 'Opening Skills blocked the UI thread.'}
+        $settingsTest.Skills.Membership.SelectedIndex=3
+        foreach($number in 1..40){$testAccountItem=[Windows.Controls.ListBoxItem]::new();$testAccountItem.Content="test-account-$number";$testAccountItem.Height=26;[void]$settingsTest.Skills.Members.Items.Add($testAccountItem)}
+        $settingsTest.Skills.Scroll.Measure([Windows.Size]::new(800,500))
+        $settingsTest.Skills.Scroll.Arrange([Windows.Rect]::new(0,0,800,500))
+        $settingsTest.Skills.Scroll.UpdateLayout()
+        $settingsTest.Skills.Scroll.UpdateLayout()
+        $leftHeight=$settingsTest.Skills.AccountPanel.ActualHeight
+        $rightHeight=$settingsTest.Skills.Workspace.Children[1].ActualHeight
+        if($leftHeight -lt 300 -or [Math]::Abs($leftHeight-$rightHeight) -gt 1 -or $settingsTest.Skills.Members.ActualHeight -ge 500){throw "The account list did not keep an internal scroll at the skills column height (left=$leftHeight, right=$rightHeight, list=$($settingsTest.Skills.Members.ActualHeight))."}
+        foreach($number in 1..40){$settingsTest.Skills.Members.Items.RemoveAt($settingsTest.Skills.Members.Items.Count-1)}
+        $settingsTest.Skills.Membership.SelectedIndex=0
         $catalogUI=$settingsTest.Skills.Catalog
         if(Test-Path -LiteralPath (Get-DeckCatalogFile $suite) -PathType Leaf){
         $catalogDeadline=[DateTimeOffset]::UtcNow.AddSeconds(12)
@@ -2006,7 +2029,10 @@ try{
             Set-DeckMode $testMode -Initial; $script:expandedRows=@{}; $script:lastRender=''; Render-Deck
             $tickerText=$Summary.Text; $Summary.Text=('Deck status ticker validation  ' * 12); $script:summaryMeasuredText=''; $window.Content.UpdateLayout(); Start-DeckSummaryMarquee
             $window.Content.UpdateLayout()
-            if(-not $summaryMarquee.IsEnabled -or $Summary.Width -le $SummaryViewport.ActualWidth -or $Summary.ActualWidth -lt ($Summary.Width-1) -or $SummaryViewport -isnot [Windows.Controls.Canvas] -or $Summary.TextTrimming -ne 'None' -or $SummaryButton.ToolTip){throw "$testMode summary ticker did not retain and animate its complete text."}
+            if(-not $summaryMarquee.IsEnabled -or $Summary.DesiredSize.Width -le $SummaryViewport.ActualWidth -or $Summary.ActualWidth -lt ($Summary.DesiredSize.Width-1) -or -not [double]::IsNaN($Summary.Width) -or $SummaryViewport -isnot [Windows.Controls.Canvas] -or $Summary.TextTrimming -ne 'None' -or $SummaryButton.ToolTip){throw "$testMode summary ticker did not retain and animate its complete text."}
+            $script:summaryScroll=35; $script:summaryDirection=-1; $Summary.RenderTransform.X=-35
+            $mouseArgs=[Windows.Input.MouseEventArgs]::new([Windows.Input.Mouse]::PrimaryDevice,0); $mouseArgs.RoutedEvent=[Windows.UIElement]::MouseEnterEvent; $SummaryButton.RaiseEvent($mouseArgs)
+            if($script:summaryScroll -ne 0 -or $script:summaryDirection -ne 1 -or -not $summaryMarquee.IsEnabled){throw "$testMode hovering the summary did not restart its rightward roll."}
             $summaryMarquee.Stop();$script:summaryScroll=0;$Summary.RenderTransform.X=0;$Summary.Text=$tickerText;$script:summaryMeasuredText='';Update-DeckSummaryOverflow
             $originalCards=@($Cards.Children)
             $menu=$Cards.Children[1].ContextMenu; $menu.PlacementTarget=$Cards.Children[1]
@@ -2135,6 +2161,20 @@ try{
             $rulesUI.Editor.Text='Always answer hi.'
             $rulesUI.Save.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             if($rulesUI.Error.Text -or [IO.File]::ReadAllText((Join-Path $root 'global-rules.md')) -ne 'Always answer hi.'){throw 'Global Rules editor did not save.'}
+            $rulesPath=Join-Path $root 'global-rules.md'
+            $legacyRuleBase='Usage efficiency: Except when more context or feedback is genuinely needed to understand the task, avoid unnecessary model/tool round trips. Batch independent read-only checks, related edits, and proportionate verification into coherent passes. Do not repeatedly alternate tiny command, inspection, edit, and test steps when a safe batch is possible.'
+            [IO.File]::WriteAllText($rulesPath,$legacyRuleBase+"`r`n`r`n"+'Debug swarms: Use the debug-swarm skill only when the user explicitly requests a debug swarm or parallel independent Codex CLI workers; never infer it because parallel work could help. Follow its account, foreground/background, isolation, evidence, and reporting rules.'+"`r`n",[Text.UTF8Encoding]::new($false))
+            $legacyRulesUI=Show-DeckGlobalRules $settingsFixture -TestUI
+            if($legacyRulesUI.Editor.Text -cne (Get-DeckDefaultGlobalRuleBase $settingsFixture)){throw 'Legacy stock rules were not shown as the current default.'}
+            $legacyRulesUI.Editor.Text='My updated rules.'
+            $legacyRulesUI.Save.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            if($legacyRulesUI.Error.Text -or [IO.File]::ReadAllText($rulesPath) -cne 'My updated rules.'){throw 'Editing legacy stock Global Rules failed.'}
+            $conflictRulesUI=Show-DeckGlobalRules $settingsFixture -TestUI
+            [IO.File]::WriteAllText($rulesPath,'Changed externally.',[Text.UTF8Encoding]::new($false))
+            $conflictRulesUI.Editor.Text='Do not overwrite.'
+            $conflictRulesUI.Save.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            if($conflictRulesUI.Error.Text -notmatch 'Rules changed in another editor' -or [IO.File]::ReadAllText($rulesPath) -cne 'Changed externally.'){throw 'Global Rules did not protect an external change.'}
+            $conflictRulesUI.Dialog.Close()
             [void][IO.Directory]::CreateDirectory((Join-Path $settingsFixture 'accounts/account1/memories'))
             [IO.File]::WriteAllText((Join-Path $settingsFixture 'accounts/account1/memories/notes.md'),'Remember the old value.',[Text.UTF8Encoding]::new($false))
             $memoryUI=Show-DeckMemories $settingsFixture account1 -TestUI

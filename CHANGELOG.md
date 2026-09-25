@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.8.3 - 2026-09-25
+
+- Fixed the Global Rules editor rejecting edits to saved stock rules while still detecting real external changes.
+- Kept the account and pool list scrollable at the height of the Skills column, while expanded skill descriptions use the page scroll.
+- Moved Debug Swarm above Browser Harness outside skill pagination and made skill titles expand their descriptions.
+- Fixed the account summary ticker to retain all text and restart its scroll on hover in the panel and floating widget.
+
 ## 1.8.2 - 2026-09-25
 
 - Fixed account status text to scroll in full in the floating widget and main panel, and reduced the auto-compaction button size.

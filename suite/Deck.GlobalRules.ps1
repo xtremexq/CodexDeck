@@ -55,6 +55,8 @@ function Show-DeckGlobalRules([string]$SuiteRoot,$Owner=$null,[switch]$TestUI) {
     Add-Type -AssemblyName PresentationFramework
     $path=Join-Path $SuiteRoot 'deck/global-rules.md'
     $original=Get-DeckGlobalRuleText $SuiteRoot ''
+    $originalExists=Test-Path -LiteralPath $path -PathType Leaf
+    $originalFileText=if($originalExists){[IO.File]::ReadAllText($path)}else{''}
     $dialog=[Windows.Window]::new(); $dialog.Title='Codex Deck / Global Rules'; $dialog.Width=720; $dialog.Height=520
     $dialog.Background='#101315'; $dialog.Foreground='#EAF0FA'; $dialog.WindowStartupLocation='CenterScreen'
     if($Owner){$dialog.Owner=$Owner;$dialog.WindowStartupLocation='CenterOwner';$dialog.Resources.MergedDictionaries.Add($Owner.Resources)}
@@ -66,11 +68,11 @@ function Show-DeckGlobalRules([string]$SuiteRoot,$Owner=$null,[switch]$TestUI) {
     $errorText=[Windows.Controls.TextBlock]::new();$errorText.Foreground='#F17D8D';$errorText.TextWrapping='Wrap'
     [Windows.Controls.DockPanel]::SetDock($errorText,'Bottom');[void]$dock.Children.Add($errorText)
     $editor=[Windows.Controls.TextBox]::new();$editor.Text=$original;$editor.AcceptsReturn=$true;$editor.AcceptsTab=$true;$editor.TextWrapping='Wrap';$editor.VerticalScrollBarVisibility='Auto';$editor.FontFamily='Consolas';$editor.FontSize=14;$editor.Background='#192232';$editor.Foreground='#EAF0FA';[void]$dock.Children.Add($editor)
-    $defaultRuleCommand=Get-Command Get-DeckDefaultGlobalRuleBase -CommandType Function -ErrorAction Stop
     $save.Add_Click({
         try{
-            $current=if(Test-Path -LiteralPath $path){[IO.File]::ReadAllText($path)}else{& $defaultRuleCommand $SuiteRoot}
-            if($current -cne $original){throw 'Rules changed in another editor. Reopen this editor before saving.'}
+            $currentExists=Test-Path -LiteralPath $path -PathType Leaf
+            $current=if($currentExists){[IO.File]::ReadAllText($path)}else{''}
+            if($currentExists -ne $originalExists -or $current -cne $originalFileText){throw 'Rules changed in another editor. Reopen this editor before saving.'}
             if($editor.Text -cne $original){
                 [void][IO.Directory]::CreateDirectory((Split-Path -Parent $path))
                 if(Test-Path -LiteralPath $path){Copy-Item -LiteralPath $path -Destination ($path+'.bak-deck-'+[guid]::NewGuid().ToString('N'))}
