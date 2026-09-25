@@ -57,11 +57,49 @@ function Get-DeckBundledSkillState([string]$SuiteRoot,[string]$Entry) {
     return [pscustomobject]@{Version=1;Overrides=@($state.Overrides)}
 }
 
-function Test-DeckBundledSkillDesired([string]$SuiteRoot,[string]$Entry,$Skill) {
-    $state=Get-DeckBundledSkillState $SuiteRoot $Entry
+function Get-DeckGlobalSkillState([string]$SuiteRoot) {
+    $state=Read-DeckEnvironmentJson (Join-Path $SuiteRoot 'deck/skill-defaults.json')
+    if (-not $state) { return [pscustomobject]@{Version=1;Overrides=@()} }
+    if ($state.Version -ne 1) { throw 'Unsupported global Deck skill settings.' }
+    $seen=@{}
+    foreach($override in @($state.Overrides)) {
+        Assert-DeckBundledSkillName ([string]$override.Name)
+        if ($override.Enabled -isnot [bool] -or $seen.ContainsKey([string]$override.Name)) { throw 'Invalid global Deck skill override.' }
+        $seen[[string]$override.Name]=$true
+    }
+    return [pscustomobject]@{Version=1;Overrides=@($state.Overrides)}
+}
+
+function Test-DeckGlobalSkillEnabled([string]$SuiteRoot,$Skill) {
+    $state=Get-DeckGlobalSkillState $SuiteRoot
     $override=@($state.Overrides | Where-Object Name -CEQ $Skill.Name | Select-Object -First 1)
     if ($override.Count) { return [bool]$override[0].Enabled }
     return [bool]$Skill.DefaultEnabled
+}
+
+function Set-DeckGlobalSkillEnabled([string]$SuiteRoot,[string]$SkillName,[bool]$Enabled,[switch]$ValidateOnly) {
+    Assert-DeckBundledSkillName $SkillName
+    $skill=@(Get-DeckBundledSkills $SuiteRoot | Where-Object Name -CEQ $SkillName | Select-Object -First 1)
+    if (-not $skill.Count) { throw "Unknown Deck skill: $SkillName" }
+    $state=Get-DeckGlobalSkillState $SuiteRoot
+    if ($ValidateOnly) { return }
+    $overrides=@($state.Overrides | Where-Object Name -CNE $SkillName)
+    $overrides+=@([pscustomobject]@{Name=$SkillName;Enabled=$Enabled})
+    [void][IO.Directory]::CreateDirectory((Join-Path $SuiteRoot 'deck'))
+    Write-DeckEnvironmentJson (Join-Path $SuiteRoot 'deck/skill-defaults.json') ([pscustomobject]@{Version=1;Overrides=@($overrides | Sort-Object Name)})
+}
+
+function Test-DeckBundledSkillDesired([string]$SuiteRoot,[string]$Entry,$Skill,[string]$Scope='') {
+    if(-not $Scope){
+        $preferences=Read-DeckEnvironmentJson (Join-Path $SuiteRoot 'deck/settings.json')
+        $Scope=if($preferences -and $preferences.SkillAccessAccounts){[string]$preferences.SkillAccessAccounts}else{'*'}
+    }
+    $default=Test-DeckGlobalSkillEnabled $SuiteRoot $Skill
+    if($Scope -in @('*','*free','*paid')){return $default}
+    $state=Get-DeckBundledSkillState $SuiteRoot $Entry
+    $override=@($state.Overrides | Where-Object Name -CEQ $Skill.Name | Select-Object -First 1)
+    if ($override.Count) { return [bool]$override[0].Enabled }
+    return $default
 }
 
 function Test-DeckSkillAccess([string]$SuiteRoot,[string]$Entry,[string]$Scope='') {
@@ -86,7 +124,7 @@ function Get-DeckBundledSkillStatus([string]$SuiteRoot,[string]$Entry,$Skill,[st
     $directory=Get-DeckEntryDirectory $SuiteRoot $Entry
     $target=Join-Path $directory ('skills/'+$Skill.Name)
     $access=Test-DeckSkillAccess $SuiteRoot $Entry $Scope
-    $configured=Test-DeckBundledSkillDesired $SuiteRoot $Entry $Skill
+    $configured=Test-DeckBundledSkillDesired $SuiteRoot $Entry $Skill $Scope
     $desired=$configured -and $access
     $managed=Test-DeckBundledSkillLink $target $Skill.Path
     $exists=Test-Path -LiteralPath $target

@@ -24,6 +24,18 @@ try {
     Assert ($status.Desired -and $status.Active -and -not $status.Blocked) 'Default Deck skill was not activated.'
     Assert (Test-Path -LiteralPath (Join-Path $fixture 'accounts/account1/skills/debug-swarm/SKILL.md') -PathType Leaf) 'Activated Deck skill is unavailable to CODEX_HOME.'
 
+    Set-DeckGlobalSkillEnabled $fixture debug-swarm $false
+    Sync-DeckBundledSkills $fixture account1 | Out-Null
+    Assert (-not (Get-DeckBundledSkillStatus $fixture account1 $debugSkill).Desired -and -not (Test-Path -LiteralPath $status.Target)) 'Global skill selection did not disable the skill for the preset scope.'
+    [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'accounts/future'))
+    Sync-DeckBundledSkills $fixture future | Out-Null
+    Assert (-not (Get-DeckBundledSkillStatus $fixture future $debugSkill).Active) 'A future account ignored the shared preset skill selection.'
+    Set-DeckGlobalSkillEnabled $fixture debug-swarm $true
+    Sync-DeckBundledSkills $fixture account1 | Out-Null
+    Sync-DeckBundledSkills $fixture future | Out-Null
+    Assert ((Get-DeckBundledSkillStatus $fixture future $debugSkill).Active) 'A future account did not receive the restored global skill.'
+    Write-DeckEnvironmentJson (Join-Path $fixture 'deck/settings.json') ([pscustomobject]@{SkillAccessAccounts='account1,account2,future'})
+
     Set-DeckBundledSkillEnabled $fixture account1 debug-swarm $false | Out-Null
     $status=Get-DeckBundledSkillStatus $fixture account1 $debugSkill
     Assert (-not $status.Desired -and -not $status.Active -and -not (Test-Path -LiteralPath $status.Target)) 'Per-entry disable did not remove the managed link.'
@@ -40,10 +52,11 @@ try {
     Assert ($messages.Count -eq 1 -and [IO.File]::ReadAllText((Join-Path $private 'SKILL.md')) -eq 'user owned') 'A user-owned same-name skill was overwritten or not reported.'
     Reject {Set-DeckBundledSkillEnabled $fixture account2 debug-swarm $true | Out-Null} 'Settings replaced a user-owned skill.'
 
-    [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'accounts/future'))
-    Sync-DeckBundledSkills $fixture future | Out-Null
-    Assert ((Get-DeckBundledSkillStatus $fixture future $debugSkill).Active) 'A future account did not receive the globally enabled skill.'
-    'PASS: Deck skills are global by default, configurable per entry, launch-synchronized, and preserve user-owned collisions.'
+    Write-DeckEnvironmentJson (Join-Path $fixture 'deck/settings.json') ([pscustomobject]@{SkillAccessAccounts='*'})
+    Set-DeckBundledSkillEnabled $fixture account1 debug-swarm $false | Out-Null
+    Sync-DeckBundledSkills $fixture account1 | Out-Null
+    Assert ((Get-DeckBundledSkillStatus $fixture account1 $debugSkill).Active) 'Preset scope still honored a custom per-account override.'
+    'PASS: Deck skills use one shared selection for presets, custom per-entry overrides, launch synchronization, and preserve user-owned collisions.'
 } finally {
     $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
     $target=[IO.Path]::GetFullPath($fixture).TrimEnd('\')

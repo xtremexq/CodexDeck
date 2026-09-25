@@ -1,5 +1,5 @@
 ﻿# Dot-sourced inside Show-DeckSettings after Deck.EnvironmentSettings.ps1.
-$deckSkillState=@{Changes=@{};Controls=@{};Expanders=@{};Page=1;PageSize=5;PageCount=1;SuiteRoot=$suite;SmokeTest=[bool]$SmokeTest}
+$deckSkillState=@{Changes=@{};Controls=@{};Expanders=@{};Page=1;PageSize=5;PageCount=1;SuiteRoot=$suite;SmokeTest=[bool]$SmokeTest;GlobalChanged=$false;CustomAccess=@{}}
 $deckSkillTab=[Windows.Controls.TabItem]::new(); $deckSkillTab.Header='Skills'
 $deckSkillPanel=[Windows.Controls.StackPanel]::new(); $deckSkillPanel.Margin='2,0,12,0'
 $deckSkillScroll=[Windows.Controls.ScrollViewer]::new(); $deckSkillScroll.VerticalScrollBarVisibility='Auto'; $deckSkillScroll.HorizontalScrollBarVisibility='Disabled'; $deckSkillScroll.Content=$deckSkillPanel
@@ -26,10 +26,10 @@ $skillAccessLabel=New-DeckText 'Account access preset' '#A2ADB5'; $skillAccessLa
 $skillMembership=[Windows.Controls.ComboBox]::new(); foreach($option in @('Use all accounts and pools (including future entries)','Use all free accounts','Use all Plus or higher accounts','Choose access per account or pool')){[void]$skillMembership.Items.Add($option)}; $skillMembership.Margin='0,0,0,10'; [void]$deckSkillPanel.Children.Add($skillMembership)
 $savedSkillScope=if($settings.SkillAccessAccounts){[string]$settings.SkillAccessAccounts}else{'*'}
 $skillMembership.SelectedIndex=if($savedSkillScope -eq '*'){0}elseif($savedSkillScope -eq '*free'){1}elseif($savedSkillScope -eq '*paid'){2}else{3}
-$skillWorkspace=[Windows.Controls.Grid]::new(); $skillWorkspace.Height=326; $skillWorkspace.Margin='0,0,0,6'
+$skillWorkspace=[Windows.Controls.Grid]::new(); $skillWorkspace.Margin='0,0,0,6'
 $skillAccessColumn=[Windows.Controls.ColumnDefinition]::new(); $skillAccessColumn.Width='220'; [void]$skillWorkspace.ColumnDefinitions.Add($skillAccessColumn)
 $skillDetailColumn=[Windows.Controls.ColumnDefinition]::new(); $skillDetailColumn.Width='*'; [void]$skillWorkspace.ColumnDefinitions.Add($skillDetailColumn); [void]$deckSkillPanel.Children.Add($skillWorkspace)
-$skillAccountPanel=[Windows.Controls.Grid]::new(); $skillAccountPanel.Height=$skillWorkspace.Height; $skillAccountPanel.Margin='0,0,14,0'; foreach($height in @('Auto','Auto','*')){$row=[Windows.Controls.RowDefinition]::new();$row.Height=[Windows.GridLengthConverter]::new().ConvertFromString($height);[void]$skillAccountPanel.RowDefinitions.Add($row)}; [void]$skillWorkspace.Children.Add($skillAccountPanel)
+$skillAccountPanel=[Windows.Controls.Grid]::new(); $skillAccountPanel.MinHeight=326; $skillAccountPanel.Margin='0,0,14,0'; foreach($height in @('Auto','Auto','*')){$row=[Windows.Controls.RowDefinition]::new();$row.Height=[Windows.GridLengthConverter]::new().ConvertFromString($height);[void]$skillAccountPanel.RowDefinitions.Add($row)}; [void]$skillWorkspace.Children.Add($skillAccountPanel)
 $skillAccountTitle=New-DeckText 'Accounts and pools' '#A2ADB5' 11; [void]$skillAccountPanel.Children.Add($skillAccountTitle)
 $skillAccountHelp=New-DeckText 'Check access. Select a row to edit its skills.' '#929CA4' 10; $skillAccountHelp.Margin='0,3,0,7'; [Windows.Controls.Grid]::SetRow($skillAccountHelp,1); [void]$skillAccountPanel.Children.Add($skillAccountHelp)
 $skillMembers=[Windows.Controls.ListBox]::new(); $skillMembers.Background='#171C1F'; $skillMembers.BorderBrush='#303A42'; $skillMembers.BorderThickness='1'; [Windows.Controls.Grid]::SetRow($skillMembers,2); [void]$skillAccountPanel.Children.Add($skillMembers)
@@ -39,16 +39,14 @@ foreach($entryName in $environmentNames){
     $check=[Windows.Controls.CheckBox]::new(); $check.Content=$entryName; $check.Tag=$item; $item.Content=$check
     $skillAccountChecks[$entryName]=$check; $skillAccountItems[$entryName]=$item; [void]$skillMembers.Items.Add($item)
 }
-$skillDetailPanel=[Windows.Controls.Grid]::new(); $skillDetailPanel.Height=$skillWorkspace.Height; foreach($height in @('Auto','Auto','*','Auto','Auto')){$row=[Windows.Controls.RowDefinition]::new();$row.Height=[Windows.GridLengthConverter]::new().ConvertFromString($height);[void]$skillDetailPanel.RowDefinitions.Add($row)}; [Windows.Controls.Grid]::SetColumn($skillDetailPanel,1); [void]$skillWorkspace.Children.Add($skillDetailPanel)
-$deckSkillTargetLabel=New-DeckText 'Select an account or pool' '#EDF1F7' 14; $deckSkillTargetLabel.Margin='0,0,0,8'; [void]$skillDetailPanel.Children.Add($deckSkillTargetLabel)
-$skillTargetPicker=[Windows.Controls.ComboBox]::new(); $skillTargetPicker.Margin='0,0,0,8'; foreach($entryName in $environmentNames){[void]$skillTargetPicker.Items.Add($entryName)}; [Windows.Controls.Grid]::SetRow($skillTargetPicker,1); [void]$skillDetailPanel.Children.Add($skillTargetPicker)
-$deckSkillRowsScroll=[Windows.Controls.ScrollViewer]::new(); $deckSkillRowsScroll.VerticalScrollBarVisibility='Auto'; $deckSkillRowsScroll.HorizontalScrollBarVisibility='Disabled'; [Windows.Controls.Grid]::SetRow($deckSkillRowsScroll,2); [void]$skillDetailPanel.Children.Add($deckSkillRowsScroll)
-$deckSkillRows=[Windows.Controls.StackPanel]::new(); $deckSkillRowsScroll.Content=$deckSkillRows
-$deckSkillPager=[Windows.Controls.StackPanel]::new(); $deckSkillPager.Orientation='Horizontal'; $deckSkillPager.HorizontalAlignment='Right'; $deckSkillPager.Margin='0,7,0,0'; [Windows.Controls.Grid]::SetRow($deckSkillPager,3); [void]$skillDetailPanel.Children.Add($deckSkillPager)
+$skillDetailPanel=[Windows.Controls.Grid]::new(); foreach($height in @('Auto','Auto','Auto','Auto')){$row=[Windows.Controls.RowDefinition]::new();$row.Height=[Windows.GridLengthConverter]::new().ConvertFromString($height);[void]$skillDetailPanel.RowDefinitions.Add($row)}; [Windows.Controls.Grid]::SetColumn($skillDetailPanel,1); [void]$skillWorkspace.Children.Add($skillDetailPanel)
+$deckSkillTargetLabel=New-DeckText 'Skills for all accounts and pools' '#EDF1F7' 14; $deckSkillTargetLabel.Margin='0,0,0,8'; [void]$skillDetailPanel.Children.Add($deckSkillTargetLabel)
+$deckSkillRows=[Windows.Controls.StackPanel]::new(); [Windows.Controls.Grid]::SetRow($deckSkillRows,1); [void]$skillDetailPanel.Children.Add($deckSkillRows)
+$deckSkillPager=[Windows.Controls.StackPanel]::new(); $deckSkillPager.Orientation='Horizontal'; $deckSkillPager.HorizontalAlignment='Right'; $deckSkillPager.Margin='0,7,0,0'; [Windows.Controls.Grid]::SetRow($deckSkillPager,2); [void]$skillDetailPanel.Children.Add($deckSkillPager)
 $deckSkillPrevious=[Windows.Controls.Button]::new(); $deckSkillPrevious.Content='Previous'; $deckSkillPrevious.Padding='8,4'; $deckSkillPrevious.Margin='0,0,8,0'; [void]$deckSkillPager.Children.Add($deckSkillPrevious)
 $deckSkillPageLabel=New-DeckText 'Page 1 of 1' '#A2ADB5' 11; $deckSkillPageLabel.VerticalAlignment='Center'; $deckSkillPageLabel.Margin='0,0,8,0'; [void]$deckSkillPager.Children.Add($deckSkillPageLabel)
 $deckSkillNext=[Windows.Controls.Button]::new(); $deckSkillNext.Content='Next'; $deckSkillNext.Padding='8,4'; [void]$deckSkillPager.Children.Add($deckSkillNext)
-$deckSkillStatus=New-DeckText '' '#929CA4'; $deckSkillStatus.Margin='0,5,0,0'; [Windows.Controls.Grid]::SetRow($deckSkillStatus,4); [void]$skillDetailPanel.Children.Add($deckSkillStatus)
+$deckSkillStatus=New-DeckText '' '#929CA4'; $deckSkillStatus.Margin='0,5,0,0'; [Windows.Controls.Grid]::SetRow($deckSkillStatus,3); [void]$skillDetailPanel.Children.Add($deckSkillStatus)
 $deckSkillTarget=$skillMembers
 $browserSkillCard=[Windows.Controls.Border]::new(); $browserSkillCard.BorderBrush='#303A42'; $browserSkillCard.BorderThickness='1'; $browserSkillCard.CornerRadius='6'; $browserSkillCard.Padding='8,5'; $browserSkillCard.Margin='0,8,0,10'
 $browserSkillBody=[Windows.Controls.StackPanel]::new(); $browserSkillCard.Child=$browserSkillBody
@@ -65,13 +63,16 @@ $currentSkillScope={
 $getDeckBundledSkills=Get-Command Get-DeckBundledSkills -CommandType Function -ErrorAction Stop
 $getDeckBundledSkillStatus=Get-Command Get-DeckBundledSkillStatus -CommandType Function -ErrorAction Stop
 $setDeckBundledSkillEnabled=Get-Command Set-DeckBundledSkillEnabled -CommandType Function -ErrorAction Stop
+$testDeckGlobalSkillEnabled=Get-Command Test-DeckGlobalSkillEnabled -CommandType Function -ErrorAction Stop
+$setDeckGlobalSkillEnabled=Get-Command Set-DeckGlobalSkillEnabled -CommandType Function -ErrorAction Stop
 $testDeckSkillAccess=Get-Command Test-DeckSkillAccess -CommandType Function -ErrorAction Stop
 $newDeckText=Get-Command New-DeckText -CommandType Function -ErrorAction Stop
 $renderDeckSkills={
     $deckSkillRows.Children.Clear(); $deckSkillState.Controls=@{}; $deckSkillState.Expanders=@{}
-    $selected=$deckSkillTarget.SelectedItem; $entry=if($selected){[string]$selected.Tag}else{''}
-    if(-not $entry){$deckSkillStatus.Text='Choose an account or pool.';$deckSkillPageLabel.Text='Page 1 of 1';$deckSkillPrevious.IsEnabled=$false;$deckSkillNext.IsEnabled=$false;return}
-    $deckSkillTargetLabel.Text="Skills for $entry"
+    $custom=$skillMembership.SelectedIndex -eq 3
+    $selected=$deckSkillTarget.SelectedItem; $entry=if($custom -and $selected){[string]$selected.Tag}else{''}
+    if($custom -and -not $entry){$deckSkillStatus.Text='Choose an account or pool.';$deckSkillPageLabel.Text='Page 1 of 1';$deckSkillPrevious.IsEnabled=$false;$deckSkillNext.IsEnabled=$false;return}
+    $deckSkillTargetLabel.Text=if($custom){"Skills for $entry"}else{@('Skills for all accounts and pools','Skills for all free accounts','Skills for all Plus or higher accounts')[$skillMembership.SelectedIndex]}
     $catalog=@(& $getDeckBundledSkills $deckSkillState.SuiteRoot)
     if(-not $catalog.Count){$deckSkillStatus.Text='No Deck skills are installed.';$deckSkillPageLabel.Text='Page 1 of 1';$deckSkillPrevious.IsEnabled=$false;$deckSkillNext.IsEnabled=$false;return}
     $deckSkillState.PageCount=[Math]::Max(1,[Math]::Ceiling($catalog.Count/[double]$deckSkillState.PageSize))
@@ -81,28 +82,29 @@ $renderDeckSkills={
     $scope=& $currentSkillScope
     $first=($deckSkillState.Page-1)*$deckSkillState.PageSize
     foreach($skill in @($catalog | Select-Object -Skip $first -First $deckSkillState.PageSize)){
-        $key=$entry+'|'+$skill.Name
-        if($deckSkillState.SmokeTest -and -not (Test-Path -LiteralPath (Join-Path $deckSkillState.SuiteRoot ('accounts/'+$entry)) -PathType Container)){$status=[pscustomobject]@{Desired=[bool]$skill.DefaultEnabled;Active=[bool]$skill.DefaultEnabled;Blocked=$false;BlockedReason='';Access=$true}}
+        $key=$(if($custom){$entry}else{'global'})+'|'+$skill.Name
+        if(-not $custom){$status=[pscustomobject]@{Configured=(& $testDeckGlobalSkillEnabled $deckSkillState.SuiteRoot $skill);Active=$true;Blocked=$false;BlockedReason='';Access=$true}}
+        elseif($deckSkillState.SmokeTest -and -not (Test-Path -LiteralPath (Join-Path $deckSkillState.SuiteRoot ('accounts/'+$entry)) -PathType Container)){$status=[pscustomobject]@{Configured=[bool]$skill.DefaultEnabled;Active=[bool]$skill.DefaultEnabled;Blocked=$false;BlockedReason='';Access=$true}}
         else{$status=& $getDeckBundledSkillStatus $deckSkillState.SuiteRoot $entry $skill $scope}
-        $desired=if($deckSkillState.Changes.ContainsKey($key)){[bool]$deckSkillState.Changes[$key].Enabled}else{[bool]$status.Desired}
+        $desired=if($deckSkillState.Changes.ContainsKey($key)){[bool]$deckSkillState.Changes[$key].Enabled}else{[bool]$status.Configured}
         $card=[Windows.Controls.Border]::new(); $card.BorderBrush='#303A42'; $card.BorderThickness='1'; $card.CornerRadius='6'; $card.Padding='8,5'; $card.Margin='0,0,0,6'
         $content=[Windows.Controls.StackPanel]::new(); $card.Child=$content
         $header=[Windows.Controls.DockPanel]::new(); [void]$content.Children.Add($header)
         $expand=[Windows.Controls.Button]::new(); $expand.Content='›'; $expand.Width=24; $expand.Height=22; $expand.Padding='0'; $expand.Margin='8,0,0,0'; $expand.ToolTip='Show description'; [Windows.Controls.DockPanel]::SetDock($expand,'Right'); [void]$header.Children.Add($expand)
         $check=[Windows.Controls.CheckBox]::new(); $check.Content=$skill.DisplayName; $check.IsChecked=$desired; $check.FontWeight='SemiBold'
         $check.IsEnabled=-not [bool]$status.Blocked -and [bool]$status.Access
-        $check.Tag=@{Key=$key;Entry=$entry;Name=$skill.Name;Original=[bool]$status.Desired;State=$deckSkillState}
+        $check.Tag=@{Key=$key;Entry=$entry;Name=$skill.Name;Global=(-not $custom);Original=[bool]$status.Configured;State=$deckSkillState}
         $check.Add_Click({param($sender,$eventArgs)
             $item=$sender.Tag
             if([bool]$sender.IsChecked -eq $item.Original){$item.State.Changes.Remove($item.Key)}
-            else{$item.State.Changes[$item.Key]=@{Entry=$item.Entry;Name=$item.Name;Enabled=[bool]$sender.IsChecked}}
+            else{$item.State.Changes[$item.Key]=@{Entry=$item.Entry;Name=$item.Name;Global=$item.Global;Enabled=[bool]$sender.IsChecked}}
         }.GetNewClosure())
         [void]$header.Children.Add($check)
         $details=[Windows.Controls.StackPanel]::new(); $details.Margin='22,6,0,3'; $details.Visibility='Collapsed'; [void]$content.Children.Add($details)
         $description=& $newDeckText $skill.Description '#A2ADB5' 11; [void]$details.Children.Add($description)
         if(-not $status.Access){$reason=& $newDeckText 'This account is outside the selected skill access scope.' '#929CA4' 11; $reason.Margin='0,6,0,0'; [void]$details.Children.Add($reason)}
         elseif($status.Blocked){$reason=& $newDeckText $status.BlockedReason '#F0B879' 11; $reason.Margin='0,6,0,0'; [void]$details.Children.Add($reason)}
-        elseif($desired -and -not $status.Active -and -not $deckSkillState.SmokeTest){$pending=& $newDeckText 'Will be linked on save or the next launch.' '#9BB5D9' 11; $pending.Margin='0,6,0,0'; [void]$details.Children.Add($pending)}
+        elseif($custom -and $desired -and -not $status.Active -and -not $deckSkillState.SmokeTest){$pending=& $newDeckText 'Will be linked on save or the next launch.' '#9BB5D9' 11; $pending.Margin='0,6,0,0'; [void]$details.Children.Add($pending)}
         $expand.Tag=@{Details=$details;Button=$expand}
         $expand.Add_Click({param($sender,$eventArgs)$item=$sender.Tag;$expanded=$item.Details.Visibility -ne 'Visible';$item.Details.Visibility=if($expanded){'Visible'}else{'Collapsed'};$item.Button.Content=if($expanded){'⌄'}else{'›'};$item.Button.ToolTip=if($expanded){'Hide description'}else{'Show description'}}.GetNewClosure())
         [void]$deckSkillRows.Children.Add($card); $deckSkillState.Controls[$skill.Name]=$check; $deckSkillState.Expanders[$skill.Name]=$expand
@@ -114,30 +116,18 @@ $updateSkillAccessRows={
     $custom=$skillMembership.SelectedIndex -eq 3
     $skillAccessColumn.Width=if($custom){'220'}else{'0'}
     $skillAccountPanel.Visibility=if($custom){'Visible'}else{'Collapsed'}
-    $skillTargetPicker.Visibility=if($custom){'Collapsed'}else{'Visible'}
     foreach($entryName in $environmentNames){
         $check=$skillAccountChecks[$entryName]; $check.IsEnabled=$custom
-        if(-not $custom){$check.IsChecked=& $testDeckSkillAccess $deckSkillState.SuiteRoot $entryName $scope}
+        $check.IsChecked=if($custom){[bool]$deckSkillState.CustomAccess[$entryName]}else{& $testDeckSkillAccess $deckSkillState.SuiteRoot $entryName $scope}
     }
 }.GetNewClosure()
 foreach($entryName in $environmentNames){
-    $skillAccountChecks[$entryName].IsChecked=if($savedSkillScope -in @('*','*free','*paid')){Test-DeckSkillAccess $suite $entryName $savedSkillScope}else{$entryName -in @($savedSkillScope -split ',' | Where-Object {$_})}
+    $deckSkillState.CustomAccess[$entryName]=if($savedSkillScope -in @('*','*free','*paid')){Test-DeckSkillAccess $suite $entryName $savedSkillScope}else{$entryName -in @($savedSkillScope -split ',' | Where-Object {$_})}
+    $skillAccountChecks[$entryName].IsChecked=[bool]$deckSkillState.CustomAccess[$entryName]
     $skillAccountChecks[$entryName].IsEnabled=$skillMembership.SelectedIndex -eq 3
-    $skillAccountChecks[$entryName].Add_Click({param($sender,$eventArgs)$skillMembers.SelectedItem=$sender.Tag;& $renderDeckSkills}.GetNewClosure())
+    $skillAccountChecks[$entryName].Add_Click({param($sender,$eventArgs)$deckSkillState.CustomAccess[[string]$sender.Tag.Tag]=[bool]$sender.IsChecked;$skillMembers.SelectedItem=$sender.Tag;& $renderDeckSkills}.GetNewClosure())
 }
-$skillSelectionState=@{Syncing=$false}
 $deckSkillTarget.Add_SelectionChanged({
-    if($skillSelectionState.Syncing){return}
-    $skillSelectionState.Syncing=$true
-    try{$selected=$deckSkillTarget.SelectedItem;if($selected){$skillTargetPicker.SelectedItem=[string]$selected.Tag}}
-    finally{$skillSelectionState.Syncing=$false}
-    $deckSkillState.Page=1;& $renderDeckSkills
-}.GetNewClosure())
-$skillTargetPicker.Add_SelectionChanged({
-    if($skillSelectionState.Syncing){return}
-    $skillSelectionState.Syncing=$true
-    try{$name=[string]$skillTargetPicker.SelectedItem;if($name -and $skillAccountItems.ContainsKey($name)){$deckSkillTarget.SelectedItem=$skillAccountItems[$name]}}
-    finally{$skillSelectionState.Syncing=$false}
     $deckSkillState.Page=1;& $renderDeckSkills
 }.GetNewClosure())
 $deckSkillPrevious.Add_Click({if($deckSkillState.Page -gt 1){$deckSkillState.Page--;& $renderDeckSkills}}.GetNewClosure())
@@ -147,8 +137,9 @@ $saveDeckSkills={
     param([switch]$ValidateOnly)
     foreach($key in @($deckSkillState.Changes.Keys)){
         $change=$deckSkillState.Changes[$key]
-        & $setDeckBundledSkillEnabled $deckSkillState.SuiteRoot $change.Entry $change.Name ([bool]$change.Enabled) -ValidateOnly:$ValidateOnly | Out-Null
-        if(-not $ValidateOnly){$deckSkillState.Changes.Remove($key)}
+        if($change.Global){& $setDeckGlobalSkillEnabled $deckSkillState.SuiteRoot $change.Name ([bool]$change.Enabled) -ValidateOnly:$ValidateOnly | Out-Null}
+        else{& $setDeckBundledSkillEnabled $deckSkillState.SuiteRoot $change.Entry $change.Name ([bool]$change.Enabled) -ValidateOnly:$ValidateOnly | Out-Null}
+        if(-not $ValidateOnly){if($change.Global){$deckSkillState.GlobalChanged=$true};$deckSkillState.Changes.Remove($key)}
     }
 }.GetNewClosure()
 & $updateSkillAccessRows

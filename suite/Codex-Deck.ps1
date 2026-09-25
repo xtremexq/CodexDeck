@@ -116,7 +116,7 @@ public static class DeckTaskbarIdentity {
 $script:window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
 $script:appIcon=[Windows.Media.Imaging.BitmapImage]::new([uri](Join-Path $root 'assets/codex-deck.png'))
 $window.Icon=$appIcon; $window.FindName('AppLogo').Source=$appIcon
-foreach ($name in 'AccountPicker','SettingsButton','ConfigButton','NewButton','AutoCompactButton','Summary','SummaryViewport','SummaryEllipsis','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','EfficiencyButton','Brand','LayoutRoot','Disclaimer','Header','SummaryButton','FilterButton','StatusButton','CardScroll') {
+foreach ($name in 'AccountPicker','SettingsButton','ConfigButton','NewButton','AutoCompactButton','Summary','SummaryViewport','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','EfficiencyButton','Brand','LayoutRoot','Disclaimer','Header','SummaryButton','FilterButton','StatusButton','CardScroll') {
     Set-Variable -Name $name -Value $window.FindName($name) -Scope Script
 }
 # Native caption hit testing covers the top padding, logo, text and gaps too.
@@ -1091,7 +1091,7 @@ function Show-DeckSettings {
     }
     $finishSettingsSave={param($updated)
         & $saveCommands['Write-DeckJson'] (Join-Path $settingsSaveContext.Root 'settings.json') $updated
-        if(-not $settingsSaveContext.SmokeTest -and $updated.SkillAccessAccounts -cne $settingsSaveContext.OriginalSettings.SkillAccessAccounts){foreach($warning in @(& $saveCommands['Sync-DeckBundledSkillsForAllEntries'] $settingsSaveContext.SuiteRoot)){if($warning){Write-Warning $warning}}}
+        if(-not $settingsSaveContext.SmokeTest -and ($deckSkillState.GlobalChanged -or $updated.SkillAccessAccounts -cne $settingsSaveContext.OriginalSettings.SkillAccessAccounts)){foreach($warning in @(& $saveCommands['Sync-DeckBundledSkillsForAllEntries'] $settingsSaveContext.SuiteRoot)){if($warning){Write-Warning $warning}}}
         if(-not $settingsSaveContext.SmokeTest -and ($updated.BrowserHarnessEnabled -ne $settingsSaveContext.OriginalSettings.BrowserHarnessEnabled -or $updated.SkillAccessAccounts -cne $settingsSaveContext.OriginalSettings.SkillAccessAccounts)){
             foreach($entry in @(& $saveCommands['Get-DeckEntryNames'] $settingsSaveContext.SuiteRoot)){
                 try{& $saveCommands['Sync-DeckBrowserHarnessSkill'] $settingsSaveContext.SuiteRoot (& $saveCommands['Get-DeckEntryDirectory'] $settingsSaveContext.SuiteRoot $entry) ([bool]$updated.BrowserHarnessEnabled -and (& $saveCommands['Test-DeckSkillAccess'] $settingsSaveContext.SuiteRoot $entry $updated.SkillAccessAccounts))}
@@ -1191,7 +1191,7 @@ function Show-DeckSettings {
         } catch { $settingsError.Text='Settings were not saved: '+$_.Exception.Message; $settingsError.BringIntoView(); $save.Content='Save settings' }
         finally {if(-not $worker){$save.IsEnabled=$true}}
     }.GetNewClosure())
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;TargetPicker=$skillTargetPicker;Membership=$skillMembership;Members=$skillMembers;AccountPanel=$skillAccountPanel;AccountItems=$skillAccountItems;AccountChecks=$skillAccountChecks;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState;Previous=$deckSkillPrevious;Next=$deckSkillNext;PageLabel=$deckSkillPageLabel;Plugin=@{Marketplace=$pluginMarketplaceSource;AddMarketplace=$pluginMarketplaceAdd;Selector=$pluginSelector;Install=$pluginInstall;Status=$pluginStatus};Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus;Previous=$catalogPrevious;Next=$catalogNext;PageInput=$catalogPageInput;PageGo=$catalogPageGo;PageLabel=$catalogPageLabel}}}}
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;TargetPicker=$skillTargetPicker;Membership=$skillMembership;Members=$skillMembers;AccountPanel=$skillAccountPanel;AccountItems=$skillAccountItems;AccountChecks=$skillAccountChecks;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;Workspace=$skillWorkspace;Scroll=$deckSkillScroll;State=$deckSkillState;Previous=$deckSkillPrevious;Next=$deckSkillNext;PageLabel=$deckSkillPageLabel;Plugin=@{Marketplace=$pluginMarketplaceSource;AddMarketplace=$pluginMarketplaceAdd;Selector=$pluginSelector;Install=$pluginInstall;Status=$pluginStatus};Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus;Previous=$catalogPrevious;Next=$catalogNext;PageInput=$catalogPageInput;PageGo=$catalogPageGo;PageLabel=$catalogPageLabel}}}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -1289,7 +1289,7 @@ function Set-DeckAccountFilter([string]$Filter) {
 }
 function Update-DeckSummaryOverflow {
     if(-not $SummaryViewport.ActualWidth){return}
-    if(-not $Summary.Text){$Summary.Width=0; $SummaryEllipsis.Visibility='Collapsed'; return}
+    if(-not $Summary.Text){$Summary.Width=0; $summaryMarquee.Stop(); return}
     if($script:summaryMeasuredText -cne $Summary.Text){
         $typeface=[Windows.Media.Typeface]::new($Summary.FontFamily,$Summary.FontStyle,$Summary.FontWeight,$Summary.FontStretch)
         $pixelsPerDip=[Windows.Media.VisualTreeHelper]::GetDpi($Summary).PixelsPerDip
@@ -1298,25 +1298,25 @@ function Update-DeckSummaryOverflow {
         $script:summaryMeasuredText=$Summary.Text
     }
     $overflow=$Summary.Width-$SummaryViewport.ActualWidth
-    $SummaryEllipsis.Visibility=if($overflow -gt 2 -and -not $SummaryButton.IsMouseOver){'Visible'}else{'Collapsed'}
-    if($overflow -le 2){$summaryMarquee.Stop(); $Summary.RenderTransform.X=0}
+    if($overflow -le 2){$summaryMarquee.Stop(); $script:summaryScroll=0; $Summary.RenderTransform.X=0}
+    elseif(-not $summaryMarquee.IsEnabled){$script:summaryScroll=0; $summaryMarquee.Start()}
 }
 $script:summaryMarquee=[Windows.Threading.DispatcherTimer]::new()
 $summaryMarquee.Interval=[TimeSpan]::FromMilliseconds(35)
 $script:summaryScroll=0.0
+$script:summaryPause=0
+$script:summaryDirection=1
 $summaryMarquee.Add_Tick({
     $overflow=$Summary.Width-$SummaryViewport.ActualWidth
-    if(-not $SummaryButton.IsMouseOver -or $overflow -le 2){$summaryMarquee.Stop(); $Summary.RenderTransform.X=0; Update-DeckSummaryOverflow; return}
-    $script:summaryScroll+=1.1
-    if($summaryScroll -gt $overflow+28){$script:summaryScroll=0}
-    $Summary.RenderTransform.X=-[Math]::Min($summaryScroll,$overflow)
+    if($overflow -le 2){$summaryMarquee.Stop(); $script:summaryScroll=0; $Summary.RenderTransform.X=0; return}
+    if($script:summaryPause -gt 0){$script:summaryPause--;return}
+    $script:summaryScroll=[Math]::Max(0,[Math]::Min($overflow,$script:summaryScroll+(1.1*$script:summaryDirection)))
+    $Summary.RenderTransform.X=-$script:summaryScroll
+    if($script:summaryScroll -le 0 -or $script:summaryScroll -ge $overflow){$script:summaryDirection=-$script:summaryDirection;$script:summaryPause=22}
 })
 function Start-DeckSummaryMarquee {
     Update-DeckSummaryOverflow
-    if($Summary.Width-$SummaryViewport.ActualWidth -gt 2){$SummaryEllipsis.Visibility='Collapsed'; $script:summaryScroll=0; $summaryMarquee.Start()}
 }
-$SummaryButton.Add_MouseEnter({Start-DeckSummaryMarquee})
-$SummaryButton.Add_MouseLeave({$summaryMarquee.Stop(); $script:summaryScroll=0; $Summary.RenderTransform.X=0; Update-DeckSummaryOverflow})
 $SummaryViewport.Add_SizeChanged({Update-DeckSummaryOverflow})
 function Render-Deck {
     $names=@(Get-DeckVisibleAccounts)
@@ -1334,7 +1334,7 @@ function Render-Deck {
     $warming=@($tasks.Values | Where-Object Kind -eq 'Warm-up').Count
     $StatusLine.Text = if ($tasks.Count) { "Checking $($tasks.Count-$warming) / warming $warming…" } else { $(if($settings.AutoCheck){"$notice / auto-check every $($settings.PollMinutes)m"}else{"$notice / auto-check off"}) }
     if($widget -and -not $tasks.Count){$StatusLine.Text='Checks '+$(if($settings.AutoCheck){'on'}else{'off'})+'  /  warm-up '+$warmupLabel}
-    $SummaryButton.ToolTip=$Summary.Text
+    $SummaryButton.ToolTip=$null
     $Summary.Foreground='#69DEC0'
     $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + '/' + $accountFilter + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
     if ($signature -eq $lastRender) { return }
@@ -1755,8 +1755,9 @@ try{
         if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '600') { throw 'Efficiency analytics session limit default failed.' }
         if ($headers -notcontains 'Skills' -or -not $settingsTest.Skills.State.Controls.ContainsKey('debug-swarm') -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked) { throw 'Globally enabled Deck skills Settings tab missing or invalid.' }
         if($settingsTest.Skills.Target -ne $settingsTest.Skills.Members -or -not $settingsTest.Skills.Plugin.AddMarketplace -or -not $settingsTest.Skills.Plugin.Install){throw 'Skills settings must use one account access/selection list and expose plugin installation.'}
-        if($settingsTest.Skills.AccountPanel.Visibility -ne 'Collapsed' -or $settingsTest.Skills.TargetPicker.Visibility -ne 'Visible'){throw 'Preset skill access must use the compact account editor without the access column.'}
+        if($settingsTest.Skills.AccountPanel.Visibility -ne 'Collapsed' -or $settingsTest.Skills.TargetPicker -or $settingsTest.Skills.State.Controls['debug-swarm'].Tag.Global -ne $true){throw 'Preset skill access must use one shared skill selection without an account picker.'}
         if($settingsTest.Skills.State.PageCount -ne 1 -or $settingsTest.Skills.PageLabel.Text -ne 'Page 1 of 1' -or $settingsTest.Skills.State.Expanders['debug-swarm'].Tag.Details.Visibility -ne 'Collapsed'){throw 'Managed skills must be paginated and collapsed by default.'}
+        if($settingsTest.Skills.Rows.Parent -ne $settingsTest.Skills.Workspace.Children[1] -or -not [double]::IsNaN($settingsTest.Skills.Workspace.Height) -or $settingsTest.Skills.Scroll.VerticalScrollBarVisibility -ne 'Auto'){throw 'Expanded skill descriptions must use the Skills tab scroll rather than an inner list scroll.'}
         $skillOrder=@(Get-DeckBundledSkills $suite | ForEach-Object Name)
         if($skillOrder[-1] -cne 'debug-swarm'){throw 'Debug Swarm must appear after the UIZZE skills.'}
         if($settingsTest.Controls.ContainsKey('UizzeMcpEnabled') -or -not $settingsTest.Integrations.ContainsKey('aas_catalog')){throw 'Integrations must show optional AAS catalog without paid UIZZE MCP.'}
@@ -1820,8 +1821,9 @@ try{
         $scopeMenu.Items[0].IsChecked=$false; $scopeMenu.Items[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
         $schedulingControl.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         if(-not [bool]$schedulingControl.Tag -or $schedulingControl.Content -ne 'Disable background scheduling' -or -not $settingsTest.Controls.WarmupEnabled.IsChecked){throw 'Background scheduling opt-in did not update its saved state.'}
-        if(-not $SummaryButton.IsHitTestVisible -or $SummaryButton.Focusable -or $SummaryButton.IsTabStop){throw 'Account summary must allow hover without keyboard focus.'}
+        if(-not $SummaryButton.IsHitTestVisible -or $SummaryButton.Focusable -or $SummaryButton.IsTabStop -or $SummaryButton.ToolTip){throw 'Account summary must scroll without a redundant hover tooltip.'}
         if($EfficiencyButton.Content -ne 'Deck Analysis' -or $AutoCompactButton.Content -ne 'Auto-compact Off'){throw 'Single-row analysis or auto-compact controls failed.'}
+        if([Math]::Abs($LaunchBar.ColumnDefinitions[2].Width.Value-130) -gt 0.1 -or $AutoCompactButton.FontSize -ne 10){throw 'Auto-compact button was not reduced by 7 px on each side.'}
         $AutoCompactButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         if(-not $settings.AutoCompactLaunchEnabled -or $AutoCompactButton.Content -ne 'Auto-compact On'){throw 'Panel auto-compact toggle did not update shared launch state.'}
         $AutoCompactButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
@@ -2003,7 +2005,8 @@ try{
         foreach($testMode in @('Panel','Widget')){
             Set-DeckMode $testMode -Initial; $script:expandedRows=@{}; $script:lastRender=''; Render-Deck
             $tickerText=$Summary.Text; $Summary.Text=('Deck status ticker validation  ' * 12); $script:summaryMeasuredText=''; $window.Content.UpdateLayout(); Start-DeckSummaryMarquee
-            if(-not $summaryMarquee.IsEnabled -or $Summary.Width -le $SummaryViewport.ActualWidth){throw "$testMode summary ticker did not retain and animate its complete text."}
+            $window.Content.UpdateLayout()
+            if(-not $summaryMarquee.IsEnabled -or $Summary.Width -le $SummaryViewport.ActualWidth -or $Summary.ActualWidth -lt ($Summary.Width-1) -or $SummaryViewport -isnot [Windows.Controls.Canvas] -or $Summary.TextTrimming -ne 'None' -or $SummaryButton.ToolTip){throw "$testMode summary ticker did not retain and animate its complete text."}
             $summaryMarquee.Stop();$script:summaryScroll=0;$Summary.RenderTransform.X=0;$Summary.Text=$tickerText;$script:summaryMeasuredText='';Update-DeckSummaryOverflow
             $originalCards=@($Cards.Children)
             $menu=$Cards.Children[1].ContextMenu; $menu.PlacementTarget=$Cards.Children[1]
@@ -2091,9 +2094,12 @@ try{
             $draftScope=$draftUI.Controls.WarmupPlanTypes.Resources['ScopeMenu']
             $draftScope.Items[1].IsChecked=$true; $draftScope.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
             $draftScope.Items[3].IsChecked=$true; $draftScope.Items[3].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+            $draftUI.Skills.Membership.SelectedIndex=1
+            if($draftUI.Skills.AccountPanel.Visibility -ne 'Collapsed' -or $draftUI.Skills.TargetPicker -or $draftUI.Skills.State.Controls['debug-swarm'].Tag.Global -ne $true){throw 'Free preset still offered per-account skill editing.'}
             $draftUI.Skills.Membership.SelectedIndex=3
-            if($draftUI.Skills.AccountPanel.Visibility -ne 'Visible' -or $draftUI.Skills.TargetPicker.Visibility -ne 'Collapsed'){throw 'Custom skill access did not show the account and pool access column.'}
+            if($draftUI.Skills.AccountPanel.Visibility -ne 'Visible' -or $draftUI.Skills.TargetPicker){throw 'Custom skill access did not show the account and pool access column.'}
             $draftUI.Skills.AccountChecks['account1'].IsChecked=$false
+            $draftUI.Skills.AccountChecks['account1'].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             $draftUI.Skills.Target.SelectedItem=$draftUI.Skills.AccountItems['account2']
             $deckSkillCheck=$draftUI.Skills.State.Controls['debug-swarm']; $deckSkillCheck.IsChecked=$false
             $deckSkillCheck.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
@@ -2120,7 +2126,7 @@ try{
                     if($actual -ne $settings[$key]){throw "Reopened setting does not match saved value: $key"}
                 }
                 if($reopenedUI.Skills.Membership.SelectedIndex -ne 3 -or $reopenedUI.Skills.AccountChecks['account1'].IsChecked -or -not $reopenedUI.Skills.AccountChecks['account2'].IsChecked){throw 'Reopened custom skill access selection is incorrect.'}
-                if($reopenedUI.Skills.AccountPanel.Visibility -ne 'Visible' -or $reopenedUI.Skills.TargetPicker.Visibility -ne 'Collapsed'){throw 'Reopened custom skill access column visibility is incorrect.'}
+                if($reopenedUI.Skills.AccountPanel.Visibility -ne 'Visible' -or $reopenedUI.Skills.TargetPicker){throw 'Reopened custom skill access column visibility is incorrect.'}
                 $reopenedUI.Skills.Target.SelectedItem=$reopenedUI.Skills.AccountItems['account2']
                 if($reopenedUI.Skills.State.Controls['debug-swarm'].IsChecked){throw 'Reopened Deck skill setting lost its disabled override.'}
             }finally{$reopenedUI.Dialog.Close()}

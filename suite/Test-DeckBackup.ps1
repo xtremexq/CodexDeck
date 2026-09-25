@@ -17,6 +17,8 @@ try{
     [IO.File]::WriteAllText((Join-Path $source 'accounts/example/config.toml'),'model = "example"')
     $skillOverrides='{"Version":1,"Overrides":[{"Name":"debug-swarm","Enabled":false}]}'
     [IO.File]::WriteAllText((Join-Path $source 'accounts/example/.codexdeck-skills.json'),$skillOverrides)
+    [void][IO.Directory]::CreateDirectory((Join-Path $source 'deck'))
+    [IO.File]::WriteAllText((Join-Path $source 'deck/skill-defaults.json'),$skillOverrides)
     [IO.File]::WriteAllText((Join-Path $source 'accounts/example/history.jsonl'),'excluded chat')
     [void][IO.Directory]::CreateDirectory((Join-Path $source 'accounts/pool'))
     $poolMetadata='{"Version":1,"Kind":"pool","Accounts":["*"],"Mode":"Ordered"}'
@@ -25,11 +27,12 @@ try{
     Assert ((Export-DeckBackup $source (Join-Path $testRoot 'defaults.toml') $path $password) -eq 2) 'Wrong export account count'
     Assert (-not ([IO.File]::ReadAllText($path).Contains('not-a-real-token'))) 'Plaintext credential leaked'
     $manifest=Read-DeckBackup $path $password
-    Assert (@($manifest.Files).Count -eq 5) 'Backup included runtime history or missed config'
+    Assert (@($manifest.Files).Count -eq 6) 'Backup included runtime history or missed config'
     Assert ((Import-DeckBackup $dest (Join-Path $testRoot 'restored-defaults.toml') $manifest -RestorePreferences) -eq 2) 'Import failed'
     Assert ([IO.File]::ReadAllText((Join-Path $dest 'accounts/pool/deck-entry.json')) -eq $poolMetadata) 'Pool identity did not round-trip'
     Assert ([IO.File]::ReadAllText((Join-Path $dest 'accounts/example/auth.json')) -eq '{"synthetic":"not-a-real-token"}') 'Credentials did not round-trip'
     Assert ([IO.File]::ReadAllText((Join-Path $dest 'accounts/example/.codexdeck-skills.json')) -eq $skillOverrides) 'Deck skill overrides did not round-trip'
+    Assert ([IO.File]::ReadAllText((Join-Path $dest 'deck/skill-defaults.json')) -eq $skillOverrides) 'Shared Deck skill selections did not round-trip'
     Refuses {Import-DeckBackup $dest (Join-Path $testRoot 'restored-defaults.toml') $manifest} 'Import overwrote an existing account'
     Refuses {Read-DeckBackup $path (ConvertTo-SecureString 'Different password' -AsPlainText -Force)} 'Wrong password accepted'
     $envelope=[IO.File]::ReadAllText($path) | ConvertFrom-Json; $bytes=[Convert]::FromBase64String($envelope.Data); $bytes[0]=$bytes[0] -bxor 1; $envelope.Data=[Convert]::ToBase64String($bytes)
