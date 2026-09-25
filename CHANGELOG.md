@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.8.2 - 2026-09-25
+
+- Fixed account status text to scroll in full in the floating widget and main panel, and reduced the auto-compaction button size.
+- Made the stock Browser Harness and Debug Swarms global rules follow skill access for each account, and updated the default usage-efficiency rule.
+- Split Appearance and General settings, moving Compaction and Live Context Manager into General.
+- Collapsed skill descriptions by default, added pagination, and showed the account-and-pool access column only for custom access.
+- Fixed Settings save handlers so edits across tabs persist reliably.
+
 ## 1.8.1 - 2026-09-25
 
 - Added `codex-auth plugin marketplace add` and `codex-auth plugin add`, with a private Deck plugin store and centrally managed plugin skills shared safely across configured accounts and pools.

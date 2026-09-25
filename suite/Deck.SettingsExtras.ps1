@@ -60,7 +60,7 @@ $dialog.Add_Closed({$backupState.Manifest=$null; $password.Clear(); $repeat.Clea
 $aboutTab=[Windows.Controls.TabItem]::new(); $aboutTab.Header='About'; $about=[Windows.Controls.StackPanel]::new(); $about.Margin='4'; $aboutTab.Content=$about; [void]$tabs.Items.Add($aboutTab)
 $logo=[Windows.Controls.Image]::new(); $logo.Source=$appIcon; $logo.Width=48; $logo.Height=48; $logo.HorizontalAlignment='Left'; $logo.Margin='0,0,0,14'; [void]$about.Children.Add($logo)
 [void]$about.Children.Add((New-DeckText 'Codex Deck' '#EDF1F7' 24))
-[void]$about.Children.Add((New-DeckText 'Version 1.8.1 · Windows' '#69DEC0'))
+[void]$about.Children.Add((New-DeckText 'Version 1.8.2 · Windows' '#69DEC0'))
 $aboutText=New-DeckText "Manage your Codex accounts in one place.`n`nCheck usage, switch accounts, and schedule warm-ups from the desktop or terminal." '#B5BEC7' 14; $aboutText.Margin='0,18,0,20'; [void]$about.Children.Add($aboutText)
 [void]$about.Children.Add((New-DeckText 'Created by xtremexq · Open source · MIT license' '#929CA4'))
 $links=[Windows.Controls.WrapPanel]::new(); $links.Margin='0,20,0,20'; [void]$about.Children.Add($links)
@@ -81,6 +81,7 @@ $tabs.Add_SelectionChanged({
     $save.Visibility=if($tabs.SelectedItem.Header -in @('Backup','About')){'Collapsed'}else{'Visible'}
 }.GetNewClosure())
 $supportVisitPath=if($SmokeTest){$script:supportTestPath}else{Join-Path $root 'support-prompt.json'}
+$supportVisitContext=@{Path=$supportVisitPath;WriteJson=(Get-Command Write-DeckJson -CommandType Function -ErrorAction Stop)}
 $supportState=Read-DeckJson $supportVisitPath
 $supportDue=$true
 if($supportState.ShownAt){try{$supportDue=([DateTimeOffset]::Now - [DateTimeOffset]$supportState.ShownAt).TotalDays -ge 35}catch{}}
@@ -101,7 +102,7 @@ $dialog.Add_PreviewKeyDown({param($sender,$eventArgs) if($eventArgs.Key -eq 'Esc
 if($supportDue){
     $tabs.SelectedItem=$aboutTab; $supportOverlay.Visibility='Visible'; $dock.IsEnabled=$false
     $dialog.Add_Loaded({
-        try{Write-DeckJson $supportVisitPath @{ShownAt=[DateTimeOffset]::Now.ToString('o')}}catch{}
+        try{& $supportVisitContext.WriteJson $supportVisitContext.Path @{ShownAt=[DateTimeOffset]::Now.ToString('o')}}catch{}
         [void]$supportDismiss.Focus()
     }.GetNewClosure())
 }

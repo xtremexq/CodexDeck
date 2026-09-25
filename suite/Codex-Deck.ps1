@@ -431,7 +431,7 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
         Save-DeckView
     }
     $script:widget=$Mode -ne 'Panel'; $settings.ViewMode=$Mode
-    if(-not $widget){$summaryMarquee.Stop(); $script:summaryScroll=0; $Summary.RenderTransform.X=0}
+    $summaryMarquee.Stop(); $script:summaryScroll=0; $Summary.RenderTransform.X=0
     $window.ShowInTaskbar=-not $widget
     $visibility=if($widget){'Collapsed'}else{'Visible'}
     foreach($control in @($LaunchBar,$SettingsButton,$MinimizeButton)){$control.Visibility=$visibility}
@@ -733,19 +733,24 @@ function Show-DeckSettings {
     $tabs=[Windows.Controls.TabControl]::new(); [void]$dock.Children.Add($tabs)
     $appearanceFields=@('ViewMode','DashboardTheme','AlwaysOnTop','CloseToTray','AutoStart','OpacityPercent','FontSize','DefaultFolder','AlwaysAskFolder')
     $detailFields=@('ShowEmail','MaskEmail','ShowPlan','ShowQuota','ShowResets','ShowResetCredits','ShowCredits','ShowSessionCount','ShowUptime','ShowModel','ShowFolder','ShowWarmup','WidgetOneLine','WidgetShowEmail','WidgetShowResets','ShowCheckedAt','ShowSource','ShowProcessIds')
-    $advancedSections=[ordered]@{
-        Compaction=@('AutoCompactMode','AutoCompactThresholdPercent','AutoCompactHandoffPrompt')
-        Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
-        'Live Context Manager'=@('TrajectoryEnabled','ContextManagerEnabled','ContextManagerAutoOpen','ContextManagerProtected')
-        Analytics=@('EfficiencyAnalyticsEnabled','EfficiencySessionLimit')
+    $settingsSections=[ordered]@{
+        General=[ordered]@{
+            Compaction=@('AutoCompactMode','AutoCompactThresholdPercent','AutoCompactHandoffPrompt')
+            'Live Context Manager'=@('TrajectoryEnabled','ContextManagerEnabled','ContextManagerAutoOpen','ContextManagerProtected')
+        }
+        Advanced=[ordered]@{
+            Failover=@('FailoverEnabled','FailoverMode','FailoverAccounts')
+            Analytics=@('EfficiencyAnalyticsEnabled','EfficiencySessionLimit')
+        }
     }
     $groups=[ordered]@{
-        General=@($appearanceFields + $detailFields)
+        Appearance=@($appearanceFields + $detailFields)
+        General=@($settingsSections.General.Values | ForEach-Object {$_})
         'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupPlanTypes','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
-        Advanced=@($advancedSections.Values | ForEach-Object {$_})
+        Advanced=@($settingsSections.Advanced.Values | ForEach-Object {$_})
         Integrations=@('ContextOptimizer')
     }
-    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';General='Window behavior and reading comfort';Details='Choose what appears in expanded account entries and the widget';Advanced='Conversation routing, compaction, live context, and analytics';Compaction='Press C in the codex-auth dashboard to opt in for a launch. Native uses Codex automatic compaction. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 55% means compaction starts at 45% used. Account, pool and failover conversations are supported.';Integrations='Install and update optional tools and catalogs. Choose projects for CodeGraph below after installing it.';'Live Context Manager'='Inspect the live trajectory and edit what Deck sends on the next model request. Raw rollout history stays unchanged. Direct launches remain view-only.';Analytics='Independent efficiency analysis measures repeated commands and paths, large tool results, token/cache patterns and compaction activity.';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
+    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';General='Compaction and live context behavior';Details='Choose what appears in expanded account entries and the widget';Advanced='Failover and analytics';Compaction='Press C in the codex-auth dashboard to opt in for a launch. Native uses Codex automatic compaction. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 55% means compaction starts at 45% used. Account, pool and failover conversations are supported.';Integrations='Install and update optional tools and catalogs. Choose projects for CodeGraph below after installing it.';'Live Context Manager'='Inspect the live trajectory and edit what Deck sends on the next model request. Raw rollout history stays unchanged. Direct launches remain view-only.';Analytics='Independent efficiency analysis measures repeated commands and paths, large tool results, token/cache patterns and compaction activity.';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
     $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupPlanTypes='Account types (select one or more)';WarmupAccounts='Specific accounts (optional with account types; select one or more)';WarmupModel='Paid-plan model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
     $labels.AutoCompactMode='Auto-compact implementation'
     $labels.AutoCompactThresholdPercent='Auto-compact when context remaining (%)'
@@ -763,7 +768,7 @@ function Show-DeckSettings {
         $tab=[Windows.Controls.TabItem]::new(); $tab.Header=$group
         $scroll=[Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility='Auto'; $scroll.HorizontalScrollBarVisibility='Disabled'
         $panel=[Windows.Controls.StackPanel]::new(); $panel.Margin='2,0,12,0'; $scroll.Content=$panel; $tab.Content=$scroll
-        if($group -notin @('General','Checks & Warmup','Advanced')){
+        if($group -notin @('Appearance','General','Checks & Warmup','Advanced')){
             $description=New-DeckText $descriptions[$group] '#929CA4'; $description.Margin='0,0,0,20'; [void]$panel.Children.Add($description)
         }
         $panels[$group]=$panel; [void]$tabs.Items.Add($tab)
@@ -787,11 +792,11 @@ function Show-DeckSettings {
     foreach ($key in @(@($groups.Values | ForEach-Object { $_ }) + @($settings.Keys) | Select-Object -Unique)) {
         if ($key -in @('Width','Height','WidgetWidth','WidgetHeight','WidgetAutoHeight','EfficiencyLimitVersion','AccountPickerUsage','SkillAccessAccounts','CodeGraphEnabled','CodeGraphProjects','CodeGraphProfile','BrowserHarnessEnabled')) { continue }
         $group=@($groups.Keys | Where-Object { $key -in $groups[$_] })[0]
-        if(-not $group){$group='General'}
+        if(-not $group){$group='Appearance'}
         $panel=if($detailPanels.ContainsKey($key)){$detailPanels[$key]}else{$panels[$group]}
-        if($group -eq 'Advanced'){
-            foreach($section in $advancedSections.Keys){
-                if($key -eq $advancedSections[$section][0]){
+        if($settingsSections.Contains($group)){
+            foreach($section in $settingsSections[$group].Keys){
+                if($key -eq $settingsSections[$group][$section][0]){
                     $sectionTitle=New-DeckText $section '#EDF1F7' 18; $sectionTitle.Margin='0,10,0,5'; [void]$panel.Children.Add($sectionTitle)
                     $sectionHelp=New-DeckText $descriptions[$section] '#929CA4' 11; $sectionHelp.Margin='0,0,0,16'; [void]$panel.Children.Add($sectionHelp)
                     break
@@ -881,15 +886,16 @@ function Show-DeckSettings {
             $control.Add_SelectionChanged({$themeNote.Text=$themeDescriptions[[string]$control.SelectedItem]}.GetNewClosure())
         }
     }
-    $detailsTitle=New-DeckText 'Account and widget details' '#EDF1F7' 18; $detailsTitle.Margin='0,14,0,5'; [void]$panels.General.Children.Add($detailsTitle)
-    $detailsHelp=New-DeckText $descriptions.Details '#929CA4' 11; $detailsHelp.Margin='0,0,0,16'; [void]$panels.General.Children.Add($detailsHelp)
-    [void]$panels.General.Children.Add($detailWrap)
+    $detailsTitle=New-DeckText 'Account and widget details' '#EDF1F7' 18; $detailsTitle.Margin='0,14,0,5'; [void]$panels.Appearance.Children.Add($detailsTitle)
+    $detailsHelp=New-DeckText $descriptions.Details '#929CA4' 11; $detailsHelp.Margin='0,0,0,16'; [void]$panels.Appearance.Children.Add($detailsHelp)
+    [void]$panels.Appearance.Children.Add($detailWrap)
     $integrationUI=@{}
     $settingsTabRefs=@{}
+    $integrationVisibilityContext=@{SuiteRoot=$suite;GetStatus=(Get-Command Get-DeckIntegrationStatus -CommandType Function -ErrorAction Stop)}
     $integrationVisibility={
-        $rtk=(Get-DeckIntegrationStatus $suite rtk -SkipHash).Valid
-        $headroom=(Get-DeckIntegrationStatus $suite headroom -SkipHash).Valid
-        $codegraph=(Get-DeckIntegrationStatus $suite codegraph -SkipHash).Valid
+        $rtk=(& $integrationVisibilityContext.GetStatus $integrationVisibilityContext.SuiteRoot rtk -SkipHash).Valid
+        $headroom=(& $integrationVisibilityContext.GetStatus $integrationVisibilityContext.SuiteRoot headroom -SkipHash).Valid
+        $codegraph=(& $integrationVisibilityContext.GetStatus $integrationVisibilityContext.SuiteRoot codegraph -SkipHash).Valid
         $optimizer=$controls.ContextOptimizer
         $selected=[string]$optimizer.SelectedItem
         $optimizer.Items.Clear(); [void]$optimizer.Items.Add('Off')
@@ -929,8 +935,17 @@ function Show-DeckSettings {
     & $updateSpecificAccountsVisibility
     $integrationCatalog=Get-DeckIntegrationCatalog $suite
     $syncAasTab={
-        if((Get-DeckIntegrationStatus $suite aas_catalog -SkipHash).Valid -and $tabs.SelectedItem -eq $settingsTabRefs.Skills){& $renderCatalog}
+        if((& $integrationVisibilityContext.GetStatus $integrationVisibilityContext.SuiteRoot aas_catalog -SkipHash).Valid -and $tabs.SelectedItem -eq $settingsTabRefs.Skills){& $renderCatalog}
     }.GetNewClosure()
+    $integrationTaskCommands=@{
+        Stop=Get-Command Stop-DeckTask -CommandType Function -ErrorAction Stop
+        Ready=Get-Command Test-DeckTaskReady -CommandType Function -ErrorAction Stop
+        Failure=Get-Command Get-DeckTaskFailureMessage -CommandType Function -ErrorAction Stop
+        Dispose=Get-Command Dispose-DeckTask -CommandType Function -ErrorAction Stop
+        Start=Get-Command Start-DeckTask -CommandType Function -ErrorAction Stop
+        BrowserVersion=Get-Command Get-DeckBrowserHarnessVersionWorkerCode -CommandType Function -ErrorAction Stop
+        WorkerCode=Get-Command Get-DeckIntegrationWorkerCode -CommandType Function -ErrorAction Stop
+    }
     foreach($integrationName in @('rtk','headroom','codegraph','browser_harness','aas_catalog')){
         $component=$integrationCatalog.components.$integrationName
         $card=[Windows.Controls.Border]::new(); $card.Padding='12'; $card.Margin='0,2,10,12'; $card.CornerRadius='7'; $card.Background='#171C1F'; $card.BorderBrush='#2B343A'; $card.BorderThickness='1'
@@ -941,7 +956,7 @@ function Show-DeckSettings {
         $install=[Windows.Controls.Button]::new(); $install.Padding='10,6'; $install.Margin='0,0,8,0'; [void]$row.Children.Add($install)
         $rollback=[Windows.Controls.Button]::new(); $rollback.Content='Roll back'; $rollback.Padding='10,6'; if($integrationName -ne 'browser_harness'){[void]$row.Children.Add($rollback)}
         $refresh={
-            $local=Get-DeckIntegrationStatus $suite $integrationName -SkipHash
+            $local=& $integrationVisibilityContext.GetStatus $integrationVisibilityContext.SuiteRoot $integrationName -SkipHash
             $statusText.Text=if($local.Valid){"Installed $($local.Version) · $($local.License) · updates only on request"}else{'Not installed · no files are downloaded while disabled'}
             $install.Content=if($local.Valid){if($integrationName -eq 'browser_harness'){'Check for updates'}else{'Check & update'}}else{'Install now'}
             $rollback.IsEnabled=@($local.Versions).Count -gt 1
@@ -954,22 +969,22 @@ function Show-DeckSettings {
             if(-not $task){$operation.Timer.Stop();return}
             $limit=if($operation.Mode -eq 'Version'){45}else{600}
             if(([DateTimeOffset]::UtcNow-$operation.Started).TotalSeconds -gt $limit){
-                $operation.Timer.Stop();Stop-DeckTask $task
+                $operation.Timer.Stop();& $integrationTaskCommands.Stop $task
                 $statusText.Text=if($operation.Mode -eq 'Version'){'Update check timed out. Try again.'}else{'Install timed out. Check your connection and try again.'}
                 $install.Content=if($operation.Mode -eq 'Version'){'Check for updates'}else{'Retry install'}
-                $install.IsEnabled=$true;Dispose-DeckTask $task;$operation.Worker=$null
+                $install.IsEnabled=$true;& $integrationTaskCommands.Dispose $task;$operation.Worker=$null
                 return
             }
             try{
-                if(-not (Test-DeckTaskReady $task)){return}
+                if(-not (& $integrationTaskCommands.Ready $task)){return}
                 $operation.Timer.Stop()
                 if($task.Process.ExitCode -ne 0){
-                    throw (Get-DeckTaskFailureMessage $task)
+                    throw (& $integrationTaskCommands.Failure $task)
                 }
                 if($operation.Mode -eq 'Version'){
                     $available=($task.Out.Result -split "`r?`n" | Where-Object {$_ -match '^\d+(?:\.\d+){1,3}$'} | Select-Object -Last 1)
                     if(-not $available){throw 'No version was returned by PyPI.'}
-                    $current=(Get-DeckIntegrationStatus $suite $integrationName).Version
+                    $current=(& $integrationVisibilityContext.GetStatus $integrationVisibilityContext.SuiteRoot $integrationName).Version
                     if([Version]$available -gt [Version]$current){$install.Tag=$available;$statusText.Text="Version $available available. Choose Update to install it.";$install.Content="Update to $available"}
                     else{$statusText.Text="Installed $current · already current";$install.Content='Check for updates'}
                 }else{$install.Tag=$null;& $refresh;& $integrationVisibility;& $syncAasTab}
@@ -978,20 +993,20 @@ function Show-DeckSettings {
                 $statusText.Text=$(if($operation.Mode -eq 'Version'){'Update check failed: '}else{'Install failed: '})+$_.Exception.Message
                 $install.Content=if($operation.Mode -eq 'Version'){'Check for updates'}else{'Retry install'}
             }finally{
-                if(-not $operation.Timer.IsEnabled){$install.IsEnabled=$true;Dispose-DeckTask $task;$operation.Worker=$null}
+                if(-not $operation.Timer.IsEnabled){$install.IsEnabled=$true;& $integrationTaskCommands.Dispose $task;$operation.Worker=$null}
             }
         }.GetNewClosure())
         $install.Add_Click({
             try{
                 $install.IsEnabled=$false;$install.Content='Working…'
-                if($integrationName -eq 'browser_harness' -and (Get-DeckIntegrationStatus $suite $integrationName).Valid -and -not $install.Tag){
+                if($integrationName -eq 'browser_harness' -and (& $integrationVisibilityContext.GetStatus $integrationVisibilityContext.SuiteRoot $integrationName).Valid -and -not $install.Tag){
                     $statusText.Text='Checking the latest version…'
                     $operation.Mode='Version'
-                    $operation.Worker=Start-DeckTask (Get-DeckBrowserHarnessVersionWorkerCode $suite) 'IntegrationVersion' $integrationName
+                    $operation.Worker=& $integrationTaskCommands.Start (& $integrationTaskCommands.BrowserVersion $integrationVisibilityContext.SuiteRoot) 'IntegrationVersion' $integrationName
                 }else{
                     $statusText.Text='Installing or checking the latest release…'
                     $operation.Mode='Install'
-                    $operation.Worker=Start-DeckTask (Get-DeckIntegrationWorkerCode $suite @($integrationName) -Update) 'Integration' $integrationName
+                    $operation.Worker=& $integrationTaskCommands.Start (& $integrationTaskCommands.WorkerCode $integrationVisibilityContext.SuiteRoot @($integrationName) -Update) 'Integration' $integrationName
                 }
                 $operation.Started=[DateTimeOffset]::UtcNow
                 $operation.Timer.Start()
@@ -1063,51 +1078,56 @@ function Show-DeckSettings {
     $settingsTabRefs.BrowserSkillCard=$browserSkillCard
     $settingsTabRefs.Skills=$deckSkillTab
     & $integrationVisibility
-    $orderedTabs=@('General','Checks & Warmup','Environments','Skills','Advanced','Integrations','Backup','About')
+    $orderedTabs=@('Appearance','General','Checks & Warmup','Environments','Skills','Advanced','Integrations','Backup','About')
     $tabsByName=@{}; foreach($tab in @($tabs.Items)){$tabsByName[[string]$tab.Header]=$tab}
     $selectedSettingsTab=$tabs.SelectedItem
     $tabs.Items.Clear(); foreach($header in $orderedTabs){[void]$tabs.Items.Add($tabsByName[$header])}
     $tabs.SelectedItem=if($selectedSettingsTab -and $tabs.Items.Contains($selectedSettingsTab)){$selectedSettingsTab}else{$tabsByName.General}
     $settingsError=New-DeckText '' '#F17D8D'; $settingsError.Margin='0,10,0,0'; $settingsError.FontWeight='SemiBold'; [Windows.Controls.DockPanel]::SetDock($settingsError,'Bottom'); $dock.Children.Insert(0,$settingsError)
+    $settingsSaveContext=@{Root=$script:root;SuiteRoot=$script:suite;SmokeTest=[bool]$SmokeTest;OriginalSettings=$script:settings}
+    $saveCommands=@{}
+    foreach($name in @('Get-DeckDefaults','Write-DeckJson','Sync-DeckBundledSkillsForAllEntries','Get-DeckEntryNames','Sync-DeckBrowserHarnessSkill','Get-DeckEntryDirectory','Test-DeckSkillAccess','Sync-DeckWarmupStartup','Start-DeckWarmupScheduler','Set-DeckSavedSettings','Get-DeckSettings','ConvertTo-DeckWarmupPlanTypes','Get-DeckAccounts','ConvertTo-DeckWarmupTimes','Get-DeckIntegrationStatus','Start-DeckTask','Get-DeckIntegrationWorkerCode','Stop-DeckTask','Test-DeckTaskReady','Get-DeckTaskFailureMessage','Dispose-DeckTask')){
+        $saveCommands[$name]=Get-Command $name -CommandType Function -ErrorAction Stop
+    }
     $finishSettingsSave={param($updated)
-        Write-DeckJson (Join-Path $root 'settings.json') $updated
-        if(-not $SmokeTest -and $updated.SkillAccessAccounts -cne $settings.SkillAccessAccounts){foreach($warning in @(Sync-DeckBundledSkillsForAllEntries $suite)){if($warning){Write-Warning $warning}}}
-        if(-not $SmokeTest -and ($updated.BrowserHarnessEnabled -ne $settings.BrowserHarnessEnabled -or $updated.SkillAccessAccounts -cne $settings.SkillAccessAccounts)){
-            foreach($entry in @(Get-DeckEntryNames $suite)){
-                try{Sync-DeckBrowserHarnessSkill $suite (Get-DeckEntryDirectory $suite $entry) ([bool]$updated.BrowserHarnessEnabled -and (Test-DeckSkillAccess $suite $entry $updated.SkillAccessAccounts))}
+        & $saveCommands['Write-DeckJson'] (Join-Path $settingsSaveContext.Root 'settings.json') $updated
+        if(-not $settingsSaveContext.SmokeTest -and $updated.SkillAccessAccounts -cne $settingsSaveContext.OriginalSettings.SkillAccessAccounts){foreach($warning in @(& $saveCommands['Sync-DeckBundledSkillsForAllEntries'] $settingsSaveContext.SuiteRoot)){if($warning){Write-Warning $warning}}}
+        if(-not $settingsSaveContext.SmokeTest -and ($updated.BrowserHarnessEnabled -ne $settingsSaveContext.OriginalSettings.BrowserHarnessEnabled -or $updated.SkillAccessAccounts -cne $settingsSaveContext.OriginalSettings.SkillAccessAccounts)){
+            foreach($entry in @(& $saveCommands['Get-DeckEntryNames'] $settingsSaveContext.SuiteRoot)){
+                try{& $saveCommands['Sync-DeckBrowserHarnessSkill'] $settingsSaveContext.SuiteRoot (& $saveCommands['Get-DeckEntryDirectory'] $settingsSaveContext.SuiteRoot $entry) ([bool]$updated.BrowserHarnessEnabled -and (& $saveCommands['Test-DeckSkillAccess'] $settingsSaveContext.SuiteRoot $entry $updated.SkillAccessAccounts))}
                 catch{Write-Warning "${entry}: Browser Harness skill: $($_.Exception.Message)"}
             }
         }
-        if(-not $SmokeTest){Sync-DeckWarmupStartup $suite $updated; if($updated.WarmupEnabled){Start-DeckWarmupScheduler $suite}}
-        Set-DeckSavedSettings (Get-DeckSettings $root)
+        if(-not $settingsSaveContext.SmokeTest){& $saveCommands['Sync-DeckWarmupStartup'] $settingsSaveContext.SuiteRoot $updated; if($updated.WarmupEnabled){& $saveCommands['Start-DeckWarmupScheduler'] $settingsSaveContext.SuiteRoot}}
+        & $saveCommands['Set-DeckSavedSettings'] (& $saveCommands['Get-DeckSettings'] $settingsSaveContext.Root)
         $dialog.Close()
     }.GetNewClosure()
     $save.Add_Click({
         $worker=$null
         try {
             $settingsError.Text=''; $save.Content='Save settings'; $save.IsEnabled=$false
-            $updated=Get-DeckDefaults
-            foreach ($key in $settings.Keys) {
-                if (-not $controls.ContainsKey($key)) { $updated[$key]=$settings[$key]; continue }
+            $updated=& $saveCommands['Get-DeckDefaults']
+            foreach ($key in $settingsSaveContext.OriginalSettings.Keys) {
+                if (-not $controls.ContainsKey($key)) { $updated[$key]=$settingsSaveContext.OriginalSettings[$key]; continue }
                 if ($key -eq 'WarmupSchedulingEnabled') { $updated[$key]=[bool]$controls[$key].Tag }
-                elseif ($key -eq 'WarmupPlanTypes') { $updated[$key]=ConvertTo-DeckWarmupPlanTypes (@($controls[$key].Resources['ScopeMenu'].Items | Where-Object IsChecked | ForEach-Object {[string]$_.Tag}) -join ',') }
-                elseif ($settings[$key] -is [bool]) { $updated[$key]=[bool]$controls[$key].IsChecked }
+                elseif ($key -eq 'WarmupPlanTypes') { $updated[$key]=& $saveCommands['ConvertTo-DeckWarmupPlanTypes'] (@($controls[$key].Resources['ScopeMenu'].Items | Where-Object IsChecked | ForEach-Object {[string]$_.Tag}) -join ',') }
+                elseif ($settingsSaveContext.OriginalSettings[$key] -is [bool]) { $updated[$key]=[bool]$controls[$key].IsChecked }
                 elseif ($key -eq 'WarmupAccounts') { $updated[$key]=if($specificAccountsToggle.IsChecked){@($controls[$key].SelectedItems) -join ','}else{''} }
-                elseif ($key -in @('PollMinutes','MinimumGapSeconds') -and -not $controls.AutoCheck.IsChecked) { $updated[$key]=$settings[$key] }
+                elseif ($key -in @('PollMinutes','MinimumGapSeconds') -and -not $controls.AutoCheck.IsChecked) { $updated[$key]=$settingsSaveContext.OriginalSettings[$key] }
                 elseif ($key -eq 'FailoverAccounts') {
                     $membership=$controls[$key].Resources['Membership']; $members=$controls[$key].Resources['Members']
                     if($membership.SelectedIndex -notin 0..3){throw 'Choose failover quota accounts.'}
                     $updated[$key]=if($membership.SelectedIndex -eq 3){@($members.SelectedItems | ForEach-Object {[string]$_}) -join ','}else{@('*','*free','*paid')[$membership.SelectedIndex]}
                 }
                 elseif ($key -in @('WarmupModel','ViewMode','DashboardTheme','FailoverMode','AutoCompactMode','ContextOptimizer')) { $updated[$key]=[string]$controls[$key].SelectedItem }
-                elseif ($settings[$key] -is [int]) { $updated[$key]=[int]$controls[$key].Text }
+                elseif ($settingsSaveContext.OriginalSettings[$key] -is [int]) { $updated[$key]=[int]$controls[$key].Text }
                 else { $updated[$key]=$controls[$key].Text.Trim() }
             }
             if(-not $updated.AlwaysAskFolder -and -not (Test-Path -LiteralPath $updated.DefaultFolder -PathType Container)){throw 'Choose an existing terminal start folder, or enable Always ask.'}
             if ($updated.FailoverMode -notin @('Ordered','Best')) { throw 'Choose Ordered or Best failover selection.' }
             if ($updated.FailoverEnabled -or $updated.FailoverAccounts) {
-                . (Join-Path $suite 'Deck.Failover.ps1')
-                $validated=Resolve-DeckFailoverPool $suite $updated.FailoverAccounts Ordered
+                . (Join-Path $settingsSaveContext.SuiteRoot 'Deck.Failover.ps1')
+                $validated=Resolve-DeckFailoverPool $settingsSaveContext.SuiteRoot $updated.FailoverAccounts Ordered
                 if($updated.FailoverAccounts -notin @('*','*free','*paid')){$updated.FailoverAccounts=$validated.Pool -join ','}
             }
             if ($updated.WarmupModel -notmatch '^gpt-[a-zA-Z0-9.-]+$') { throw 'Enter a model ID, e.g. gpt-5.6-luna.' }
@@ -1119,10 +1139,10 @@ function Show-DeckSettings {
             if ($updated.EfficiencySessionLimit -lt 10 -or $updated.EfficiencySessionLimit -gt 5000) { throw 'Efficiency sessions to analyze must be 10-5000.' }
             if ($updated.AutoCompactMode -eq 'Custom' -and ([string]::IsNullOrWhiteSpace($updated.AutoCompactHandoffPrompt) -or $updated.AutoCompactHandoffPrompt.Length -gt 4000 -or -not $updated.AutoCompactHandoffPrompt.Contains('DECK_HANDOFF'))) { throw 'The handoff request must be at most 4000 characters and include DECK_HANDOFF.' }
             foreach ($name in @($updated.WarmupAccounts -split '[,;\s]+' | Where-Object { $_ })) {
-                if ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -notin @(Get-DeckAccounts)) { throw "Unknown warm-up account: $name" }
+                if ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -notin @(& $saveCommands['Get-DeckAccounts'])) { throw "Unknown warm-up account: $name" }
             }
             if ($updated.WarmupEnabled -and -not $updated.WarmupPlanTypes -and -not $updated.WarmupAccounts) { throw 'Select at least one warm-up account type or specific account.' }
-            $updated.WarmupTimes=ConvertTo-DeckWarmupTimes $updated.WarmupTimes
+            $updated.WarmupTimes=& $saveCommands['ConvertTo-DeckWarmupTimes'] $updated.WarmupTimes
             if($updated.WarmupTimedEnabled -and -not $updated.WarmupTimes){throw 'Enter at least one daily time.'}
             if($tabs.SelectedItem -eq $environmentTab -or $environmentState.Pools.Count){& $rememberPool}
             & $saveEnvironments -ValidateOnly
@@ -1137,32 +1157,32 @@ function Show-DeckSettings {
             & $saveEnvironments
             & $saveDeckSkills
             $needed=@()
-            if(-not $SmokeTest){
+            if(-not $settingsSaveContext.SmokeTest){
                 if($updated.ContextOptimizer -eq 'RTK'){$needed+='rtk'}elseif($updated.ContextOptimizer -eq 'Headroom'){$needed+='headroom'}
                 if($updated.CodeGraphProjects){$needed+='codegraph'}
                 if($updated.BrowserHarnessEnabled){$needed+='browser_harness'}
-                $needed=@($needed | Where-Object {-not (Get-DeckIntegrationStatus $suite $_).Valid})
+                $needed=@($needed | Where-Object {-not (& $saveCommands['Get-DeckIntegrationStatus'] $settingsSaveContext.SuiteRoot $_).Valid})
             }
             if($needed.Count){
                 $save.Content='Installing integrations…'
                 $settingsError.Text='Installing selected integrations in the background. Settings will save when installation finishes.'
-                $worker=Start-DeckTask (Get-DeckIntegrationWorkerCode $suite $needed) 'Integration' ''
+                $worker=& $saveCommands['Start-DeckTask'] (& $saveCommands['Get-DeckIntegrationWorkerCode'] $settingsSaveContext.SuiteRoot $needed) 'Integration' ''
                 $started=[DateTimeOffset]::UtcNow
                 $timer=[Windows.Threading.DispatcherTimer]::new();$timer.Interval=[TimeSpan]::FromMilliseconds(200)
                 $timer.Add_Tick({
                     if(([DateTimeOffset]::UtcNow-$started).TotalSeconds -gt 600){
-                        $timer.Stop();Stop-DeckTask $worker
+                        $timer.Stop();& $saveCommands['Stop-DeckTask'] $worker
                         $settingsError.Text='Integration install timed out. Check your connection and try saving again.'
-                        $save.Content='Save settings';$save.IsEnabled=$true;Dispose-DeckTask $worker
+                        $save.Content='Save settings';$save.IsEnabled=$true;& $saveCommands['Dispose-DeckTask'] $worker
                         return
                     }
-                    if(-not (Test-DeckTaskReady $worker)){return}
+                    if(-not (& $saveCommands['Test-DeckTaskReady'] $worker)){return}
                     $timer.Stop()
                     try{
-                        if($worker.Process.ExitCode -ne 0){throw (Get-DeckTaskFailureMessage $worker)}
+                        if($worker.Process.ExitCode -ne 0){throw (& $saveCommands['Get-DeckTaskFailureMessage'] $worker)}
                         & $finishSettingsSave $updated
                     }catch{$settingsError.Text='Settings were not saved: '+$_.Exception.Message;$save.Content='Save settings'}
-                    finally{$save.IsEnabled=$true;Dispose-DeckTask $worker}
+                    finally{$save.IsEnabled=$true;& $saveCommands['Dispose-DeckTask'] $worker}
                 }.GetNewClosure())
                 $timer.Start()
                 return
@@ -1171,7 +1191,7 @@ function Show-DeckSettings {
         } catch { $settingsError.Text='Settings were not saved: '+$_.Exception.Message; $settingsError.BringIntoView(); $save.Content='Save settings' }
         finally {if(-not $worker){$save.IsEnabled=$true}}
     }.GetNewClosure())
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;Membership=$skillMembership;Members=$skillMembers;AccountItems=$skillAccountItems;AccountChecks=$skillAccountChecks;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState;Plugin=@{Marketplace=$pluginMarketplaceSource;AddMarketplace=$pluginMarketplaceAdd;Selector=$pluginSelector;Install=$pluginInstall;Status=$pluginStatus};Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus;Previous=$catalogPrevious;Next=$catalogNext;PageInput=$catalogPageInput;PageGo=$catalogPageGo;PageLabel=$catalogPageLabel}}}}
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;TargetPicker=$skillTargetPicker;Membership=$skillMembership;Members=$skillMembers;AccountPanel=$skillAccountPanel;AccountItems=$skillAccountItems;AccountChecks=$skillAccountChecks;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState;Previous=$deckSkillPrevious;Next=$deckSkillNext;PageLabel=$deckSkillPageLabel;Plugin=@{Marketplace=$pluginMarketplaceSource;AddMarketplace=$pluginMarketplaceAdd;Selector=$pluginSelector;Install=$pluginInstall;Status=$pluginStatus};Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus;Previous=$catalogPrevious;Next=$catalogNext;PageInput=$catalogPageInput;PageGo=$catalogPageGo;PageLabel=$catalogPageLabel}}}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -1272,8 +1292,9 @@ function Update-DeckSummaryOverflow {
     if(-not $Summary.Text){$Summary.Width=0; $SummaryEllipsis.Visibility='Collapsed'; return}
     if($script:summaryMeasuredText -cne $Summary.Text){
         $typeface=[Windows.Media.Typeface]::new($Summary.FontFamily,$Summary.FontStyle,$Summary.FontWeight,$Summary.FontStretch)
-        $measurement=[Windows.Media.FormattedText]::new($Summary.Text,[Globalization.CultureInfo]::CurrentUICulture,[Windows.FlowDirection]::LeftToRight,$typeface,$Summary.FontSize,$Summary.Foreground)
-        $Summary.Width=[Math]::Ceiling($measurement.WidthIncludingTrailingWhitespace)+2
+        $pixelsPerDip=[Windows.Media.VisualTreeHelper]::GetDpi($Summary).PixelsPerDip
+        $measurement=[Windows.Media.FormattedText]::new($Summary.Text,[Globalization.CultureInfo]::CurrentUICulture,[Windows.FlowDirection]::LeftToRight,$typeface,$Summary.FontSize,$Summary.Foreground,$pixelsPerDip)
+        $Summary.Width=[Math]::Ceiling($measurement.WidthIncludingTrailingWhitespace)+6
         $script:summaryMeasuredText=$Summary.Text
     }
     $overflow=$Summary.Width-$SummaryViewport.ActualWidth
@@ -1290,11 +1311,11 @@ $summaryMarquee.Add_Tick({
     if($summaryScroll -gt $overflow+28){$script:summaryScroll=0}
     $Summary.RenderTransform.X=-[Math]::Min($summaryScroll,$overflow)
 })
-$SummaryButton.Add_MouseEnter({
-    if(-not $widget){return}
+function Start-DeckSummaryMarquee {
     Update-DeckSummaryOverflow
     if($Summary.Width-$SummaryViewport.ActualWidth -gt 2){$SummaryEllipsis.Visibility='Collapsed'; $script:summaryScroll=0; $summaryMarquee.Start()}
-})
+}
+$SummaryButton.Add_MouseEnter({Start-DeckSummaryMarquee})
 $SummaryButton.Add_MouseLeave({$summaryMarquee.Stop(); $script:summaryScroll=0; $Summary.RenderTransform.X=0; Update-DeckSummaryOverflow})
 $SummaryViewport.Add_SizeChanged({Update-DeckSummaryOverflow})
 function Render-Deck {
@@ -1705,7 +1726,7 @@ try{
         if($trayLabels.Count -ne 5 -or ($trayLabels -join '|') -ne 'Open Deck|Open Live Context|Open Analytics|Open Settings|Quit Deck'){throw 'Tray menu labels or ordering are incorrect.'}
         $script:supportTestPath=Join-Path ([IO.Path]::GetTempPath()) ('deck-support-test-'+[guid]::NewGuid().ToString('N')+'.json')
         $settingsTest=Show-DeckSettings -TestUI
-        if($settingsTest.Controls.DashboardTheme.Items.Count -ne 5 -or $settingsTest.Controls.DashboardTheme.SelectedItem -ne 'Default'){throw 'Dashboard theme choices or default missing from General.'}
+        if($settingsTest.Controls.DashboardTheme.Items.Count -ne 5 -or $settingsTest.Controls.DashboardTheme.SelectedItem -ne 'Default'){throw 'Dashboard theme choices or default missing from Appearance.'}
         $integrationTest=$settingsTest.Integrations.rtk
         $integrationTest.Install.IsEnabled=$false; $integrationTest.Install.Content='Working…'
         $integrationTest.Operation.Mode='Install'
@@ -1728,12 +1749,14 @@ try{
         $failoverMembership.SelectedIndex=3
         $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
         if ($headers -notcontains 'Environments') { throw 'Environment sharing Settings tab missing.' }
-        $expectedHeaders='General|Checks & Warmup|Environments|Skills|Advanced|Integrations|Backup|About'
+        $expectedHeaders='Appearance|General|Checks & Warmup|Environments|Skills|Advanced|Integrations|Backup|About'
         if (($headers -join '|') -ne $expectedHeaders) { throw 'Settings tabs are missing or out of order.' }
         if ($settingsTest.Controls.TrajectoryEnabled.IsChecked -or $settingsTest.Controls.ContextManagerEnabled.IsChecked -or $settingsTest.Controls.ContextManagerAutoOpen.IsChecked -or -not $settingsTest.Controls.EfficiencyAnalyticsEnabled.IsChecked) { throw 'Trajectory/context defaults or enabled-by-default efficiency analytics are incorrect.' }
         if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '600') { throw 'Efficiency analytics session limit default failed.' }
         if ($headers -notcontains 'Skills' -or -not $settingsTest.Skills.State.Controls.ContainsKey('debug-swarm') -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked) { throw 'Globally enabled Deck skills Settings tab missing or invalid.' }
         if($settingsTest.Skills.Target -ne $settingsTest.Skills.Members -or -not $settingsTest.Skills.Plugin.AddMarketplace -or -not $settingsTest.Skills.Plugin.Install){throw 'Skills settings must use one account access/selection list and expose plugin installation.'}
+        if($settingsTest.Skills.AccountPanel.Visibility -ne 'Collapsed' -or $settingsTest.Skills.TargetPicker.Visibility -ne 'Visible'){throw 'Preset skill access must use the compact account editor without the access column.'}
+        if($settingsTest.Skills.State.PageCount -ne 1 -or $settingsTest.Skills.PageLabel.Text -ne 'Page 1 of 1' -or $settingsTest.Skills.State.Expanders['debug-swarm'].Tag.Details.Visibility -ne 'Collapsed'){throw 'Managed skills must be paginated and collapsed by default.'}
         $skillOrder=@(Get-DeckBundledSkills $suite | ForEach-Object Name)
         if($skillOrder[-1] -cne 'debug-swarm'){throw 'Debug Swarm must appear after the UIZZE skills.'}
         if($settingsTest.Controls.ContainsKey('UizzeMcpEnabled') -or -not $settingsTest.Integrations.ContainsKey('aas_catalog')){throw 'Integrations must show optional AAS catalog without paid UIZZE MCP.'}
@@ -1769,7 +1792,7 @@ try{
         if($environmentUI.Name.Text -ne 'pool' -or $environmentUI.Name.SelectedItem -ne 'pool'){throw 'Environment picker did not select its default pool.'}
         [void]$environmentUI.Name.ApplyTemplate(); $environmentEditor=$environmentUI.Name.Template.FindName('PART_EditableTextBox',$environmentUI.Name)
         if(-not $environmentEditor -or $environmentEditor.Text -ne 'pool' -or $environmentEditor.Visibility -ne 'Visible'){throw 'Editable environment picker did not render its selected name.'}
-        if($environmentUI.Membership.Items.Count -ne 4 -or $environmentUI.Membership.SelectedIndex -ne 0 -or $environmentUI.Mode.SelectedItem -ne 'Ordered' -or $environmentUI.Members.Visibility -ne 'Collapsed'){throw 'Membership/rotation defaults failed.'}
+        if($environmentUI.Membership.Items.Count -ne 4 -or $environmentUI.Membership.SelectedIndex -ne 0 -or $environmentUI.Mode.SelectedItem -ne 'Ordered' -or $environmentUI.Members.Visibility -ne 'Collapsed'){throw "Membership/rotation defaults failed: count=$($environmentUI.Membership.Items.Count) index=$($environmentUI.Membership.SelectedIndex) mode=$($environmentUI.Mode.SelectedItem) visibility=$($environmentUI.Members.Visibility)."}
         $environmentUI.Membership.SelectedIndex=3
         if($environmentUI.Members.Visibility -ne 'Visible'){throw 'Selected membership did not reveal account list.'}
         $environmentUI.Membership.SelectedIndex=1
@@ -1979,6 +2002,9 @@ try{
         }
         foreach($testMode in @('Panel','Widget')){
             Set-DeckMode $testMode -Initial; $script:expandedRows=@{}; $script:lastRender=''; Render-Deck
+            $tickerText=$Summary.Text; $Summary.Text=('Deck status ticker validation  ' * 12); $script:summaryMeasuredText=''; $window.Content.UpdateLayout(); Start-DeckSummaryMarquee
+            if(-not $summaryMarquee.IsEnabled -or $Summary.Width -le $SummaryViewport.ActualWidth){throw "$testMode summary ticker did not retain and animate its complete text."}
+            $summaryMarquee.Stop();$script:summaryScroll=0;$Summary.RenderTransform.X=0;$Summary.Text=$tickerText;$script:summaryMeasuredText='';Update-DeckSummaryOverflow
             $originalCards=@($Cards.Children)
             $menu=$Cards.Children[1].ContextMenu; $menu.PlacementTarget=$Cards.Children[1]
             $menu.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.ContextMenu]::OpenedEvent))
@@ -2066,6 +2092,7 @@ try{
             $draftScope.Items[1].IsChecked=$true; $draftScope.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
             $draftScope.Items[3].IsChecked=$true; $draftScope.Items[3].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
             $draftUI.Skills.Membership.SelectedIndex=3
+            if($draftUI.Skills.AccountPanel.Visibility -ne 'Visible' -or $draftUI.Skills.TargetPicker.Visibility -ne 'Collapsed'){throw 'Custom skill access did not show the account and pool access column.'}
             $draftUI.Skills.AccountChecks['account1'].IsChecked=$false
             $draftUI.Skills.Target.SelectedItem=$draftUI.Skills.AccountItems['account2']
             $deckSkillCheck=$draftUI.Skills.State.Controls['debug-swarm']; $deckSkillCheck.IsChecked=$false
@@ -2093,6 +2120,7 @@ try{
                     if($actual -ne $settings[$key]){throw "Reopened setting does not match saved value: $key"}
                 }
                 if($reopenedUI.Skills.Membership.SelectedIndex -ne 3 -or $reopenedUI.Skills.AccountChecks['account1'].IsChecked -or -not $reopenedUI.Skills.AccountChecks['account2'].IsChecked){throw 'Reopened custom skill access selection is incorrect.'}
+                if($reopenedUI.Skills.AccountPanel.Visibility -ne 'Visible' -or $reopenedUI.Skills.TargetPicker.Visibility -ne 'Collapsed'){throw 'Reopened custom skill access column visibility is incorrect.'}
                 $reopenedUI.Skills.Target.SelectedItem=$reopenedUI.Skills.AccountItems['account2']
                 if($reopenedUI.Skills.State.Controls['debug-swarm'].IsChecked){throw 'Reopened Deck skill setting lost its disabled override.'}
             }finally{$reopenedUI.Dialog.Close()}

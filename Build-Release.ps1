@@ -1,4 +1,4 @@
-﻿param([string]$Version = '1.8.1', [string]$Ref = 'HEAD')
+﻿param([string]$Version = '1.8.2', [string]$Ref = 'HEAD')
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected a numeric major.minor.patch version.' }
 Push-Location $PSScriptRoot

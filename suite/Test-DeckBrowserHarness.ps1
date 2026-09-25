@@ -20,6 +20,7 @@ try{
     $account1=Join-Path $fixture 'accounts/account1'
     $account2=Join-Path $fixture 'accounts/account2'
     $base=[IO.File]::ReadAllText((Join-Path $fixture 'Deck.DefaultGlobalRules.md')).Trim()
+    Assert ($base -match 'command->inspection->edit->inspection->test->inspection' -and $base -notmatch 'Debug swarms:|Browser Harness:') 'The default rule base is incorrect.'
     $status=Get-DeckIntegrationStatus $fixture browser_harness
     Assert ($status.Valid -and $status.Version -eq '0.1.10' -and $status.Executable -eq $fake) 'Existing Browser Harness CLI was not detected.'
     $hash=(Get-FileHash -LiteralPath $fake).Hash
@@ -29,7 +30,8 @@ try{
     Assert ((Get-DeckGlobalRuleText $fixture $account1) -eq $base) 'Legacy stock rules were not upgraded to the new defaults.'
     [void][IO.Directory]::CreateDirectory((Join-Path $account1 'skills/debug-swarm'))
     [IO.File]::WriteAllText((Join-Path $account1 'skills/debug-swarm/SKILL.md'),'debug skill')
-    Assert ((Get-DeckGlobalRuleText $fixture $account1) -eq $base) 'Default rules changed with skill availability.'
+    $debugActive=Get-DeckGlobalRuleText $fixture $account1
+    Assert ($debugActive -match 'Debug swarms:' -and $debugActive -notmatch 'Browser Harness:') 'Debug Swarm rules did not follow account skill access.'
     [IO.File]::WriteAllText((Join-Path $fixture 'deck/settings.json'),'{"BrowserHarnessEnabled":true}')
     $owned=Join-Path $account2 'skills/browser-harness'
     [void][IO.Directory]::CreateDirectory($owned)
@@ -41,9 +43,15 @@ try{
     Assert ([IO.File]::ReadAllText((Join-Path $owned 'SKILL.md')) -eq 'user owned') 'Deck replaced a user owned Browser Harness skill.'
     $active=Get-DeckGlobalRuleText $fixture $account1
     Assert ($active -match 'Debug swarms:' -and $active -match 'Browser Harness:' -and $active -match 'Usage efficiency:') 'Enabled default rules are incomplete.'
+    $account2Rules=Get-DeckGlobalRuleText $fixture $account2
+    Assert ($account2Rules -match 'Browser Harness:' -and $account2Rules -notmatch 'Debug swarms:') 'Default rules were not resolved for the selected account.'
     Sync-DeckBrowserHarnessSkill $fixture $account1 $false
     Assert (-not (Test-Path -LiteralPath (Join-Path $account1 'skills/browser-harness')) -and (Test-Path -LiteralPath $fake)) 'Disabling removed more than the managed skill link.'
-    Assert ((Get-DeckGlobalRuleText $fixture $account1) -eq $base) 'Disabling the managed skill changed default Global Rules.'
+    Assert ((Get-DeckGlobalRuleText $fixture $account1) -match 'Debug swarms:' -and (Get-DeckGlobalRuleText $fixture $account1) -notmatch 'Browser Harness:') 'Disabling Browser Harness did not remove its account rule section.'
+    [IO.Directory]::Delete((Join-Path $account1 'skills/debug-swarm'),$true)
+    Assert ((Get-DeckGlobalRuleText $fixture $account1) -eq $base) 'Disabling account skills did not restore the base rules.'
+    [IO.File]::WriteAllText((Join-Path $fixture 'deck/global-rules.md'),'Custom rules only.',[Text.UTF8Encoding]::new($false))
+    Assert ((Get-DeckGlobalRuleText $fixture $account2) -eq 'Custom rules only.') 'Capability sections were appended to custom Global Rules.'
     [IO.File]::WriteAllText((Join-Path $fixture 'deck/global-rules.md'),'')
     Assert (-not (Get-DeckGlobalRuleText $fixture $account1)) 'Blank custom rules did not disable Global Rules.'
     Assert (Test-Path -LiteralPath (Join-Path $fixture 'integrations/browser-harness-detection.json')) 'Browser Harness detection was not cached.'

@@ -1,6 +1,16 @@
 ﻿# Settings drafts: no filesystem changes until the shared Save settings action.
 . (Join-Path $suite 'Deck.Terminal.ps1')
-$environmentState=@{Pools=@{}; Changes=@{}; Resources=@{}; Loading=$false; Task=$null; Owner=''}
+$environmentState=@{Pools=@{}; Changes=@{}; Resources=@{}; Loading=$false; Task=$null; Owner=''; SuiteRoot=$suite; SmokeTest=[bool]$SmokeTest}
+$environmentCommands=@{
+    Pool=Get-Command Get-DeckPoolEntry -CommandType Function -ErrorAction Stop
+    Sharing=Get-Command Get-DeckSharing -CommandType Function -ErrorAction Stop
+    SetPool=Get-Command Set-DeckPoolEntry -CommandType Function -ErrorAction Stop
+    SetSharing=Get-Command Set-DeckResourceSharing -CommandType Function -ErrorAction Stop
+    Start=Get-Command Start-DeckTask -CommandType Function -ErrorAction Stop
+    Stop=Get-Command Stop-DeckTask -CommandType Function -ErrorAction Stop
+    Ready=Get-Command Test-DeckTaskReady -CommandType Function -ErrorAction Stop
+    Dispose=Get-Command Dispose-DeckTask -CommandType Function -ErrorAction Stop
+}
 $environmentStatus=New-DeckText '' '#929CA4'; $environmentStatus.Margin='0,8,0,0'
 $environmentTab=[Windows.Controls.TabItem]::new(); $environmentTab.Header='Environments'
 $environmentPanel=[Windows.Controls.StackPanel]::new(); $environmentPanel.Margin='2,0,12,0'
@@ -44,7 +54,7 @@ $loadPool={
         $name=$poolNameBox.Text.Trim()
         if(-not $name -and $poolNameBox.SelectedItem){$name=[string]$poolNameBox.SelectedItem; $poolNameBox.Text=$name}
         $draft=$environmentState.Pools[$name]
-        $entry=if(-not $SmokeTest -and $name){Get-DeckPoolEntry $suite $name}
+        $entry=if(-not $environmentState.SmokeTest -and $name){& $environmentCommands.Pool $environmentState.SuiteRoot $name}
         $members=if($draft){@($draft.Members)}elseif($entry){@($entry.Accounts)}else{@('*')}
         $poolMembership.SelectedIndex=if(($members -join ',') -eq '*'){0}elseif(($members -join ',') -eq '*free'){1}elseif(($members -join ',') -eq '*paid'){2}else{3}
         $poolModeBox.SelectedItem=if($draft){$draft.Mode}elseif($entry){$entry.Mode}else{'Ordered'}
@@ -80,7 +90,7 @@ $renderRecipients={
     $recipientHeading.Text='Share '+$resource.Label+' with'
     foreach($target in $environmentNames){
         if($target -eq $owner){continue}
-        $bindings=if($SmokeTest){@()}else{@((Get-DeckSharing $suite $target).Bindings)}
+        $bindings=if($environmentState.SmokeTest){@()}else{@((& $environmentCommands.Sharing $environmentState.SuiteRoot $target).Bindings)}
         $binding=@($bindings | Where-Object Resource -eq $resource.Resource) | Select-Object -First 1
         $key=$owner+'|'+$resource.Resource+'|'+$target
         $original=[bool]($binding -and $binding.Source -eq $owner)
@@ -109,7 +119,7 @@ $resourceTimer=[Windows.Threading.DispatcherTimer]::new(); $resourceTimer.Interv
 $resourceTimer.Add_Tick({
     $task=$environmentState.Task; if(-not $task){return}
     $timeout=([DateTimeOffset]::UtcNow-$task.Started).TotalSeconds -gt 30
-    if($timeout){Stop-DeckTask $task}elseif(-not (Test-DeckTaskReady $task)){return}
+    if($timeout){& $environmentCommands.Stop $task}elseif(-not (& $environmentCommands.Ready $task)){return}
     try{
         if($timeout){throw 'Could not read resources for this environment.'}
         $output=$task.Out.GetAwaiter().GetResult()
@@ -117,34 +127,34 @@ $resourceTimer.Add_Tick({
         $values=@($output | ConvertFrom-Json)
         $environmentState.Resources[$environmentState.Owner]=$values; & $populateResources $values
     }catch{$environmentStatus.Text=$_.Exception.Message}
-    finally{Dispose-DeckTask $task; $environmentState.Task=$null; $resourceTimer.Stop()}
+    finally{& $environmentCommands.Dispose $task; $environmentState.Task=$null; $resourceTimer.Stop()}
 }.GetNewClosure())
 $shareSourceBox.Add_SelectionChanged({
-    if($environmentState.Task){Stop-DeckTask $environmentState.Task; Dispose-DeckTask $environmentState.Task; $environmentState.Task=$null}; $resourceTimer.Stop()
+    if($environmentState.Task){& $environmentCommands.Stop $environmentState.Task; & $environmentCommands.Dispose $environmentState.Task; $environmentState.Task=$null}; $resourceTimer.Stop()
     $shareResourceList.Items.Clear(); $shareRecipients.Children.Clear(); $recipientHeading.Text='Share with'
     $owner=[string]$shareSourceBox.SelectedItem; $environmentState.Owner=$owner
     if(-not $owner){return}
-    if($SmokeTest){& $populateResources $(if($owner -eq 'pool'){@('skills','memories','mcp:example')}else{@('AGENTS.md','skills/example')}); return}
+    if($environmentState.SmokeTest){& $populateResources $(if($owner -eq 'pool'){@('skills','memories','mcp:example')}else{@('AGENTS.md','skills/example')}); return}
     if($environmentState.Resources.ContainsKey($owner)){& $populateResources $environmentState.Resources[$owner]; return}
     $environmentStatus.Text='Loading resources...'
     try{
-        $escapedSuite=$suite.Replace("'","''"); $escapedOwner=$owner.Replace("'","''")
+        $escapedSuite=$environmentState.SuiteRoot.Replace("'","''"); $escapedOwner=$owner.Replace("'","''")
         $code="`$ErrorActionPreference='Stop'; . '$escapedSuite/Deck.Environments.ps1'; `$values=@(Get-DeckAvailableResources '$escapedSuite' '$escapedOwner'); foreach(`$name in Get-DeckEntryNames '$escapedSuite'){`$values+=@((Get-DeckSharing '$escapedSuite' `$name).Bindings | Where-Object Source -eq '$escapedOwner' | ForEach-Object Resource)}; ConvertTo-Json -Compress -InputObject @(`$values)"
-        $environmentState.Task=Start-DeckTask $code 'Resources' $owner; $resourceTimer.Start()
+        $environmentState.Task=& $environmentCommands.Start $code 'Resources' $owner; $resourceTimer.Start()
     }catch{$environmentStatus.Text=$_.Exception.Message}
 }.GetNewClosure())
 $shareResourceList.Add_SelectionChanged({& $renderRecipients}.GetNewClosure())
-$dialog.Add_Closed({$resourceTimer.Stop(); if($environmentState.Task){Stop-DeckTask $environmentState.Task; Dispose-DeckTask $environmentState.Task; $environmentState.Task=$null}}.GetNewClosure())
+$dialog.Add_Closed({$resourceTimer.Stop(); if($environmentState.Task){& $environmentCommands.Stop $environmentState.Task; & $environmentCommands.Dispose $environmentState.Task; $environmentState.Task=$null}}.GetNewClosure())
 $saveEnvironments={
     param([switch]$ValidateOnly)
     foreach($draft in $environmentState.Pools.Values){
-        $existing=Get-DeckPoolEntry $suite $draft.Name
+        $existing=& $environmentCommands.Pool $environmentState.SuiteRoot $draft.Name
         if($existing -and ($existing.Accounts -join ',') -eq ($draft.Members -join ',') -and $existing.Mode -eq $draft.Mode){continue}
-        Set-DeckPoolEntry $suite $draft.Name $draft.Members $draft.Mode -ValidateOnly:$ValidateOnly | Out-Null
+        & $environmentCommands.SetPool $environmentState.SuiteRoot $draft.Name $draft.Members $draft.Mode -ValidateOnly:$ValidateOnly | Out-Null
     }
     foreach($key in @($environmentState.Changes.Keys)){
         $change=$environmentState.Changes[$key]
-        Set-DeckResourceSharing $suite $change.Source @($change.Target) @($change.Resource) -Detach:(!$change.Enabled) -ValidateOnly:$ValidateOnly | Out-Null
+        & $environmentCommands.SetSharing $environmentState.SuiteRoot $change.Source @($change.Target) @($change.Resource) -Detach:(!$change.Enabled) -ValidateOnly:$ValidateOnly | Out-Null
         if(-not $ValidateOnly){$environmentState.Changes.Remove($key)}
     }
 }.GetNewClosure()

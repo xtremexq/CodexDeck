@@ -7,15 +7,28 @@ function Get-DeckDefaultGlobalRuleBase([string]$SuiteRoot) {
 function Get-DeckGlobalRuleText([string]$SuiteRoot,[string]$AccountDirectory) {
     $path=Join-Path $SuiteRoot 'deck/global-rules.md'
     $base=Get-DeckDefaultGlobalRuleBase $SuiteRoot
-    $raw=if(Test-Path -LiteralPath $path -PathType Leaf){[IO.File]::ReadAllText($path).Trim()}else{$base}
+    $hasSaved=Test-Path -LiteralPath $path -PathType Leaf
+    $raw=if($hasSaved){[IO.File]::ReadAllText($path).Trim()}else{$base}
     $normalized=$raw -replace "`r`n","`n"
     $oldBase='Usage efficiency: Except when more context or feedback is genuinely needed to understand the task, avoid unnecessary model/tool round trips. Batch independent read-only checks, related edits, and proportionate verification into coherent passes. Do not repeatedly alternate tiny command, inspection, edit, and test steps when a safe batch is possible.'
     $oldDebug='Debug swarms: Use the debug-swarm skill only when the user explicitly requests a debug swarm or parallel independent Codex CLI workers; never infer it because parallel work could help. Follow its account, foreground/background, isolation, evidence, and reporting rules.'
     $oldBrowser='Browser Harness: For browser automation or live browser debugging, use the installed Browser Harness. Run `harness` to start its local services, `harness status` to verify them, and `browser-harness --doctor` when the CLI or browser connection needs diagnosis.'
-    foreach($legacy in @($oldBase,(@($oldBase,$oldDebug) -join "`n`n"),(@($oldBase,$oldBrowser) -join "`n`n"),(@($oldBase,$oldDebug,$oldBrowser) -join "`n`n"))){
-        if($normalized -ceq $legacy){$raw=$base;break}
+    $debug='Debug swarms: Use the debug-swarm skill only when the user explicitly requests a debug swarm or parallel independent Codex CLI workers; never infer it because parallel work could help. Follow its account, foreground/background, isolation, evidence, and reporting rules.'
+    $browser='Browser Harness: For authenticated browser automation or live browser debugging (when credentials/access are needed), use the installed Browser Harness. Run `harness` to start its local services, `harness status` to verify them, and `browser-harness --doctor` when the CLI or browser connection needs diagnosis.'
+    $stock=-not $hasSaved
+    if($hasSaved){
+        foreach($candidateBase in @(@($oldBase,$base) | Select-Object -Unique)){
+            foreach($legacy in @($candidateBase,(@($candidateBase,$oldDebug) -join "`n`n"),(@($candidateBase,$oldBrowser) -join "`n`n"),(@($candidateBase,$browser) -join "`n`n"),(@($candidateBase,$oldDebug,$oldBrowser) -join "`n`n"),(@($candidateBase,$oldDebug,$browser) -join "`n`n"),(@($candidateBase,$browser,$oldDebug) -join "`n`n"))){
+                if($normalized -ceq $legacy){$stock=$true;break}
+            }
+            if($stock){break}
+        }
     }
-    return $raw
+    if(-not $stock){return $raw}
+    $sections=@($base)
+    if($AccountDirectory -and (Test-Path -LiteralPath (Join-Path $AccountDirectory 'skills/debug-swarm/SKILL.md') -PathType Leaf)){$sections+=$debug}
+    if($AccountDirectory -and (Test-Path -LiteralPath (Join-Path $AccountDirectory 'skills/browser-harness/SKILL.md') -PathType Leaf)){$sections+=$browser}
+    return $sections -join "`n`n"
 }
 function Get-DeckGlobalRuleArguments([string]$SuiteRoot,[string]$AccountDirectory,[string[]]$Arguments,[string[]]$AdditionalSections=@()) {
     $rulesPath=Join-Path $SuiteRoot 'deck/global-rules.md'
@@ -53,9 +66,10 @@ function Show-DeckGlobalRules([string]$SuiteRoot,$Owner=$null,[switch]$TestUI) {
     $errorText=[Windows.Controls.TextBlock]::new();$errorText.Foreground='#F17D8D';$errorText.TextWrapping='Wrap'
     [Windows.Controls.DockPanel]::SetDock($errorText,'Bottom');[void]$dock.Children.Add($errorText)
     $editor=[Windows.Controls.TextBox]::new();$editor.Text=$original;$editor.AcceptsReturn=$true;$editor.AcceptsTab=$true;$editor.TextWrapping='Wrap';$editor.VerticalScrollBarVisibility='Auto';$editor.FontFamily='Consolas';$editor.FontSize=14;$editor.Background='#192232';$editor.Foreground='#EAF0FA';[void]$dock.Children.Add($editor)
+    $defaultRuleCommand=Get-Command Get-DeckDefaultGlobalRuleBase -CommandType Function -ErrorAction Stop
     $save.Add_Click({
         try{
-            $current=if(Test-Path -LiteralPath $path){[IO.File]::ReadAllText($path)}else{Get-DeckDefaultGlobalRuleBase $SuiteRoot}
+            $current=if(Test-Path -LiteralPath $path){[IO.File]::ReadAllText($path)}else{& $defaultRuleCommand $SuiteRoot}
             if($current -cne $original){throw 'Rules changed in another editor. Reopen this editor before saving.'}
             if($editor.Text -cne $original){
                 [void][IO.Directory]::CreateDirectory((Split-Path -Parent $path))
