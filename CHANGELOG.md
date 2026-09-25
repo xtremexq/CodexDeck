@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.8.1 - 2026-09-25
+
+- Added `codex-auth plugin marketplace add` and `codex-auth plugin add`, with a private Deck plugin store and centrally managed plugin skills shared safely across configured accounts and pools.
+- Added plugin marketplace and plugin installation controls to Settings, moved direct AAS skill installation into the Skills tab, and kept installed plugin skills visible in the managed list.
+- Reworked skill access into one account-and-pool list with scope presets and per-entry custom selection, removing the duplicated selectors while preserving every access option.
+- Kept Debug Swarm at the end of the managed skill list and protected plugin imports against unsafe paths, collisions, local edits, and partial updates.
 - Added `!autocompact` for managed interactive conversations. Custom mode requests a task-state handoff, compacts, and replays it; Native mode invokes Codex compaction after the active turn. The command works even when automatic compaction is off.
 
 ## 1.8.0 - 2026-09-23

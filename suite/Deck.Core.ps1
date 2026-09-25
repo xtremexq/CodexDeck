@@ -13,6 +13,7 @@ if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Storage.ps1')){. (Join-
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Environments.ps1')) { . (Join-Path $PSScriptRoot 'Deck.Environments.ps1') }
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.BundledSkills.ps1')) { . (Join-Path $PSScriptRoot 'Deck.BundledSkills.ps1') }
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.SkillCatalog.ps1')) { . (Join-Path $PSScriptRoot 'Deck.SkillCatalog.ps1') }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.PluginManagement.ps1')) { . (Join-Path $PSScriptRoot 'Deck.PluginManagement.ps1') }
 # Codex Deck - local state and scheduling. No credentials are written to Deck state.
 function Get-DeckDueAccounts($Automatic, $Manual, $NextCheck, [DateTimeOffset]$Now) {
     $manualDue=@($Manual.Keys | Where-Object { $Manual[$_] -le $Now } | Sort-Object { $Manual[$_] })

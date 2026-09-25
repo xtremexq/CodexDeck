@@ -16,7 +16,7 @@ function Get-DeckBundledSkills([string]$SuiteRoot) {
     $root=Get-DeckBundledSkillCatalogRoot $SuiteRoot
     if (-not $root) { return @() }
     $skills=@()
-    foreach($directory in Get-ChildItem -LiteralPath $root -Directory -Force | Sort-Object Name) {
+    foreach($directory in Get-ChildItem -LiteralPath $root -Directory -Force | Sort-Object @{Expression={if($_.Name -eq 'debug-swarm'){1}else{0}}},Name) {
         $manifestPath=Join-Path $directory.FullName '.codexdeck.json'
         if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { continue }
         Assert-DeckBundledSkillName $directory.Name

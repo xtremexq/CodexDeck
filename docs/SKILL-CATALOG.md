@@ -4,7 +4,9 @@ Codex Deck ships the `debug-swarm` workflow and three [UIZZE](https://github.com
 
 ## Use the GUI
 
-Open **Codex Deck → Settings → Integrations** and install the AAS catalog index. Then open **Settings → Skills**. The top section shows installed Deck skills and lets you enable or disable each for the selected account or pool. The AAS section below it has text, category and risk filters with pagination. Select a result to read its description and setup notes, inspect the exact pinned source, then press **Install selected**. A selected install is linked into all existing accounts and pools and future ones by default. The same button offers an update for an already installed AAS skill. Start a new Codex session after a change.
+Open **Codex Deck → Settings → Skills**. The account list combines access and editing: check which accounts or pools receive managed skills, then select a row to customize its individual skill switches. Access presets cover all current and future entries, free accounts, paid accounts, or a custom set without showing a second account picker.
+
+The same tab installs skills in two ways. **Add skills from a plugin** accepts a marketplace source and then `plugin@marketplace`; Deck installs the plugin into a private runtime store and adds its skill trees to the managed list. **Agentic Awesome Skills** searches the optional AAS index and can install the index directly when it is missing. Select a result to read its description, risk and setup notes, inspect its pinned source, then install it. New skills appear in the managed list above and follow the selected account access. Start a new Codex session after a change.
 
 Deck stores one managed copy under `.codex-loop/skills` and uses verified junctions in each `CODEX_HOME/skills` directory. It leaves an existing user-owned skill of the same name alone and reports the collision. Account and pool switches remain independent; skill content is shared, not authentication or conversation history. AAS skills may include commands, scripts, network setup or licensed third-party material. Inspect the source and risk label before enabling one for a session.
 The risk labels and setup notes come from AAS metadata; they are aids for review, not a security guarantee from Deck.
@@ -25,6 +27,16 @@ deck-skills enable <installed-name> account2
 deck-skills refresh
 deck-skills update <installed-name>
 ```
+
+Plugin marketplaces use Codex's native marketplace format:
+
+```powershell
+codex-auth plugin marketplace add owner/repository
+codex-auth plugin add plugin-name@marketplace-name
+codex-auth plugin list
+```
+
+Deck keeps plugin downloads and receipts under the local `.codex-loop` runtime. Plugin skills are user-installed runtime data; they are not added to Codex Deck releases. A plugin update refuses to replace a managed skill that has local edits.
 
 `preview` fetches the selected pinned `SKILL.md` for reading. `install` fetches only the selected skill subtree from the catalog's pinned commit, preserving its support files and notices. `update` fetches a newer pinned version, verifies the installed files have not been locally edited, and keeps the previous copy in `.codex-loop/deck/skill-backups`. Refresh the AAS index before updating an AAS skill. UIZZE updates resolve its current upstream commit directly. Deck owns the adapter and metadata; the upstream skill files remain separate from Deck code.
 

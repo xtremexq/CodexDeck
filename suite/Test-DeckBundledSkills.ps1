@@ -10,6 +10,7 @@ function Reject([scriptblock]$Action,[string]$Message){$failed=$false;try{& $Act
 try {
     $catalog=@(Get-DeckBundledSkills $fixture)
     Assert ($catalog.Count -eq 4 -and @($catalog | Where-Object Name -eq 'debug-swarm').Count -eq 1 -and @($catalog | Where-Object { $_.Name -in @('ui-design','anti-ui-slop','ui-radar') }).Count -eq 3) 'Deck skill catalog was not discovered.'
+    Assert ($catalog[-1].Name -eq 'debug-swarm') 'Debug Swarm must appear after the UIZZE skills.'
     $invocationPolicy=[IO.File]::ReadAllText((Join-Path $fixture 'skills/debug-swarm/agents/openai.yaml'))
     Assert ($invocationPolicy -match '(?m)^\s*allow_implicit_invocation:\s*false\s*$') 'Debug Swarm must require explicit user invocation.'
     $skillInstructions=[IO.File]::ReadAllText((Join-Path $fixture 'skills/debug-swarm/SKILL.md'))

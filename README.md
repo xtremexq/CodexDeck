@@ -129,7 +129,7 @@ Run **`codex-deck`**, or press **D** in the terminal dashboard.
 - The **accounts / online / terminals** bar is a read-only status surface. Both views always list all profiles; use the adjacent plan filter to show all, Free, or Plus and higher accounts.
 - Click the status bar below the list to check every visible account.
 - Switch between the **panel** and **widget**, then expand account rows for more detail.
-- **Settings** controls appearance, visible fields, Deck skills, email masking, automatic checks and warm-up.
+- **Settings** controls appearance, visible fields, managed skills and plugin marketplaces, email masking, automatic checks and warm-up.
 - The panel appears in the taskbar; the widget and Settings stay out of it. Use **Minimize** to minimize the panel.
 - Closing the window normally hides it to the tray. **Quit** stops the Deck UI and ordinary live checks without closing your Codex terminals; explicitly enabled background warm-up continues invisibly through the clearly named **CodexDeck Warmup Scheduling** Windows task.
 
@@ -213,7 +213,7 @@ Deck stores managed packages under `.codex-loop/integrations/packages/<tool>/<ve
 
 After installing CodeGraph, use its **Project access** panel in Integrations to add project folders and choose the tool profile. CodeGraph attaches only when a conversation starts in one of those folders or its subfolders, including a folder chosen with `codex -C` or `--cd`. The list supports add, browse, remove, right-click open, and copy-path actions. Start `codex-auth accountX` from a chosen project folder, or enable **Settings → General → Always ask where to open the terminal** for desktop launches. Existing conversations retain the integrations they started with.
 
-The default Global Rules contain usage-efficiency guidance. The debug-swarm rule appears only when that skill is installed for the account. When Browser Harness is detected, **Settings → Skills** shows its skill switch; the selected skill-access scope determines which accounts receive it. Custom Global Rules remain editable. Browser Harness remains in its existing `uv` tool environment, and Deck preserves user-owned Browser Harness skills.
+The default Global Rules contain usage-efficiency guidance. The debug-swarm rule appears only when that skill is installed for the account. **Settings → Skills** uses one account list for access and per-account editing, installs Codex plugin marketplaces and plugin skills directly, and includes the optional AAS browser below the managed list. When Browser Harness is detected, the same tab shows its skill switch. Custom Global Rules remain editable. Browser Harness remains in its existing `uv` tool environment, and Deck preserves user-owned Browser Harness skills.
 
 Deck keeps credentials, configuration, databases and histories isolated. Once a week, background storage maintenance leaves active account homes untouched, removes curated-plugin staging directories older than 24 hours from inactive homes, and hard-links verified-identical sandbox executables and managed plugin-cache files of at least 1 MiB. Each account retains its expected paths and Windows sandbox boundary; only immutable duplicate file contents share disk blocks. The result is recorded in `.codex-loop/deck/storage-maintenance.json`, and skipped active homes are retried later.
 

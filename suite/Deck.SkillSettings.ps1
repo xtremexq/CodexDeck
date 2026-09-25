@@ -5,34 +5,57 @@ $deckSkillPanel=[Windows.Controls.StackPanel]::new(); $deckSkillPanel.Margin='2,
 $deckSkillScroll=[Windows.Controls.ScrollViewer]::new(); $deckSkillScroll.VerticalScrollBarVisibility='Auto'; $deckSkillScroll.HorizontalScrollBarVisibility='Disabled'; $deckSkillScroll.Content=$deckSkillPanel
 $deckSkillTab.Content=$deckSkillScroll; [void]$tabs.Items.Add($deckSkillTab)
 [void]$deckSkillPanel.Children.Add((New-DeckText 'Deck skills' '#EDF1F7' 18))
-$deckSkillHelp=New-DeckText 'Choose which accounts can use Deck skills, then adjust individual skills below. User-owned skills are never overwritten.' '#929CA4'
+$deckSkillHelp=New-DeckText 'Install managed skills once, choose their account access, and customize each account or pool from the same list. User-owned skills are never overwritten.' '#929CA4'
 $deckSkillHelp.Margin='0,8,0,16'; [void]$deckSkillPanel.Children.Add($deckSkillHelp)
-$skillAccessLabel=New-DeckText 'Skill access' '#A2ADB5'; $skillAccessLabel.Margin='0,0,0,6'; [void]$deckSkillPanel.Children.Add($skillAccessLabel)
-$skillAccess=[Windows.Controls.StackPanel]::new(); $skillAccess.Margin='0,0,0,14'; [void]$deckSkillPanel.Children.Add($skillAccess)
-$skillMembership=[Windows.Controls.ComboBox]::new(); foreach($option in @('Use all accounts and pools (including future entries)','Use all free accounts','Use all Plus or higher accounts','Use selected accounts or pools')){[void]$skillMembership.Items.Add($option)}; [void]$skillAccess.Children.Add($skillMembership)
-$skillMembers=[Windows.Controls.ListBox]::new(); $skillMembers.SelectionMode='Multiple'; $skillMembers.MaxHeight=150; $skillMembers.Margin='0,8,0,0'; foreach($name in $environmentNames){[void]$skillMembers.Items.Add($name)}; [void]$skillAccess.Children.Add($skillMembers)
+
+$pluginSection=[Windows.Controls.Border]::new(); $pluginSection.Background='#171C1F'; $pluginSection.BorderBrush='#303A42'; $pluginSection.BorderThickness='1'; $pluginSection.CornerRadius='7'; $pluginSection.Padding='12'; $pluginSection.Margin='0,0,0,16'; [void]$deckSkillPanel.Children.Add($pluginSection)
+$pluginBody=[Windows.Controls.StackPanel]::new(); $pluginSection.Child=$pluginBody
+[void]$pluginBody.Children.Add((New-DeckText 'Add skills from a plugin' '#A9E8D5' 14))
+$pluginHelp=New-DeckText 'Add a Codex marketplace, then install plugin@marketplace. Deck keeps one runtime copy and adds every plugin skill to the managed list below.' '#929CA4' 11; $pluginHelp.Margin='0,5,0,10'; [void]$pluginBody.Children.Add($pluginHelp)
+$pluginMarketplaceLabel=New-DeckText 'Marketplace source' '#A2ADB5' 11; $pluginMarketplaceLabel.Margin='0,0,0,4'; [void]$pluginBody.Children.Add($pluginMarketplaceLabel)
+$pluginMarketplaceRow=[Windows.Controls.Grid]::new(); $pluginMarketplaceRow.Margin='0,0,0,9'; foreach($width in @('*','Auto')){$column=[Windows.Controls.ColumnDefinition]::new();$column.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width);[void]$pluginMarketplaceRow.ColumnDefinitions.Add($column)}; [void]$pluginBody.Children.Add($pluginMarketplaceRow)
+$pluginMarketplaceSource=[Windows.Controls.TextBox]::new(); $pluginMarketplaceSource.ToolTip='owner/repository, Git URL, or local marketplace path'; [void]$pluginMarketplaceRow.Children.Add($pluginMarketplaceSource)
+$pluginMarketplaceAdd=[Windows.Controls.Button]::new(); $pluginMarketplaceAdd.Content='Add marketplace'; $pluginMarketplaceAdd.Padding='10,5'; $pluginMarketplaceAdd.Margin='8,0,0,0'; [Windows.Controls.Grid]::SetColumn($pluginMarketplaceAdd,1); [void]$pluginMarketplaceRow.Children.Add($pluginMarketplaceAdd)
+$pluginSelectorLabel=New-DeckText 'Plugin' '#A2ADB5' 11; $pluginSelectorLabel.Margin='0,0,0,4'; [void]$pluginBody.Children.Add($pluginSelectorLabel)
+$pluginSelectorRow=[Windows.Controls.Grid]::new(); foreach($width in @('*','Auto')){$column=[Windows.Controls.ColumnDefinition]::new();$column.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width);[void]$pluginSelectorRow.ColumnDefinitions.Add($column)}; [void]$pluginBody.Children.Add($pluginSelectorRow)
+$pluginSelector=[Windows.Controls.TextBox]::new(); $pluginSelector.ToolTip='plugin-name@marketplace-name'; [void]$pluginSelectorRow.Children.Add($pluginSelector)
+$pluginInstall=[Windows.Controls.Button]::new(); $pluginInstall.Content='Install plugin skills'; $pluginInstall.Padding='10,5'; $pluginInstall.Margin='8,0,0,0'; [Windows.Controls.Grid]::SetColumn($pluginInstall,1); [void]$pluginSelectorRow.Children.Add($pluginInstall)
+$pluginStatus=New-DeckText '' '#9BB5D9' 11; $pluginStatus.Margin='0,8,0,0'; [void]$pluginBody.Children.Add($pluginStatus)
+
+$skillAccessLabel=New-DeckText 'Account access preset' '#A2ADB5'; $skillAccessLabel.Margin='0,0,0,6'; [void]$deckSkillPanel.Children.Add($skillAccessLabel)
+$skillMembership=[Windows.Controls.ComboBox]::new(); foreach($option in @('Use all accounts and pools (including future entries)','Use all free accounts','Use all Plus or higher accounts','Choose access per account or pool')){[void]$skillMembership.Items.Add($option)}; $skillMembership.Margin='0,0,0,10'; [void]$deckSkillPanel.Children.Add($skillMembership)
 $savedSkillScope=if($settings.SkillAccessAccounts){[string]$settings.SkillAccessAccounts}else{'*'}
 $skillMembership.SelectedIndex=if($savedSkillScope -eq '*'){0}elseif($savedSkillScope -eq '*free'){1}elseif($savedSkillScope -eq '*paid'){2}else{3}
-foreach($name in @($savedSkillScope -split ',' | Where-Object {$_})){if($skillMembers.Items.Contains($name)){[void]$skillMembers.SelectedItems.Add($name)}}
-$skillMembers.Visibility=if($skillMembership.SelectedIndex -eq 3){'Visible'}else{'Collapsed'}
-$skillMembership.Add_SelectionChanged({$skillMembers.Visibility=if($skillMembership.SelectedIndex -eq 3){'Visible'}else{'Collapsed'}}.GetNewClosure())
-$deckSkillTargetLabel=New-DeckText 'Account or pool' '#A2ADB5'; $deckSkillTargetLabel.Margin='0,0,0,6'; [void]$deckSkillPanel.Children.Add($deckSkillTargetLabel)
-$deckSkillTarget=[Windows.Controls.ComboBox]::new(); foreach($entryName in $environmentNames){[void]$deckSkillTarget.Items.Add($entryName)}; [void]$deckSkillPanel.Children.Add($deckSkillTarget)
-$deckSkillRows=[Windows.Controls.StackPanel]::new(); $deckSkillRows.Margin='0,14,0,0'; [void]$deckSkillPanel.Children.Add($deckSkillRows)
-$deckSkillStatus=New-DeckText '' '#929CA4'; $deckSkillStatus.Margin='0,12,0,0'; [void]$deckSkillPanel.Children.Add($deckSkillStatus)
+$skillWorkspace=[Windows.Controls.Grid]::new(); $skillWorkspace.Margin='0,0,0,6'; foreach($width in @('220','*')){$column=[Windows.Controls.ColumnDefinition]::new();$column.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width);[void]$skillWorkspace.ColumnDefinitions.Add($column)}; [void]$deckSkillPanel.Children.Add($skillWorkspace)
+$skillAccountPanel=[Windows.Controls.StackPanel]::new(); $skillAccountPanel.Margin='0,0,14,0'; [void]$skillWorkspace.Children.Add($skillAccountPanel)
+[void]$skillAccountPanel.Children.Add((New-DeckText 'Accounts and pools' '#A2ADB5' 11))
+$skillAccountHelp=New-DeckText 'Check access. Select a row to edit its skills.' '#929CA4' 10; $skillAccountHelp.Margin='0,3,0,7'; [void]$skillAccountPanel.Children.Add($skillAccountHelp)
+$skillMembers=[Windows.Controls.ListBox]::new(); $skillMembers.MinHeight=150; $skillMembers.MaxHeight=280; $skillMembers.Background='#171C1F'; $skillMembers.BorderBrush='#303A42'; $skillMembers.BorderThickness='1'; [void]$skillAccountPanel.Children.Add($skillMembers)
+$skillAccountChecks=@{}; $skillAccountItems=@{}
+foreach($entryName in $environmentNames){
+    $item=[Windows.Controls.ListBoxItem]::new(); $item.Tag=$entryName; $item.Padding='6,4'
+    $check=[Windows.Controls.CheckBox]::new(); $check.Content=$entryName; $check.Tag=$item; $item.Content=$check
+    $skillAccountChecks[$entryName]=$check; $skillAccountItems[$entryName]=$item; [void]$skillMembers.Items.Add($item)
+}
+$skillDetailPanel=[Windows.Controls.StackPanel]::new(); [Windows.Controls.Grid]::SetColumn($skillDetailPanel,1); [void]$skillWorkspace.Children.Add($skillDetailPanel)
+$deckSkillTargetLabel=New-DeckText 'Select an account or pool' '#EDF1F7' 14; $deckSkillTargetLabel.Margin='0,0,0,8'; [void]$skillDetailPanel.Children.Add($deckSkillTargetLabel)
+$deckSkillRows=[Windows.Controls.StackPanel]::new(); [void]$skillDetailPanel.Children.Add($deckSkillRows)
+$deckSkillStatus=New-DeckText '' '#929CA4'; $deckSkillStatus.Margin='0,8,0,0'; [void]$skillDetailPanel.Children.Add($deckSkillStatus)
+$deckSkillTarget=$skillMembers
 $browserSkillCard=[Windows.Controls.Border]::new(); $browserSkillCard.BorderBrush='#303A42'; $browserSkillCard.BorderThickness='1'; $browserSkillCard.CornerRadius='6'; $browserSkillCard.Padding='12'; $browserSkillCard.Margin='0,8,0,10'
 $browserSkillBody=[Windows.Controls.StackPanel]::new(); $browserSkillCard.Child=$browserSkillBody
 $browserSkillToggle=[Windows.Controls.CheckBox]::new(); $browserSkillToggle.Content='Browser Harness'; $browserSkillToggle.IsChecked=[bool]$settings.BrowserHarnessEnabled; $browserSkillToggle.FontWeight='SemiBold'; [void]$browserSkillBody.Children.Add($browserSkillToggle)
-$browserSkillNote=New-DeckText 'Share the detected Browser Harness skill with accounts and pools allowed by Skill access. It applies to new conversations; user-owned copies remain untouched.' '#A2ADB5' 11; $browserSkillNote.Margin='22,6,0,0'; [void]$browserSkillBody.Children.Add($browserSkillNote)
+$browserSkillNote=New-DeckText 'Share the detected Browser Harness skill with accounts and pools checked in the access list. It applies to new conversations; user-owned copies remain untouched.' '#A2ADB5' 11; $browserSkillNote.Margin='22,6,0,0'; [void]$browserSkillBody.Children.Add($browserSkillNote)
 [void]$deckSkillPanel.Children.Add($browserSkillCard); $controls.BrowserHarnessEnabled=$browserSkillToggle
 $currentSkillScope={
-    if($skillMembership.SelectedIndex -eq 3){$chosen=@($skillMembers.SelectedItems | ForEach-Object {[string]$_}) -join ',';return $(if($chosen){$chosen}else{'__none__'})}
+    if($skillMembership.SelectedIndex -eq 3){$chosen=@($environmentNames | Where-Object {[bool]$skillAccountChecks[$_].IsChecked}) -join ',';return $(if($chosen){$chosen}else{'__none__'})}
     return @('*','*free','*paid')[$skillMembership.SelectedIndex]
 }.GetNewClosure()
 $renderDeckSkills={
     $deckSkillRows.Children.Clear(); $deckSkillState.Controls=@{}
-    $entry=[string]$deckSkillTarget.SelectedItem
+    $selected=$deckSkillTarget.SelectedItem; $entry=if($selected){[string]$selected.Tag}else{''}
     if(-not $entry){$deckSkillStatus.Text='Choose an account or pool.';return}
+    $deckSkillTargetLabel.Text="Skills for $entry"
     $catalog=@(Get-DeckBundledSkills $suite)
     if(-not $catalog.Count){$deckSkillStatus.Text='No Deck skills are installed.';return}
     $scope=& $currentSkillScope
@@ -60,9 +83,20 @@ $renderDeckSkills={
     }
     $deckSkillStatus.Text=''
 }.GetNewClosure()
+$updateSkillAccessRows={
+    $scope=@('*','*free','*paid')[[Math]::Min(2,$skillMembership.SelectedIndex)]
+    foreach($entryName in $environmentNames){
+        $check=$skillAccountChecks[$entryName]; $check.IsEnabled=$skillMembership.SelectedIndex -eq 3
+        if($skillMembership.SelectedIndex -ne 3){$check.IsChecked=Test-DeckSkillAccess $suite $entryName $scope}
+    }
+}.GetNewClosure()
+foreach($entryName in $environmentNames){
+    $skillAccountChecks[$entryName].IsChecked=if($savedSkillScope -in @('*','*free','*paid')){Test-DeckSkillAccess $suite $entryName $savedSkillScope}else{$entryName -in @($savedSkillScope -split ',' | Where-Object {$_})}
+    $skillAccountChecks[$entryName].IsEnabled=$skillMembership.SelectedIndex -eq 3
+    $skillAccountChecks[$entryName].Add_Click({param($sender,$eventArgs)$skillMembers.SelectedItem=$sender.Tag;& $renderDeckSkills}.GetNewClosure())
+}
 $deckSkillTarget.Add_SelectionChanged($renderDeckSkills)
-$skillMembership.Add_SelectionChanged({& $renderDeckSkills}.GetNewClosure())
-$skillMembers.Add_SelectionChanged({if($skillMembership.SelectedIndex -eq 3){& $renderDeckSkills}}.GetNewClosure())
+$skillMembership.Add_SelectionChanged({& $updateSkillAccessRows;& $renderDeckSkills}.GetNewClosure())
 $saveDeckSkills={
     param([switch]$ValidateOnly)
     foreach($key in @($deckSkillState.Changes.Keys)){
@@ -73,12 +107,42 @@ $saveDeckSkills={
 }.GetNewClosure()
 if($deckSkillTarget.Items.Count){$deckSkillTarget.SelectedIndex=0}
 
-$aasTab=[Windows.Controls.TabItem]::new(); $aasTab.Header='AAS'
-$aasPanel=[Windows.Controls.StackPanel]::new(); $aasPanel.Margin='2,0,12,0'
-$aasScroll=[Windows.Controls.ScrollViewer]::new(); $aasScroll.VerticalScrollBarVisibility='Auto'; $aasScroll.HorizontalScrollBarVisibility='Disabled'; $aasScroll.Content=$aasPanel; $aasTab.Content=$aasScroll
-if((Get-DeckIntegrationStatus $suite aas_catalog -SkipHash).Valid){[void]$tabs.Items.Add($aasTab)}
+$pluginOperation=@{Task=$null;Mode=''}
+$pluginPoll=[Windows.Threading.DispatcherTimer]::new(); $pluginPoll.Interval=[TimeSpan]::FromMilliseconds(200)
+$startPluginOperation={param([string]$Mode,[string]$Value)
+    if($pluginOperation.Task){return}
+    $Value=$Value.Trim()
+    if(-not $Value){$pluginStatus.Text=if($Mode -eq 'marketplace'){'Enter a marketplace source.'}else{'Enter plugin@marketplace.'};return}
+    try{
+        $pluginOperation.Task=Start-DeckTask (Get-DeckPluginWorkerCode $suite $Mode $Value) 'Plugin' $Mode
+        $pluginOperation.Mode=$Mode; $pluginMarketplaceAdd.IsEnabled=$false; $pluginInstall.IsEnabled=$false
+        $pluginStatus.Text=if($Mode -eq 'marketplace'){'Adding marketplace…'}else{'Installing plugin skills…'}
+        $pluginPoll.Start()
+    }catch{$pluginStatus.Text=$_.Exception.Message}
+}.GetNewClosure()
+$pluginMarketplaceAdd.Add_Click({& $startPluginOperation 'marketplace' $pluginMarketplaceSource.Text}.GetNewClosure())
+$pluginInstall.Add_Click({& $startPluginOperation 'plugin' $pluginSelector.Text}.GetNewClosure())
+$pluginMarketplaceSource.Add_KeyDown({param($sender,$eventArgs)if($eventArgs.Key -eq [Windows.Input.Key]::Return){& $startPluginOperation 'marketplace' $pluginMarketplaceSource.Text;$eventArgs.Handled=$true}}.GetNewClosure())
+$pluginSelector.Add_KeyDown({param($sender,$eventArgs)if($eventArgs.Key -eq [Windows.Input.Key]::Return){& $startPluginOperation 'plugin' $pluginSelector.Text;$eventArgs.Handled=$true}}.GetNewClosure())
+$pluginPoll.Add_Tick({
+    $worker=$pluginOperation.Task
+    if(-not $worker){$pluginPoll.Stop();return}
+    if(([DateTimeOffset]::UtcNow-$worker.Started).TotalSeconds -gt 180){Stop-DeckTask $worker;$pluginStatus.Text='Plugin operation timed out.'}
+    elseif(-not (Test-DeckTaskReady $worker)){return}
+    else{
+        try{
+            if($worker.Process.ExitCode -ne 0){throw (Get-DeckTaskFailureMessage $worker)}
+            $pluginStatus.Text=([string]$worker.Out.Result).Trim()
+            if($pluginOperation.Mode -eq 'plugin'){& $renderDeckSkills}
+        }catch{$pluginStatus.Text=$_.Exception.Message}
+    }
+    $pluginOperation.Task=$null;$pluginMarketplaceAdd.IsEnabled=$true;$pluginInstall.IsEnabled=$true;$pluginPoll.Stop();Dispose-DeckTask $worker
+}.GetNewClosure())
+
+$aasSection=[Windows.Controls.Border]::new(); $aasSection.Background='#171C1F'; $aasSection.BorderBrush='#303A42'; $aasSection.BorderThickness='1'; $aasSection.CornerRadius='7'; $aasSection.Padding='12'; $aasSection.Margin='0,14,0,0'; [void]$deckSkillPanel.Children.Add($aasSection)
+$aasPanel=[Windows.Controls.StackPanel]::new(); $aasSection.Child=$aasPanel
 [void]$aasPanel.Children.Add((New-DeckText 'Agentic Awesome Skills' '#EDF1F7' 18))
-$catalogHelp=New-DeckText 'Search the installed catalog and add individual skills. Account access follows the selection in Skills.' '#929CA4' 11
+$catalogHelp=New-DeckText 'Search and install individual skills here. New entries appear in the managed list above and follow the same account access.' '#929CA4' 11
 $catalogHelp.Margin='0,7,0,13'; [void]$aasPanel.Children.Add($catalogHelp)
 [void]$aasPanel.Children.Add((New-DeckText 'Find a skill' '#A2ADB5' 11))
 $catalogSearch=[Windows.Controls.TextBox]::new(); $catalogSearch.Margin='0,0,0,8'; $catalogSearch.ToolTip='Search names, descriptions, categories and tags'; [void]$aasPanel.Children.Add($catalogSearch)
@@ -135,7 +199,7 @@ $renderCatalog={
 }.GetNewClosure()
 $catalogDebounce=[Windows.Threading.DispatcherTimer]::new(); $catalogDebounce.Interval=[TimeSpan]::FromMilliseconds(350)
 $catalogDebounce.Add_Tick({$catalogDebounce.Stop(); & $renderCatalog}.GetNewClosure())
-$queueCatalogSearch={if(-not $catalogState.UpdatingFilters -and $tabs.SelectedItem -eq $aasTab){$catalogState.Page=1;$catalogPageInput.Text='1';$catalogDebounce.Stop();$catalogDebounce.Start()}}.GetNewClosure()
+$queueCatalogSearch={if(-not $catalogState.UpdatingFilters -and $tabs.SelectedItem -eq $deckSkillTab){$catalogState.Page=1;$catalogPageInput.Text='1';$catalogDebounce.Stop();$catalogDebounce.Start()}}.GetNewClosure()
 $catalogSearch.Add_TextChanged($queueCatalogSearch)
 $catalogCategory.Add_SelectionChanged($queueCatalogSearch)
 $catalogRisk.Add_SelectionChanged($queueCatalogSearch)
@@ -153,7 +217,7 @@ $catalogPageInput.Add_KeyDown({param($sender,$eventArgs)
     if($eventArgs.Key -eq [Windows.Input.Key]::Return){& $submitCatalogPage;$eventArgs.Handled=$true}
 }.GetNewClosure())
 $tabs.Add_SelectionChanged({param($sender,$eventArgs)
-    if($eventArgs.OriginalSource -eq $tabs -and $tabs.SelectedItem -eq $aasTab -and -not $catalogState.Loaded -and -not $catalogState.SearchTask){& $renderCatalog}
+    if($eventArgs.OriginalSource -eq $tabs -and $tabs.SelectedItem -eq $deckSkillTab -and -not $catalogState.Loaded -and -not $catalogState.SearchTask){& $renderCatalog}
 }.GetNewClosure())
 $catalogResults.Add_SelectionChanged({
     $selected=$catalogResults.SelectedItem
@@ -274,4 +338,7 @@ $catalogPoll.Add_Tick({
     }
     if(-not $catalogState.Task -and -not $catalogState.SearchTask){$catalogPoll.Stop()}
 }.GetNewClosure())
-$dialog.Add_Closed({$catalogState.Closed=$true;$catalogDebounce.Stop();$catalogPoll.Stop();foreach($worker in @($catalogState.Task,$catalogState.SearchTask)){if($worker){Stop-DeckTask $worker;Dispose-DeckTask $worker}}}.GetNewClosure())
+$dialog.Add_Closed({
+    $catalogState.Closed=$true;$catalogDebounce.Stop();$catalogPoll.Stop();$pluginPoll.Stop()
+    foreach($worker in @($catalogState.Task,$catalogState.SearchTask,$pluginOperation.Task)){if($worker){Stop-DeckTask $worker;Dispose-DeckTask $worker}}
+}.GetNewClosure())

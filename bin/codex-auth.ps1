@@ -637,6 +637,8 @@ function Show-Usage {
     Write-Host "  codex-auth -Failover Best -FailoverAccounts account1,account2"
     Write-Host "  codex-auth account15 -Direct -CodexArgs @('exec',...)  Launch without Deck's local routing proxy"
     Write-Host "  codex-auth account1 -AutoCompact 50%   Use the selected Native/Custom mode at 50% context remaining"
+    Write-Host "  codex-auth plugin marketplace add owner/repository   Add a marketplace to Deck"
+    Write-Host "  codex-auth plugin add plugin@marketplace   Install its skills for Deck accounts and pools"
     Write-Host "  !autocompact (inside a conversation)   Compact now using the selected Native/Custom mode"
     Write-Host ""
     Write-Host "Examples:"
@@ -956,6 +958,18 @@ if (-not (Test-Path -LiteralPath $environmentModule)) { $environmentModule = Joi
 $bundledSkillsModule = Join-Path $runtimeRoot 'Deck.BundledSkills.ps1'
 if (-not (Test-Path -LiteralPath $bundledSkillsModule)) { $bundledSkillsModule = Join-Path $PSScriptRoot '../suite/Deck.BundledSkills.ps1' }
 if (Test-Path -LiteralPath $bundledSkillsModule) { . $bundledSkillsModule }
+$pluginModule = Join-Path $runtimeRoot 'Deck.PluginManagement.ps1'
+if (-not (Test-Path -LiteralPath $pluginModule)) { $pluginModule = Join-Path $PSScriptRoot '../suite/Deck.PluginManagement.ps1' }
+if (Test-Path -LiteralPath $pluginModule) { . $pluginModule }
+if ($Account -eq 'plugin') {
+    if ($Best -or $History -or $Resume -or $RenameTo -or $Del -or $NewAccount -or $Pool -or $InheritFrom -or $UseAccount -or $Source -or $Targets -or $Resources -or $GlobalRules -or $Direct -or $AutoCompact -or $CheckAll) {
+        throw 'Do not combine plugin management with account or launch options.'
+    }
+    if (-not (Get-Command Invoke-DeckManagedPluginCommand -ErrorAction SilentlyContinue)) { throw 'Plugin management is unavailable. Reinstall Codex Deck.' }
+    . (Join-Path $runtimeRoot 'Deck.Core.ps1')
+    Invoke-DeckManagedPluginCommand $runtimeRoot @($CodexArgs) | Write-Output
+    exit 0
+}
 if($CheckAll -and @($PSBoundParameters.Keys | Where-Object {$_ -ne 'CheckAll'}).Count){
     throw '-a only works with the plain codex-auth dashboard command.'
 }

@@ -27,6 +27,7 @@ jobs:
           ./suite/Test-DeckEnvironments.ps1
           ./suite/Test-DeckBundledSkills.ps1
           ./suite/Test-DeckSkillCatalog.ps1
+          ./suite/Test-DeckPluginManagement.ps1
           ./suite/Test-DeckEnvironmentLaunch.ps1
           ./suite/Test-CodexAuth.ps1
           ./suite/Test-DeckTerminal.ps1
@@ -52,6 +53,7 @@ jobs:
           if (!(Test-Path "$destination/.codex-loop/Deck.AutoCompact.cjs")) { throw 'Missing installed auto-compact client' }
           if (!(Test-Path "$destination/.codex-loop/Deck.AutoCompact.Sidecar.cjs")) { throw 'Missing installed native auto-compact sidecar' }
           if (!(Test-Path "$destination/.codex-loop/Deck.Inspector.cjs")) { throw 'Missing installed trajectory and efficiency inspector' }
+          if (!(Test-Path "$destination/.codex-loop/Deck.PluginManagement.ps1")) { throw 'Missing installed plugin manager' }
           if (!(Test-Path "$destination/.codex-loop/accounts/pool/skills/debug-swarm/SKILL.md")) { throw 'Missing globally enabled Deck skill' }
           if (!(Test-Path "$destination/.codex-loop/accounts/pool/skills/ui-design/SKILL.md")) { throw 'Missing UIZZE skill in pooled environment' }
           if (Test-Path "$destination/.codex-loop/deck/catalog/aas-index.json") { throw 'Optional AAS catalog was installed by default' }

@@ -5,6 +5,7 @@ $tokens=$null; $errors=$null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($sourcePath, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors -join '; ') }
 $sourceText=[IO.File]::ReadAllText($sourcePath)
+if($sourceText -notmatch '(?s)\$Account -eq ''plugin''.*Invoke-DeckManagedPluginCommand'){throw 'codex-auth plugin is not routed through Deck plugin management'}
 $checkAllParameter=$ast.ParamBlock.Parameters | Where-Object {$_.Name.VariablePath.UserPath -eq 'CheckAll'} | Select-Object -First 1
 if(-not $checkAllParameter -or $checkAllParameter.Extent.Text -notmatch "Alias\('a'\)" -or $sourceText -notmatch 'Show-DeckTerminal[^\r\n]+-CheckAll:\$CheckAll'){throw 'codex-auth -a is not wired to the dashboard all-check action'}
 $savedErrorPreference=$ErrorActionPreference

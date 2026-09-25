@@ -929,13 +929,7 @@ function Show-DeckSettings {
     & $updateSpecificAccountsVisibility
     $integrationCatalog=Get-DeckIntegrationCatalog $suite
     $syncAasTab={
-        $installed=(Get-DeckIntegrationStatus $suite aas_catalog -SkipHash).Valid
-        if($installed -and -not $tabs.Items.Contains($settingsTabRefs.AAS)){
-            $skillsIndex=$tabs.Items.IndexOf($settingsTabRefs.Skills)
-            if($skillsIndex -ge 0){$tabs.Items.Insert($skillsIndex,$settingsTabRefs.AAS)}
-        }elseif(-not $installed -and $tabs.Items.Contains($settingsTabRefs.AAS)){
-            [void]$tabs.Items.Remove($settingsTabRefs.AAS)
-        }
+        if((Get-DeckIntegrationStatus $suite aas_catalog -SkipHash).Valid -and $tabs.SelectedItem -eq $settingsTabRefs.Skills){& $renderCatalog}
     }.GetNewClosure()
     foreach($integrationName in @('rtk','headroom','codegraph','browser_harness','aas_catalog')){
         $component=$integrationCatalog.components.$integrationName
@@ -1067,12 +1061,9 @@ function Show-DeckSettings {
     }.GetNewClosure())
     . (Join-Path $suite 'Deck.SettingsExtras.ps1')
     $settingsTabRefs.BrowserSkillCard=$browserSkillCard
-    $settingsTabRefs.AAS=$aasTab
     $settingsTabRefs.Skills=$deckSkillTab
     & $integrationVisibility
-    $orderedTabs=@('General','Checks & Warmup','Environments')
-    if((Get-DeckIntegrationStatus $suite aas_catalog -SkipHash).Valid){$orderedTabs+='AAS'}
-    $orderedTabs+=@('Skills','Advanced','Integrations','Backup','About')
+    $orderedTabs=@('General','Checks & Warmup','Environments','Skills','Advanced','Integrations','Backup','About')
     $tabsByName=@{}; foreach($tab in @($tabs.Items)){$tabsByName[[string]$tab.Header]=$tab}
     $selectedSettingsTab=$tabs.SelectedItem
     $tabs.Items.Clear(); foreach($header in $orderedTabs){[void]$tabs.Items.Add($tabsByName[$header])}
@@ -1135,8 +1126,8 @@ function Show-DeckSettings {
             if($updated.WarmupTimedEnabled -and -not $updated.WarmupTimes){throw 'Enter at least one daily time.'}
             if($tabs.SelectedItem -eq $environmentTab -or $environmentState.Pools.Count){& $rememberPool}
             & $saveEnvironments -ValidateOnly
-            $updated.SkillAccessAccounts=if($skillMembership.SelectedIndex -eq 3){@($skillMembers.SelectedItems | ForEach-Object {[string]$_}) -join ','}else{@('*','*free','*paid')[$skillMembership.SelectedIndex]}
-            if(-not $updated.SkillAccessAccounts){throw 'Choose at least one account or pool for skill access.'}
+            $updated.SkillAccessAccounts=& $currentSkillScope
+            if(-not $updated.SkillAccessAccounts -or $updated.SkillAccessAccounts -eq '__none__'){throw 'Choose at least one account or pool for skill access.'}
             $updated.BrowserHarnessEnabled=[bool]$controls.BrowserHarnessEnabled.IsChecked
             $updated.CodeGraphEnabled=$false
             $updated.CodeGraphProfile=[string]$codeGraphProfile.SelectedItem
@@ -1180,7 +1171,7 @@ function Show-DeckSettings {
         } catch { $settingsError.Text='Settings were not saved: '+$_.Exception.Message; $settingsError.BringIntoView(); $save.Content='Save settings' }
         finally {if(-not $worker){$save.IsEnabled=$true}}
     }.GetNewClosure())
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;Membership=$skillMembership;Members=$skillMembers;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState;Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus;Previous=$catalogPrevious;Next=$catalogNext;PageInput=$catalogPageInput;PageGo=$catalogPageGo;PageLabel=$catalogPageLabel}}}}
+    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;Membership=$skillMembership;Members=$skillMembers;AccountItems=$skillAccountItems;AccountChecks=$skillAccountChecks;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;State=$deckSkillState;Plugin=@{Marketplace=$pluginMarketplaceSource;AddMarketplace=$pluginMarketplaceAdd;Selector=$pluginSelector;Install=$pluginInstall;Status=$pluginStatus};Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus;Previous=$catalogPrevious;Next=$catalogNext;PageInput=$catalogPageInput;PageGo=$catalogPageGo;PageLabel=$catalogPageLabel}}}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -1737,11 +1728,14 @@ try{
         $failoverMembership.SelectedIndex=3
         $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
         if ($headers -notcontains 'Environments') { throw 'Environment sharing Settings tab missing.' }
-        $expectedHeaders=if((Get-DeckIntegrationStatus $suite aas_catalog -SkipHash).Valid){'General|Checks & Warmup|Environments|AAS|Skills|Advanced|Integrations|Backup|About'}else{'General|Checks & Warmup|Environments|Skills|Advanced|Integrations|Backup|About'}
+        $expectedHeaders='General|Checks & Warmup|Environments|Skills|Advanced|Integrations|Backup|About'
         if (($headers -join '|') -ne $expectedHeaders) { throw 'Settings tabs are missing or out of order.' }
         if ($settingsTest.Controls.TrajectoryEnabled.IsChecked -or $settingsTest.Controls.ContextManagerEnabled.IsChecked -or $settingsTest.Controls.ContextManagerAutoOpen.IsChecked -or -not $settingsTest.Controls.EfficiencyAnalyticsEnabled.IsChecked) { throw 'Trajectory/context defaults or enabled-by-default efficiency analytics are incorrect.' }
         if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '600') { throw 'Efficiency analytics session limit default failed.' }
         if ($headers -notcontains 'Skills' -or -not $settingsTest.Skills.State.Controls.ContainsKey('debug-swarm') -or -not $settingsTest.Skills.State.Controls['debug-swarm'].IsChecked) { throw 'Globally enabled Deck skills Settings tab missing or invalid.' }
+        if($settingsTest.Skills.Target -ne $settingsTest.Skills.Members -or -not $settingsTest.Skills.Plugin.AddMarketplace -or -not $settingsTest.Skills.Plugin.Install){throw 'Skills settings must use one account access/selection list and expose plugin installation.'}
+        $skillOrder=@(Get-DeckBundledSkills $suite | ForEach-Object Name)
+        if($skillOrder[-1] -cne 'debug-swarm'){throw 'Debug Swarm must appear after the UIZZE skills.'}
         if($settingsTest.Controls.ContainsKey('UizzeMcpEnabled') -or -not $settingsTest.Integrations.ContainsKey('aas_catalog')){throw 'Integrations must show optional AAS catalog without paid UIZZE MCP.'}
         $catalogOpenWatch=[Diagnostics.Stopwatch]::StartNew()
         $settingsTest.Tabs.SelectedItem=@($settingsTest.Tabs.Items | Where-Object Header -eq 'Skills')[0]
@@ -1749,7 +1743,6 @@ try{
         if($catalogOpenWatch.ElapsedMilliseconds -gt 500){throw 'Opening Skills blocked the UI thread.'}
         $catalogUI=$settingsTest.Skills.Catalog
         if(Test-Path -LiteralPath (Get-DeckCatalogFile $suite) -PathType Leaf){
-        $settingsTest.Tabs.SelectedItem=@($settingsTest.Tabs.Items | Where-Object Header -eq 'AAS')[0]
         $catalogDeadline=[DateTimeOffset]::UtcNow.AddSeconds(12)
         while($settingsTest.Skills.Catalog.Results.Items.Count -lt 1 -and [DateTimeOffset]::UtcNow -lt $catalogDeadline){
             $frame=[Windows.Threading.DispatcherFrame]::new()
@@ -1771,8 +1764,6 @@ try{
         if($catalogUI.PageLabel.Text -notlike 'Page 2 of *' -or $catalogUI.Results.Items.Count -lt 1 -or [string]$catalogUI.Results.Items[0].Tag.id -ceq $firstSkillId -or -not $catalogUI.Previous.IsEnabled){throw 'AAS catalog did not advance to the next page.'}
         $settingsTest.Skills.Catalog.Results.SelectedIndex=0
         if(-not $settingsTest.Skills.Catalog.Install.IsEnabled){throw 'AAS catalog selection did not enable direct installation.'}
-        }elseif($headers -contains 'AAS'){
-            throw 'The AAS tab must be hidden until its catalog is installed.'
         }
         $environmentUI=$settingsTest.Environment
         if($environmentUI.Name.Text -ne 'pool' -or $environmentUI.Name.SelectedItem -ne 'pool'){throw 'Environment picker did not select its default pool.'}
@@ -2049,7 +2040,7 @@ try{
         Write-DeckJson (Join-Path $settingsFixture 'accounts/account1/auth.json') @{}
         Write-DeckJson (Join-Path $settingsFixture 'accounts/account2/auth.json') @{}
         Set-DeckPoolEntry $settingsFixture pool @('*') Ordered | Out-Null
-        foreach($file in @('Deck.EnvironmentSettings.ps1','Deck.SkillSettings.ps1','Deck.BundledSkills.ps1','Deck.SettingsExtras.ps1','Deck.Terminal.ps1','Deck.Failover.ps1','Deck.Integrations.json','Deck.DefaultGlobalRules.md')){Copy-Item -LiteralPath (Join-Path $suite $file) -Destination $settingsFixture}
+        foreach($file in @('Deck.EnvironmentSettings.ps1','Deck.SkillSettings.ps1','Deck.BundledSkills.ps1','Deck.PluginManagement.ps1','Deck.SettingsExtras.ps1','Deck.Terminal.ps1','Deck.Failover.ps1','Deck.Integrations.json','Deck.DefaultGlobalRules.md')){Copy-Item -LiteralPath (Join-Path $suite $file) -Destination $settingsFixture}
         Copy-Item -LiteralPath (Join-Path $suite 'skills') -Destination (Join-Path $settingsFixture 'skills') -Recurse
         try{
             $script:suite=$settingsFixture;$script:root=Join-Path $settingsFixture 'deck'
@@ -2074,7 +2065,9 @@ try{
             $draftScope=$draftUI.Controls.WarmupPlanTypes.Resources['ScopeMenu']
             $draftScope.Items[1].IsChecked=$true; $draftScope.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
             $draftScope.Items[3].IsChecked=$true; $draftScope.Items[3].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
-            $draftUI.Skills.Target.SelectedItem='account2'
+            $draftUI.Skills.Membership.SelectedIndex=3
+            $draftUI.Skills.AccountChecks['account1'].IsChecked=$false
+            $draftUI.Skills.Target.SelectedItem=$draftUI.Skills.AccountItems['account2']
             $deckSkillCheck=$draftUI.Skills.State.Controls['debug-swarm']; $deckSkillCheck.IsChecked=$false
             $deckSkillCheck.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             $draftUI.Tabs.SelectedItem=@($draftUI.Tabs.Items | Where-Object Header -eq 'General')[0]
@@ -2087,6 +2080,8 @@ try{
             if($savedSettings.DashboardTheme -ne 'Split'){throw 'Save settings did not persist the terminal dashboard theme.'}
             if($savedSettings.AutoCompactHandoffPrompt -notmatch 'concise DECK_HANDOFF'){throw 'Save settings did not persist the multiline handoff request.'}
             if($savedSettings.WarmupPlanTypes -ne 'free,paid'){throw 'Save settings did not persist multiple warm-up account types.'}
+            $savedSkillAccess=@($savedSettings.SkillAccessAccounts -split ',' | Where-Object {$_})
+            if($savedSkillAccess -contains 'account1' -or $savedSkillAccess -notcontains 'account2' -or $savedSkillAccess -notcontains 'pool'){throw 'Save settings did not persist custom per-account skill access.'}
             $savedSkill=@(Get-DeckBundledSkills $settingsFixture | Where-Object Name -eq 'debug-swarm')[0]
             if((Get-DeckBundledSkillStatus $settingsFixture account2 $savedSkill).Desired){throw 'Save settings did not persist the per-account Deck skill override.'}
             if(-not $settings.FailoverEnabled -or $settings.FailoverAccounts -ne 'account2' -or -not $settings.MaskEmail -or $settings.WarmupPlanTypes -ne 'free,paid'){throw 'Saved settings did not update the live Deck state.'}
@@ -2097,7 +2092,8 @@ try{
                     $actual=if($settings[$key] -is [bool]){[bool]$control.IsChecked}elseif($key -eq 'WarmupPlanTypes'){ConvertTo-DeckWarmupPlanTypes (@($control.Resources['ScopeMenu'].Items | Where-Object IsChecked | ForEach-Object {[string]$_.Tag}) -join ',')}elseif($key -eq 'WarmupAccounts'){@($control.SelectedItems) -join ','}elseif($key -eq 'FailoverAccounts'){$membership=$control.Resources['Membership']; if($membership.SelectedIndex -eq 3){@($control.Resources['Members'].SelectedItems) -join ','}else{@('*','*free','*paid')[$membership.SelectedIndex]}}elseif($key -in @('WarmupModel','ViewMode','DashboardTheme','FailoverMode','AutoCompactMode')){[string]$control.SelectedItem}elseif($settings[$key] -is [int]){[int]$control.Text}else{$control.Text.Trim()}
                     if($actual -ne $settings[$key]){throw "Reopened setting does not match saved value: $key"}
                 }
-                $reopenedUI.Skills.Target.SelectedItem='account2'
+                if($reopenedUI.Skills.Membership.SelectedIndex -ne 3 -or $reopenedUI.Skills.AccountChecks['account1'].IsChecked -or -not $reopenedUI.Skills.AccountChecks['account2'].IsChecked){throw 'Reopened custom skill access selection is incorrect.'}
+                $reopenedUI.Skills.Target.SelectedItem=$reopenedUI.Skills.AccountItems['account2']
                 if($reopenedUI.Skills.State.Controls['debug-swarm'].IsChecked){throw 'Reopened Deck skill setting lost its disabled override.'}
             }finally{$reopenedUI.Dialog.Close()}
             if(-not @((Get-DeckSharing $settingsFixture account1).Bindings).Count){throw 'Save settings did not persist pending resource sharing.'}
