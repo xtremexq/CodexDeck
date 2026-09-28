@@ -189,7 +189,10 @@ function Set-DeckAutoCompactLaunch([string]$Root, [bool]$Enabled) {
 }
 function Get-DeckTerminalLaunchArguments($Settings, [bool]$InteractiveConversation) {
     if ($InteractiveConversation -and $Settings -and [bool]$Settings.TerminalScrollbackEnabled) {
-        return @('-c','tui.alternate_screen="never"')
+        # raw_output_mode is Codex's dedicated copy/scrollback mode. Keep the
+        # alternate-screen override too so every supported CLI version stays
+        # on the terminal's normal screen buffer.
+        return @('-c','tui.alternate_screen="never"','-c','tui.raw_output_mode=true')
     }
     return @()
 }

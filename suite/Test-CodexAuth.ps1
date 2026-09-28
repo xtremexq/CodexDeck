@@ -15,7 +15,7 @@ try {
     $invalidCheckAllExit=$LASTEXITCODE
 } finally { $ErrorActionPreference=$savedErrorPreference }
 if($invalidCheckAllExit -eq 0 -or ($invalidCheckAll -join "`n") -notmatch 'only works with the plain codex-auth dashboard command'){throw 'codex-auth -a accepted a non-plain command'}
-foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Get-AccountDirectories','Find-DeckConversationOwner','Normalize-AccountName','Ensure-FreeAccountDefaults','Read-TextFile','Write-TextFile','Normalize-Newlines','ConvertTo-DeckWindowsArgument','Invoke-DeckCodex','Write-DeckSessionExit','Get-DeckSessionRoutingArguments','ConvertFrom-DeckTomlScalar','Get-DeckTomlTopLevelValue','Get-DeckCodexArgumentSetting','Get-DeckNativeAutoCompactConfiguration','Open-DeckLaunchInspector') {
+foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Get-AccountDirectories','Find-DeckConversationOwner','Normalize-AccountName','Ensure-FreeAccountDefaults','Ensure-AccountInstructions','Read-TextFile','Write-TextFile','Normalize-Newlines','ConvertTo-DeckWindowsArgument','Invoke-DeckCodex','Write-DeckSessionExit','Get-DeckSessionRoutingArguments','ConvertFrom-DeckTomlScalar','Get-DeckTomlTopLevelValue','Get-DeckCodexArgumentSetting','Get-DeckNativeAutoCompactConfiguration','Open-DeckLaunchInspector') {
     $definition=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $true)
     . ([scriptblock]::Create($definition.Extent.Text))
 }
@@ -56,6 +56,13 @@ if ((ConvertTo-DeckWindowsArgument '') -ne '""' -or
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('codex-auth-test-' + [guid]::NewGuid().ToString('N'))
 $accountsRoot = Join-Path $fixture 'accounts'
 New-Item -ItemType Directory -Path (Join-Path $accountsRoot 'account1') -Force | Out-Null
+$sharedInstructions=Join-Path $accountsRoot 'AGENTS.shared.md'
+$accountInstructions=Join-Path $accountsRoot 'account1/AGENTS.md'
+[IO.File]::WriteAllText($sharedInstructions,'shared instructions',[Text.UTF8Encoding]::new($false))
+[void](New-Item -ItemType HardLink -Path $accountInstructions -Target $sharedInstructions)
+Ensure-AccountInstructions (Join-Path $accountsRoot 'account1')
+$instructionLinks=@(fsutil hardlink list $accountInstructions 2>$null)
+if($instructionLinks -match 'AGENTS\.shared\.md$' -or [IO.File]::ReadAllText($accountInstructions) -ne 'shared instructions'){throw 'Legacy shared account instructions were not safely detached'}
 $conversationId=[guid]::NewGuid().ToString('D')
 $conversationDirectory=Join-Path $accountsRoot 'account1/sessions/2026/09/21'
 [void][IO.Directory]::CreateDirectory($conversationDirectory)

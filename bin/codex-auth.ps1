@@ -487,11 +487,41 @@ function Ensure-AccountInstructions {
     param([string]$AccountDir)
     $path = Join-Path $AccountDir 'AGENTS.md'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
-    $links = @(& fsutil hardlink list $path 2>$null)
-    if ($LASTEXITCODE -eq 0 -and @($links | Where-Object { $_ -match '[\\/]AGENTS\.shared\.md$' }).Count) {
+    $temporary = $null
+    $parked = $null
+    try {
+        $links = @(& fsutil hardlink list $path 2>$null)
+        if ($LASTEXITCODE -ne 0 -or -not @($links | Where-Object { $_ -match '[\\/]AGENTS\.shared\.md$' }).Count) { return }
         $temporary = $path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
         Copy-Item -LiteralPath $path -Destination $temporary
-        [IO.File]::Replace($temporary, $path, [NullString]::Value)
+        try {
+            [IO.File]::Replace($temporary, $path, [NullString]::Value)
+        } catch {
+            # ReplaceFile can reject a destination with multiple hard links on
+            # Windows. Park that one directory entry, install the private copy,
+            # then remove the parked link. Restore it if the second move fails.
+            $parked = $path + '.' + [guid]::NewGuid().ToString('N') + '.shared-link'
+            [IO.File]::Move($path, $parked)
+            try {
+                [IO.File]::Move($temporary, $path)
+            } catch {
+                if (-not [IO.File]::Exists($path) -and [IO.File]::Exists($parked)) { [IO.File]::Move($parked, $path) }
+                throw
+            }
+            [IO.File]::Delete($parked)
+            $parked = $null
+        }
+    } catch {
+        # This is only a migration away from Deck's old shared-instructions
+        # layout. A busy file must not prevent Codex itself (or its updater)
+        # from starting; a later launch can retry the detachment.
+        Write-Warning "Codex Deck deferred the legacy account-instructions migration because AGENTS.md is busy. The Codex launch will continue."
+    } finally {
+        if ($temporary -and [IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+        if ($parked -and [IO.File]::Exists($parked)) {
+            if (-not [IO.File]::Exists($path)) { [IO.File]::Move($parked, $path) }
+            else { [IO.File]::Delete($parked) }
+        }
     }
 }
 

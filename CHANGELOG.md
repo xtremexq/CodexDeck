@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Forced Codex's dedicated raw-output mode as well as its normal screen buffer for the Deck scrollback setting, making the terminal scrollbar consistent across account, pool, dashboard, desktop, resume and failover launches.
+- Prevented a busy legacy `AGENTS.md` hard link from aborting `codex-auth` before Codex can show and complete its own update; Deck now detaches it safely when possible and otherwise defers the migration without blocking launch.
 - Fixed manual `!autocompact` immediately after Esc by waiting for the interrupted turn to become idle and starting the handoff in a fresh turn instead of steering input into the cancelling turn.
 
 ## 1.8.4 - 2026-09-28
