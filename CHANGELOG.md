@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.8.7 - 2026-09-28
 
 - Fixed Codex app-server crashing on launch with `unexpected argument '--no-alt-screen'` during interactive account, dashboard, and resume commands by stripping the client-only flag from the auto-compact sidecar's server configuration and capturing app-server startup diagnostics.
 - Replaced the scrollback setting's config-only alternate-screen override with Codex's explicit `--no-alt-screen` launch flag. This fixes resumed Deck conversations, where the remote TUI could still enter the alternate screen despite the configuration arguments.
