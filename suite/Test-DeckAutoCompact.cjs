@@ -43,11 +43,13 @@ async function main() {
   await manual.onUsage({threadId:'manual-thread',turnId:'working-turn',tokenUsage:{last:{totalTokens:90},modelContextWindow:100}});
   assert.equal(manualCalls.length,0,'manual-only mode must not trigger at the automatic threshold');
   assert.equal(await manual.requestCompact(),true);
-  assert.equal(manualCalls.at(-1).method,'turn/steer','manual custom compaction must steer the active turn');
-  assert.equal(manualCalls.at(-1).params.input[0].text,HANDOFF_REQUEST);
+  assert.equal(manualCalls.length,0,'manual custom compaction must not steer a turn that may be ending after Esc');
   assert.equal(await manual.requestCompact(),false,'a second request must not start another cycle');
-  await manual.onItem({turnId:'working-turn',item:{type:'agentMessage',phase:'final_answer',text:`${HANDOFF}: manual state`}});
-  await manual.onTurnCompleted({threadId:'manual-thread',turn:{id:'working-turn',status:'completed'}});
+  await manual.onThreadStatus({type:'idle'});
+  assert.equal(manualCalls.at(-1).method,'turn/start','manual custom compaction must start a fresh handoff after the interrupted thread becomes idle');
+  assert.equal(manualCalls.at(-1).params.input[0].text,HANDOFF_REQUEST);
+  await manual.onItem({turnId:'manual-turn',item:{type:'agentMessage',phase:'final_answer',text:`${HANDOFF}: manual state`}});
+  await manual.onTurnCompleted({threadId:'manual-thread',turn:{id:'manual-turn',status:'completed'}});
   assert.equal(manualCalls.at(-1).method,'thread/compact/start');
   await manual.onItem({turnId:'manual-compact',item:{type:'contextCompaction'}});
   await manual.onTurnCompleted({threadId:'manual-thread',turn:{id:'manual-compact',status:'completed'}});
@@ -207,6 +209,28 @@ async function main() {
   assert.equal(await resumed.requestCompact(),undefined,'manual compaction should discover a resumed TUI without thread/started');
   assert.equal(resumed.targetThreadId,'resumed-thread');
   assert.equal(resumedCalls.some(call=>call.method==='thread/compact/start'),true,'the discovered resumed thread must receive the compaction request');
+  const interruptedCalls=[];
+  let interruptedStatus='active';
+  const interrupted=new ThreadObserver(async(method,params)=>{
+    interruptedCalls.push({method,params});
+    if(method==='thread/loaded/list') return {data:['interrupted-thread'],nextCursor:null};
+    if(method==='thread/read') return {thread:{id:'interrupted-thread',status:{type:interruptedStatus}}};
+    if(method==='thread/turns/list') return {data:[{id:'stopped-turn',status:'inProgress',items:[]}]};
+    if(method==='thread/resume') return {thread:{id:'interrupted-thread'}};
+    if(method==='turn/start') return {turn:{id:'fresh-handoff'}};
+    return {};
+  },70,custom,()=>{},'Custom',false);
+  interrupted.onNotification({method:'thread/started',params:{thread:{id:'interrupted-thread',parentThreadId:null}}});
+  await interrupted.selection;
+  interrupted.onNotification({method:'turn/started',params:{threadId:'interrupted-thread',turn:{id:'stopped-turn'}}});
+  await interrupted.requestCompact();
+  assert.ok(!interruptedCalls.some(call=>call.method==='turn/steer'),'an Esc-interrupted manual request must never steer the cancelling turn');
+  assert.ok(!interruptedCalls.some(call=>call.method==='turn/start'),'the replacement handoff must wait until Codex reports the interrupted thread idle');
+  interruptedStatus='idle';
+  interrupted.onNotification({method:'thread/status/changed',params:{threadId:'interrupted-thread',status:{type:'idle'}}});
+  await interrupted.serial.get('interrupted-thread');
+  assert.equal(interruptedCalls.filter(call=>call.method==='turn/start').length,1,'idle status after Esc must start exactly one fresh handoff turn');
+  assert.equal(interruptedCalls.find(call=>call.method==='turn/start').params.input[0].text.includes(HANDOFF),true);
   const switchedCalls=[];
   let loadedIds=['initial-thread'];
   const switched=new ThreadObserver(async(method,params)=>{

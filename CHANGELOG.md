@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed manual `!autocompact` immediately after Esc by waiting for the interrupted turn to become idle and starting the handoff in a fresh turn instead of steering input into the cancelling turn.
+
 ## 1.8.4 - 2026-09-28
 
 - Fixed an interactive terminal crash after interrupting a turn by draining auto-compact sidecar diagnostics without a PowerShell callback on a raw .NET worker thread.

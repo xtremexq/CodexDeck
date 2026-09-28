@@ -143,9 +143,39 @@ class ThreadObserver {
     try { await this.rpc('thread/unsubscribe',{threadId}); } catch {}
   }
   retry() {
-    const next=this.discovery.then(()=>this.discover());
+    const next=this.discovery.then(async()=>{
+      await this.discover();
+      await this.refreshPendingManualCompact();
+    });
     this.discovery=next.catch(()=>{});
     return next;
+  }
+  async syncControllerRuntimeState(threadId) {
+    const controller=this.controllers.get(threadId);
+    if(!controller) return;
+    const result=await this.rpc('thread/read',{threadId,includeTurns:false});
+    const status=result?.thread?.status;
+    if(status?.type==='idle') { await controller.onThreadStatus(status); return; }
+    if(status?.type==='systemError') throw Error('The active Codex thread is in a system-error state.');
+    if(status?.type==='notLoaded') throw Error('The active Codex thread is no longer loaded.');
+    if(status?.type==='active') {
+      // Recover an active turn id when turn/started was missed. For a cancelling
+      // turn whose persisted status already changed, the placeholder merely
+      // prevents turn/start from being folded into that dying turn; the idle
+      // status notification (or retry below) clears it.
+      const page=await this.rpc('thread/turns/list',{threadId,limit:1,sortDirection:'desc',itemsView:'summary'});
+      const latest=page?.data?.[0];
+      controller.activeTurnId=latest?.status==='inProgress' ? latest.id : (controller.activeTurnId || latest?.id || 'deck-active-turn');
+    }
+  }
+  async refreshPendingManualCompact() {
+    const threadId=this.targetThreadId;
+    const controller=this.controllers.get(threadId);
+    if(!threadId || controller?.phase!=='checkpoint' || controller.checkpointTurnId || !controller.activeTurnId) return;
+    const previous=this.serial.get(threadId) || Promise.resolve();
+    const next=previous.then(()=>this.syncControllerRuntimeState(threadId));
+    this.serial.set(threadId,next.catch(()=>{}));
+    await next;
   }
   async discover() {
     await this.selection;
@@ -228,6 +258,7 @@ class ThreadObserver {
     const previous=this.serial.get(threadId) || Promise.resolve();
     const next=previous.then(async()=>{
       if(this.targetThreadId!==threadId) throw Error('The active Codex thread changed; try again.');
+      await this.syncControllerRuntimeState(threadId);
       if(!await this.controllers.get(threadId).requestCompact()) throw Error('Compaction could not start or is already in progress.');
     });
     this.serial.set(threadId,next.catch(()=>{}));
@@ -254,10 +285,11 @@ class ThreadObserver {
       if(['normal','checkpoint','native-pending'].includes(controller.phase)) controller.activeTurnId=event.turn?.id || null;
       return;
     }
-    if(!['item/completed','thread/tokenUsage/updated','turn/completed'].includes(message.method)) return;
+    if(!['item/completed','thread/tokenUsage/updated','turn/completed','thread/status/changed'].includes(message.method)) return;
     const previous=this.serial.get(event.threadId) || Promise.resolve();
     const next=previous.then(async()=>{
-      if(message.method==='item/completed') await controller.onItem(event);
+      if(message.method==='thread/status/changed') await controller.onThreadStatus(event.status);
+      else if(message.method==='item/completed') await controller.onItem(event);
       else if(message.method==='thread/tokenUsage/updated') {
         if(!controller.activeTurnId && controller.phase==='normal') controller.activeTurnId=event.turnId;
         await controller.onUsage(event);

@@ -52,7 +52,11 @@ class AutoCompactController {
     } else {
       this.armed=false;
       this.report('Manual compaction requested: requesting task-state handoff.');
-      await this.startCustomCompact();
+      // A manual request can arrive immediately after the user presses Esc.
+      // Never steer the turn that is being cancelled: app-server can accept and
+      // display that input while the dying turn no longer has a model loop to
+      // consume it. Queue a fresh checkpoint turn after Codex becomes idle.
+      await this.startCustomCompact(null);
     }
     return this.phase!=='normal';
   }
@@ -79,6 +83,14 @@ class AutoCompactController {
     this.phase='native-compacting'; this.compactionItemDone=false; this.compactionTurnDone=false; this.compactionTurnId=null;
     try { await this.rpc('thread/compact/start',{threadId:this.threadId}); }
     catch(error) { this.phase='normal'; this.failCycle(`Native compaction failed: ${error.message}`); await this.drain(); }
+  }
+  async onThreadStatus(status) {
+    if(status?.type!=='idle') return;
+    // thread/status/changed is authoritative even when a remote observer misses
+    // turn/completed during an Esc interrupt.
+    this.activeTurnId=null;
+    if(this.phase==='checkpoint' && !this.checkpointTurnId) await this.startCheckpoint();
+    else if(this.phase==='native-pending') await this.startNativeCompact();
   }
   failCycle(message) {
     this.report(message);
