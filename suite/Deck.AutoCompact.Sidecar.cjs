@@ -31,6 +31,7 @@ function optionsFromArgs(args) {
   if(!options.codexExe) throw Error('Missing Codex executable.');
   if(!options.handoffRequest?.includes(HANDOFF)) throw Error(`Auto-compact handoff prompt must contain ${HANDOFF}.`);
   if(!Array.isArray(options.serverConfig) || options.serverConfig.some(value=>typeof value!=='string')) throw Error('Invalid server configuration arguments.');
+  options.serverConfig=options.serverConfig.filter(arg=>arg!=='--no-alt-screen');
   return options;
 }
 
@@ -317,8 +318,11 @@ async function main() {
   const options=optionsFromArgs(process.argv.slice(2));
   const url=`ws://127.0.0.1:${await availablePort()}`;
   const args=[...(options.codexEntry?[options.codexEntry]:[]),'app-server','--listen',url,...options.serverConfig];
-  const child=spawn(options.codexExe,args,{cwd:options.cwd,env:process.env,windowsHide:true,stdio:'ignore'});
-  let stopped=false, socket=null, poll=null, control=null, serverError=null;
+  const child=spawn(options.codexExe,args,{cwd:options.cwd,env:process.env,windowsHide:true,stdio:['ignore','ignore','pipe']});
+  let stopped=false, socket=null, poll=null, control=null, serverError=null, serverStderr='';
+  child.stderr?.on('data',chunk=>{
+    if(serverStderr.length<8192) serverStderr+=chunk.toString('utf8');
+  });
   function stop() {
     if(stopped) return;
     stopped=true; if(poll) clearInterval(poll);
@@ -332,13 +336,17 @@ async function main() {
   child.on('error',error=>{serverError=error;});
   child.on('exit',()=>{
     if(stopped) process.exit(process.exitCode || 0);
-    process.stderr.write('Codex app-server exited while the native terminal was open.\n');
+    const detail=serverStderr.trim();
+    process.stderr.write(`Codex app-server exited while the native terminal was open.${detail?` ${detail}`:''}\n`);
     process.exitCode=1; stop();
   });
   try {
     for(let attempt=0;attempt<100;attempt++) {
       if(serverError) throw serverError;
-      if(child.exitCode!==null) throw Error('Codex app-server exited before it became ready.');
+      if(child.exitCode!==null) {
+        const detail=serverStderr.trim();
+        throw Error(`Codex app-server exited before it became ready${detail?`: ${detail}`:'.'}`);
+      }
       try { socket=await connect(url); break; }
       catch { await new Promise(resolve=>setTimeout(resolve,100)); }
     }

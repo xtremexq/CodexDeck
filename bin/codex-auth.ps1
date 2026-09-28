@@ -1335,7 +1335,8 @@ try {
         } else {
             $sidecarPath = Join-Path $runtimeRoot 'Deck.AutoCompact.Sidecar.cjs'
             if (-not (Test-Path -LiteralPath $sidecarPath -PathType Leaf)) { throw 'Deck.AutoCompact.Sidecar.cjs is missing. Reinstall Codex Deck.' }
-            $serverConfigJson = ConvertTo-Json -InputObject ([object[]](@($sharedArgs) + @($nativeAutoCompactArgs) + @($postConfigArgs))) -Compress -Depth 10
+            $serverConfigArgs = @(@($sharedArgs) + @($nativeAutoCompactArgs) + @($postConfigArgs)) | Where-Object { $_ -ne '--no-alt-screen' }
+            $serverConfigJson = ConvertTo-Json -InputObject ([object[]]$serverConfigArgs) -Compress -Depth 10
             $serverConfigEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($serverConfigJson))
             $sidecarArgs = @($sidecarPath,'--codex-exe',$codexExecutable,'--threshold',[string]$threshold,'--cwd',(Get-Location).Path,'--handoff-base64',$handoffEncoded,'--server-config-base64',$serverConfigEncoded,'--mode',$compactSettings.AutoCompactMode,'--auto-enabled',([string][bool]$deckCustomAutoCompact).ToLowerInvariant())
             if ($codexEntry) { $sidecarArgs += @('--codex-entry',$codexEntry) }

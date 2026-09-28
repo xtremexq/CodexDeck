@@ -140,6 +140,9 @@ async function main() {
   const failoverConfig=['-c','model="gpt-5.6-luna"','-c','model_provider="deck_failover"','-c','model_providers.deck_failover.base_url="http://127.0.0.1:1234/token"'];
   const nativeOptions=optionsFromArgs(['--codex-exe','codex','--threshold','70','--handoff-base64',Buffer.from(custom).toString('base64'),'--server-config-base64',encoded(failoverConfig)]);
   assert.deepEqual(nativeOptions.serverConfig,failoverConfig,'native auto-compact must preserve the routing proxy so !account switches remain on the observed app-server');
+  const scrollbackServerConfig=['--no-alt-screen',...failoverConfig];
+  const filteredOptions=optionsFromArgs(['--codex-exe','codex','--threshold','70','--handoff-base64',Buffer.from(custom).toString('base64'),'--server-config-base64',encoded(scrollbackServerConfig)]);
+  assert.deepEqual(filteredOptions.serverConfig,failoverConfig,'sidecar must filter --no-alt-screen from app-server config arguments');
   assert.equal(optionsFromArgs(['--codex-exe','codex','--mode','Native','--auto-enabled','false','--handoff-base64',Buffer.from(custom).toString('base64')]).autoEnabled,false);
   const observerCalls=[];
   let persisted=false;

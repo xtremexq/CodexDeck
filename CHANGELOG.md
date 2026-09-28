@@ -2,9 +2,10 @@
 
 ## Unreleased
 
+- Fixed Codex app-server crashing on launch with `unexpected argument '--no-alt-screen'` during interactive account, dashboard, and resume commands by stripping the client-only flag from the auto-compact sidecar's server configuration and capturing app-server startup diagnostics.
 - Replaced the scrollback setting's config-only alternate-screen override with Codex's explicit `--no-alt-screen` launch flag. This fixes resumed Deck conversations, where the remote TUI could still enter the alternate screen despite the configuration arguments.
 - Made Deck's right-click **Open terminal** launch in the user's Windows Terminal profile instead of a legacy black-and-white Windows PowerShell console, with a PowerShell 7 fallback only when Windows Terminal is unavailable.
-- Forced Codex's dedicated raw-output mode as well as its normal screen buffer for the Deck scrollback setting, making the terminal scrollbar consistent across account, pool, dashboard, desktop, resume and failover launches.
+- Removed the forced raw-output setting, which changed Codex into its less-formatted simplified display. Deck now preserves scrollback while retaining the normal styled TUI.
 - Prevented a busy legacy `AGENTS.md` hard link from aborting `codex-auth` before Codex can show and complete its own update; Deck now detaches it safely when possible and otherwise defers the migration without blocking launch.
 - Fixed manual `!autocompact` immediately after Esc by waiting for the interrupted turn to become idle and starting the handoff in a fresh turn instead of steering input into the cancelling turn.
 
