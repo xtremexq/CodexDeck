@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.8.4 - 2026-09-28
+
 - Fixed an interactive terminal crash after interrupting a turn by draining auto-compact sidecar diagnostics without a PowerShell callback on a raw .NET worker thread.
 
 - Added a General → Terminal setting, enabled by default, that preserves native terminal scrollback across all current and future account, pool, resume and failover conversations.
