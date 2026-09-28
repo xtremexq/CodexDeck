@@ -6,6 +6,12 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const {AutoCompactController, HANDOFF} = require('./Deck.AutoCompact.cjs');
 
+// The shell command waits 35 seconds for this local endpoint. Leave enough
+// headroom for the HTTP response, while allowing Codex time to persist a newly
+// created or resumed thread before this observer can subscribe to it.
+const COMPACT_READY_TIMEOUT_MS = 25000;
+const COMPACT_READY_RETRY_MS = 500;
+
 function optionsFromArgs(args) {
   const options = {threshold:55, cwd:process.cwd(), codexExe:null, codexEntry:null, handoffRequest:null, serverConfig:[], mode:'Custom', autoEnabled:false};
   const names = {'--threshold':'threshold','--cwd':'cwd','--codex-exe':'codexExe','--codex-entry':'codexEntry','--mode':'mode','--auto-enabled':'autoEnabled'};
@@ -76,7 +82,8 @@ class ThreadObserver {
   constructor(rpc, threshold, handoffRequest, report=()=>{}, mode='Custom', autoEnabled=true) {
     this.rpc=rpc; this.threshold=threshold; this.handoffRequest=handoffRequest; this.report=report; this.mode=mode; this.autoEnabled=autoEnabled;
     this.controllers=new Map(); this.pending=new Set(); this.subscribed=new Set(); this.serial=new Map();
-    this.targetThreadId=null; this.selection=Promise.resolve();
+    this.targetThreadId=null; this.selection=Promise.resolve(); this.discovery=Promise.resolve(); this.loadedIds=new Set(); this.attachErrors=new Map(); this.emptyDiscoveries=0; this.selectionError=null;
+    this.readyTimeoutMs=COMPACT_READY_TIMEOUT_MS; this.readyRetryMs=COMPACT_READY_RETRY_MS;
   }
   async attach(threadId) {
     if(!threadId) return;
@@ -84,7 +91,7 @@ class ThreadObserver {
       const previous=this.targetThreadId;
       this.targetThreadId=threadId;
       if(previous) {
-        this.controllers.delete(previous); this.subscribed.delete(previous); this.serial.delete(previous);
+        this.controllers.delete(previous); this.subscribed.delete(previous); this.serial.delete(previous); this.attachErrors.delete(previous);
       }
       if(!this.controllers.has(threadId)) {
         const controller=new AutoCompactController(this.rpc,this.threshold,this.report,this.handoffRequest,this.mode,this.autoEnabled);
@@ -105,48 +112,119 @@ class ThreadObserver {
     this.pending.add(threadId);
     try {
       await this.rpc('thread/resume',{threadId,excludeTurns:true});
-      if(this.targetThreadId===threadId) this.subscribed.add(threadId);
+      if(this.targetThreadId===threadId) { this.subscribed.add(threadId); this.attachErrors.delete(threadId); }
       else {
         try { await this.rpc('thread/unsubscribe',{threadId}); } catch {}
       }
-    } catch {
+    } catch(error) {
       // A newly started thread may be visible in memory before its rollout exists.
-      // Retry until this observer connection can subscribe to the active TUI thread.
+      // Retain the actual RPC error: it distinguishes a transient rollout delay
+      // from a permanently unavailable observer connection when the deadline expires.
+      if(this.targetThreadId===threadId) this.attachErrors.set(threadId,error?.message || String(error));
     } finally { this.pending.delete(threadId); }
   }
-  async retry() {
+  async loadedThreadIds() {
+    const ids=[]; const knownIds=new Set(); const cursors=new Set();
+    let cursor=null;
+    do {
+      const loaded=await this.rpc('thread/loaded/list',cursor?{cursor}:{});
+      for(const id of loaded?.data || []) {
+        if(typeof id==='string' && !knownIds.has(id)) { knownIds.add(id); ids.push(id); }
+      }
+      const nextCursor=loaded?.nextCursor;
+      if(typeof nextCursor!=='string' || !nextCursor || cursors.has(nextCursor)) return ids;
+      cursors.add(nextCursor); cursor=nextCursor;
+    } while(true);
+  }
+  async detach(threadId) {
+    if(!threadId) return;
+    if(this.targetThreadId===threadId) this.targetThreadId=null;
+    this.controllers.delete(threadId); this.subscribed.delete(threadId); this.serial.delete(threadId); this.attachErrors.delete(threadId);
+    try { await this.rpc('thread/unsubscribe',{threadId}); } catch {}
+  }
+  retry() {
+    const next=this.discovery.then(()=>this.discover());
+    this.discovery=next.catch(()=>{});
+    return next;
+  }
+  async discover() {
     await this.selection;
-    if(this.targetThreadId) { await this.attach(this.targetThreadId); return; }
-    // A remote TUI does not always broadcast thread/started when it resumes an
-    // existing conversation. This app-server belongs to one managed terminal,
-    // so its sole loaded thread is the TUI conversation we can safely attach.
-    const loaded=await this.rpc('thread/loaded/list',{});
-    const ids=loaded?.data || [];
-    let threadId=ids.length===1?ids[0]:null;
-    if(ids.length>1) {
-      const threads=await Promise.all(ids.map(async id=>{
+    // A remote TUI does not reliably broadcast thread/started to this observer
+    // when it resumes an existing conversation. Keep polling even after an
+    // initial thread was selected: the previous observer subscription can keep
+    // that thread loaded while the TUI has already switched to a new root.
+    const ids=await this.loadedThreadIds();
+    const previousLoaded=this.loadedIds;
+    this.loadedIds=new Set(ids);
+    if(!ids.length) {
+      // A just-started remote TUI can briefly return an empty page before its
+      // thread rollout is visible. Keep one known target through that gap, but
+      // release it after consecutive empty polls so a vanished thread cannot
+      // later receive a compact request.
+      this.emptyDiscoveries++;
+      if(this.emptyDiscoveries>=2) await this.detach(this.targetThreadId);
+      else if(this.targetThreadId) await this.attach(this.targetThreadId);
+      return;
+    }
+    this.emptyDiscoveries=0;
+    this.selectionError=null;
+    let candidates;
+    if(this.targetThreadId && ids.includes(this.targetThreadId)) {
+      candidates=ids.filter(id=>id!==this.targetThreadId && !previousLoaded.has(id));
+      if(!candidates.length) { await this.attach(this.targetThreadId); return; }
+    } else candidates=ids;
+    let threadId=candidates.length===1?candidates[0]:null;
+    if(candidates.length>1 || (this.targetThreadId && candidates.length===1)) {
+      const threads=await Promise.all(candidates.map(async id=>{
         try { return (await this.rpc('thread/read',{threadId:id,includeTurns:false})).thread; }
         catch { return null; }
       }));
-      const roots=threads.filter(thread=>thread && !thread.parentThreadId && thread.originator==='codex-tui');
+      const roots=threads.filter(thread=>thread && !thread.parentThreadId);
       if(roots.length===1) threadId=roots[0].id;
+      else if(roots.length>1) {
+        const active=roots.filter(thread=>thread.status?.type==='active');
+        const choices=active.length===1?active:roots;
+        threadId=choices.sort((a,b)=>(b.recencyAt ?? b.updatedAt ?? 0)-(a.recencyAt ?? a.updatedAt ?? 0))[0]?.id || null;
+      } else {
+        this.selectionError='The active Codex thread is not available because it cannot be identified safely.';
+        threadId=null;
+      }
     }
-    if(typeof threadId==='string') {
+    if(typeof threadId==='string' && threadId!==this.targetThreadId) {
       this.selection=this.attach(threadId);
       await this.selection;
+    } else if(this.targetThreadId) {
+      if(ids.includes(this.targetThreadId)) await this.attach(this.targetThreadId);
+      else await this.detach(this.targetThreadId);
     }
   }
   async requestCompact() {
     await this.selection;
-    if(!this.targetThreadId) await this.retry();
+    // Refresh immediately instead of waiting for the background poll. Otherwise
+    // a command entered just after /resume can target the conversation that was
+    // visible before the switch and start an invisible handoff there.
+    const deadline=Date.now()+this.readyTimeoutMs;
+    await this.retry();
+    if(!this.targetThreadId && this.selectionError) throw Error(this.selectionError);
+    while(!this.targetThreadId && Date.now()<deadline) {
+      await new Promise(resolve=>setTimeout(resolve,Math.min(this.readyRetryMs,deadline-Date.now())));
+      await this.retry();
+      if(!this.targetThreadId && this.selectionError) throw Error(this.selectionError);
+    }
     const threadId=this.targetThreadId;
-    if(!threadId) throw Error('The active Codex thread is not available yet.');
-    for(let attempt=0;attempt<10 && !this.subscribed.has(threadId);attempt++) {
+    if(!threadId) throw Error(`The active Codex thread did not appear within ${Math.ceil(this.readyTimeoutMs/1000)} seconds.`);
+    while(!this.subscribed.has(threadId) && Date.now()<deadline) {
       if(this.targetThreadId!==threadId) throw Error('The active Codex thread changed; try again.');
       await this.attach(threadId);
-      if(!this.subscribed.has(threadId)) await new Promise(resolve=>setTimeout(resolve,250));
+      if(!this.subscribed.has(threadId) && Date.now()<deadline) {
+        await new Promise(resolve=>setTimeout(resolve,Math.min(this.readyRetryMs,deadline-Date.now())));
+        await this.retry();
+      }
     }
-    if(!this.subscribed.has(threadId)) throw Error('The active Codex thread is not ready yet; try again.');
+    if(!this.subscribed.has(threadId)) {
+      const detail=this.attachErrors.get(threadId);
+      throw Error(`The active Codex thread did not become ready within ${Math.ceil(this.readyTimeoutMs/1000)} seconds${detail?`: ${detail}`:'.'}`);
+    }
     const previous=this.serial.get(threadId) || Promise.resolve();
     const next=previous.then(async()=>{
       if(this.targetThreadId!==threadId) throw Error('The active Codex thread changed; try again.');
@@ -166,6 +244,7 @@ class ThreadObserver {
     }
     if(message.method==='thread/closed') {
       this.controllers.delete(event.threadId); this.subscribed.delete(event.threadId); this.serial.delete(event.threadId);
+      this.loadedIds.delete(event.threadId); this.attachErrors.delete(event.threadId);
       if(this.targetThreadId===event.threadId) this.targetThreadId=null;
       return;
     }

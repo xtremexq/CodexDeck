@@ -5,16 +5,19 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const HANDOFF = 'DECK_HANDOFF';
-const HANDOFF_REQUEST = `Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with ${HANDOFF}: with what you're currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.`;
+const FINISHED = 'CODEX_FINISHED';
+const FINISHED_REQUEST = `If the objective, goals, and all remaining tasks or steps are already finished, do not write a handoff. Instead, provide the final answer or summary beginning with ${FINISHED}:`;
+const HANDOFF_REQUEST = `Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with ${HANDOFF}: with what you're currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation. ${FINISHED_REQUEST}`;
 const textInput = text => [{type:'text',text,text_elements:[]}];
 const replayPrompt = handoff => `${JSON.stringify(handoff)}\n\nPlease go on.`;
+const completionAwareRequest = request => request.includes(FINISHED) ? request : `${request}\n\n${FINISHED_REQUEST}`;
 
 class AutoCompactController {
   constructor(rpc, threshold, report = () => {}, handoffRequest = HANDOFF_REQUEST, mode = 'Custom', autoEnabled = true) {
     this.rpc=rpc; this.threshold=threshold; this.report=report;
-    this.handoffRequest=handoffRequest; this.mode=mode; this.autoEnabled=autoEnabled;
+    this.handoffRequest=completionAwareRequest(handoffRequest); this.mode=mode; this.autoEnabled=autoEnabled;
     this.threadId=null; this.activeTurnId=null; this.phase='normal'; this.armed=true;
-    this.handoff=''; this.checkpointTurnId=null; this.compactionTurnId=null;
+    this.handoff=''; this.finished=''; this.checkpointTurnId=null; this.compactionTurnId=null;
     this.checkpointInterrupted=false;
     this.compactionItemDone=false; this.compactionTurnDone=false; this.usagePercent=null;
     this.queue=[]; this.once=false; this.done=false; this.failed=false;
@@ -54,7 +57,7 @@ class AutoCompactController {
     return this.phase!=='normal';
   }
   async startCustomCompact(turnId = this.activeTurnId) {
-    this.phase='checkpoint'; this.handoff=''; this.checkpointTurnId=null; this.checkpointInterrupted=false;
+    this.phase='checkpoint'; this.handoff=''; this.finished=''; this.checkpointTurnId=null; this.checkpointInterrupted=false;
     if(this.activeTurnId && turnId===this.activeTurnId) {
       try {
         await this.rpc('turn/steer',{threadId:this.threadId,expectedTurnId:this.activeTurnId,input:textInput(this.handoffRequest)});
@@ -83,13 +86,18 @@ class AutoCompactController {
   }
   async onItem(event) {
     const item=event.item || {};
-    if(this.phase==='checkpoint' && event.turnId===this.checkpointTurnId && item.type==='agentMessage' && (item.text || '').trimStart().startsWith(HANDOFF)) {
-      this.handoff=item.text;
-      if(item.phase!=='final_answer' && !this.checkpointInterrupted) {
-        this.checkpointInterrupted=true;
-        this.report('Handoff captured. Stopping the active turn before compaction.');
-        try { await this.rpc('turn/interrupt',{threadId:this.threadId,turnId:this.checkpointTurnId}); }
-        catch(error) { this.report(`The handoff turn ended while it was being stopped: ${error.message}`); }
+    if(this.phase==='checkpoint' && event.turnId===this.checkpointTurnId && item.type==='agentMessage') {
+      const text=(item.text || '').trimStart();
+      if(text.startsWith(FINISHED)) {
+        this.finished=item.text;
+      } else if(text.startsWith(HANDOFF)) {
+        this.handoff=item.text;
+        if(item.phase!=='final_answer' && !this.checkpointInterrupted) {
+          this.checkpointInterrupted=true;
+          this.report('Handoff captured. Stopping the active turn before compaction.');
+          try { await this.rpc('turn/interrupt',{threadId:this.threadId,turnId:this.checkpointTurnId}); }
+          catch(error) { this.report(`The handoff turn ended while it was being stopped: ${error.message}`); }
+        }
       }
     }
     if((this.phase==='compacting' || this.phase==='native-compacting') && item.type==='contextCompaction') {
@@ -111,8 +119,17 @@ class AutoCompactController {
     if(this.phase==='checkpoint') {
       if(!this.checkpointTurnId) { await this.startCheckpoint(); return; }
       if(turn.id!==this.checkpointTurnId) return;
-      const fallback=(turn.items || []).filter(item=>item.type==='agentMessage' && (item.text || '').trimStart().startsWith(HANDOFF)).at(-1);
-      if(!this.handoff) this.handoff=fallback?.text || '';
+      const agentMessages=(turn.items || []).filter(item=>item.type==='agentMessage');
+      const finishedFallback=agentMessages.filter(item=>(item.text || '').trimStart().startsWith(FINISHED)).at(-1);
+      if(!this.finished) this.finished=finishedFallback?.text || '';
+      if(this.finished && turn.status==='completed') {
+        this.phase='normal'; this.armed=true; this.checkpointTurnId=null; this.checkpointInterrupted=false; this.handoff=''; this.finished='';
+        this.report('Task reported finished; compaction and automatic continuation skipped.');
+        if(this.once && !this.queue.length) this.done=true; else await this.drain();
+        return;
+      }
+      const handoffFallback=agentMessages.filter(item=>(item.text || '').trimStart().startsWith(HANDOFF)).at(-1);
+      if(!this.handoff) this.handoff=handoffFallback?.text || '';
       const handoffTurnFinished=turn.status==='completed' || (this.checkpointInterrupted && turn.status==='interrupted');
       if(!handoffTurnFinished || !this.handoff.trimStart().startsWith(HANDOFF)) {
         this.phase='normal'; this.failCycle('Handoff was missing or incomplete; compaction skipped to preserve the task.');
@@ -136,7 +153,7 @@ class AutoCompactController {
     this.report('Compaction completed. Replaying the quoted handoff and continuing.');
     try {
       const result=await this.rpc('turn/start',{threadId:this.threadId,input:textInput(replayPrompt(this.handoff))});
-      this.activeTurnId=result.turn.id; this.phase='normal'; this.checkpointTurnId=null; this.checkpointInterrupted=false; this.handoff='';
+      this.activeTurnId=result.turn.id; this.phase='normal'; this.checkpointTurnId=null; this.checkpointInterrupted=false; this.handoff=''; this.finished='';
     } catch(error) { this.phase='normal'; this.failCycle(`Replay failed; handoff remains visible above: ${error.message}`); await this.drain(); }
   }
   async drain() {
@@ -359,5 +376,5 @@ async function main() {
   } catch(error) { report(`Could not start: ${error.message}`); child.kill(); input.close(); process.exitCode=1; }
 }
 
-module.exports={AutoCompactController,HANDOFF,HANDOFF_REQUEST,replayPrompt,parseArgs,translateLaunchArgs};
+module.exports={AutoCompactController,HANDOFF,FINISHED,HANDOFF_REQUEST,replayPrompt,parseArgs,translateLaunchArgs};
 if(require.main===module) main().catch(error=>{process.stderr.write(error.message+'\n');process.exitCode=1;});

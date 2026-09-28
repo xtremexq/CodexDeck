@@ -1,10 +1,10 @@
 'use strict';
 const assert = require('node:assert/strict');
-const {AutoCompactController,HANDOFF,HANDOFF_REQUEST,replayPrompt,parseArgs,translateLaunchArgs} = require('./Deck.AutoCompact.cjs');
+const {AutoCompactController,HANDOFF,FINISHED,HANDOFF_REQUEST,replayPrompt,parseArgs,translateLaunchArgs} = require('./Deck.AutoCompact.cjs');
 const {ThreadObserver,optionsFromArgs,createCompactControl} = require('./Deck.AutoCompact.Sidecar.cjs');
 
 async function main() {
-  assert.equal(HANDOFF_REQUEST,"Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you're currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will \"definitely\" be useful/necessary for continuing, as to avoid the need for re-investigation.",'Default handoff request is incorrect');
+  assert.equal(HANDOFF_REQUEST,"Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you're currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will \"definitely\" be useful/necessary for continuing, as to avoid the need for re-investigation. If the objective, goals, and all remaining tasks or steps are already finished, do not write a handoff. Instead, provide the final answer or summary beginning with CODEX_FINISHED:",'Default handoff request is incorrect');
   let serial=0;
   const calls=[];
   const rpc=async(method,params)=>{
@@ -83,6 +83,23 @@ async function main() {
   assert.ok(!skipped.includes('thread/compact/start'),'incomplete handoff must never compact');
   assert.equal(noHandoff.done,true,'one-shot worker must exit if handoff fails');
   assert.equal(noHandoff.failed,true,'incomplete one-shot work must not report success');
+  const finishedCalls=[]; const finishedReports=[];
+  const finished=new AutoCompactController(async(method,params)=>{
+    finishedCalls.push({method,params});
+    if(method==='turn/start') return {turn:{id:'finished-turn'}};
+    return {};
+  },70,message=>finishedReports.push(message));
+  finished.once=true; finished.threadId='finished-thread';
+  await finished.start('Complete the task');
+  await finished.onUsage({threadId:'finished-thread',turnId:'finished-turn',tokenUsage:{last:{totalTokens:70},modelContextWindow:100}});
+  await finished.onItem({turnId:'finished-turn',item:{type:'agentMessage',phase:'final_answer',text:`${FINISHED}: Everything requested is complete.`}});
+  await finished.onTurnCompleted({threadId:'finished-thread',turn:{id:'finished-turn',status:'completed'}});
+  assert.equal(finished.phase,'normal','a finished checkpoint must return the controller to normal');
+  assert.equal(finished.done,true,'a finished one-shot task must be allowed to exit successfully');
+  assert.equal(finished.failed,false,'a CODEX_FINISHED response must not be treated as a failed handoff');
+  assert.ok(!finishedCalls.some(call=>call.method==='thread/compact/start'),'a finished task must not compact');
+  assert.ok(!finishedCalls.some(call=>call.method==='turn/start' && call.params.input?.[0]?.text.includes('Please go on.')),'a finished task must not receive an automatic continuation');
+  assert.ok(finishedReports.some(message=>message.includes('automatic continuation skipped')),'the skipped finished cycle must be reported');
   const compactFails=new AutoCompactController(async(method)=>{
     if(method==='turn/start') return {turn:{id:'compact-fail-turn'}};
     if(method==='thread/compact/start') throw Error('synthetic compaction failure');
@@ -112,7 +129,8 @@ async function main() {
   const customController=new AutoCompactController(async(method,params)=>{customCalls.push({method,params});if(method==='turn/start')return {turn:{id:'custom-turn'}};return {};},70,()=>{},custom);
   customController.threadId='custom-thread'; await customController.start('Investigate');
   await customController.onUsage({threadId:'custom-thread',turnId:'custom-turn',tokenUsage:{last:{totalTokens:70},modelContextWindow:100}});
-  assert.equal(customCalls.at(-1).params.input[0].text,custom,'The editable handoff prompt must reach the active agent');
+  assert.ok(customCalls.at(-1).params.input[0].text.startsWith(custom),'The editable handoff prompt must reach the active agent');
+  assert.ok(customCalls.at(-1).params.input[0].text.includes(FINISHED),'Custom handoff prompts must still offer the completion alternative');
   assert.throws(()=>parseArgs(['--codex-exe','codex','--handoff-base64',Buffer.from('missing marker').toString('base64')]),/DECK_HANDOFF/);
   assert.throws(()=>translateLaunchArgs(['exec','-s','read-only'],process.cwd()),/requires a prompt/);
   assert.throws(()=>translateLaunchArgs(['exec','--worktree','Investigate'],process.cwd()),/not compatible/);
@@ -139,7 +157,46 @@ async function main() {
   persisted=true;
   await observer.retry();
   assert.equal(observer.subscribed.has('native-thread'),true,'the observer must subscribe so it receives native TUI usage events');
-  assert.equal(observerCalls.some(call=>call.method==='thread/loaded/list'),false,'the observer must never scan and resume unrelated history threads');
+  assert.equal(observerCalls.some(call=>call.method==='thread/loaded/list'),true,'the observer must keep checking for a resumed TUI thread after its initial subscription');
+  const delayedCalls=[];
+  let delayedResumeAttempts=0;
+  const delayed=new ThreadObserver(async(method,params)=>{
+    delayedCalls.push({method,params});
+    if(method==='thread/loaded/list') return {data:['delayed-thread'],nextCursor:null};
+    if(method==='thread/resume') {
+      delayedResumeAttempts++;
+      if(delayedResumeAttempts<4) throw Error('no rollout found for thread id delayed-thread');
+      return {thread:{id:'delayed-thread'}};
+    }
+    return {};
+  },70,custom,()=>{},'Native',false);
+  delayed.readyTimeoutMs=100;
+  delayed.readyRetryMs=1;
+  assert.equal(await delayed.requestCompact(),undefined,'manual compaction must wait for a delayed resumed thread instead of failing after a few retries');
+  assert.equal(delayed.targetThreadId,'delayed-thread');
+  assert.ok(delayedResumeAttempts>=4,'manual compaction must keep retrying observer subscription while Codex persists the resumed thread');
+  assert.ok(delayedCalls.some(call=>call.method==='thread/compact/start' && call.params.threadId==='delayed-thread'),'the delayed thread must receive the compact request after it becomes subscribable');
+  const unavailable=new ThreadObserver(async method=>{
+    if(method==='thread/loaded/list') return {data:['unavailable-thread'],nextCursor:null};
+    if(method==='thread/resume') throw Error('no rollout found for thread id unavailable-thread');
+    return {};
+  },70,custom,()=>{},'Native',false);
+  unavailable.readyTimeoutMs=12;
+  unavailable.readyRetryMs=1;
+  await assert.rejects(unavailable.requestCompact(),/did not become ready.*no rollout found/,'the eventual readiness error must retain the failed Codex subscription detail');
+  const pagedCalls=[];
+  const paged=new ThreadObserver(async(method,params)=>{
+    pagedCalls.push({method,params});
+    if(method==='thread/loaded/list') return params.cursor==='page-2'
+      ? {data:['paged-active'],nextCursor:null}
+      : {data:['paged-retired'],nextCursor:'page-2'};
+    if(method==='thread/read') return {thread:{id:params.threadId,parentThreadId:null,status:{type:params.threadId==='paged-active'?'active':'idle'}}};
+    if(method==='thread/resume') return {thread:{id:params.threadId}};
+    return {};
+  },70,custom,()=>{},'Native',false);
+  assert.equal(await paged.requestCompact(),undefined,'manual compaction must consider all loaded-thread pages');
+  assert.equal(paged.targetThreadId,'paged-active','the active root on a later loaded-thread page must win selection');
+  assert.ok(pagedCalls.some(call=>call.method==='thread/loaded/list' && call.params.cursor==='page-2'),'loaded-thread discovery must follow the Codex pagination cursor');
   const resumedCalls=[];
   const resumed=new ThreadObserver(async(method,params)=>{
     resumedCalls.push({method,params});
@@ -150,6 +207,26 @@ async function main() {
   assert.equal(await resumed.requestCompact(),undefined,'manual compaction should discover a resumed TUI without thread/started');
   assert.equal(resumed.targetThreadId,'resumed-thread');
   assert.equal(resumedCalls.some(call=>call.method==='thread/compact/start'),true,'the discovered resumed thread must receive the compaction request');
+  const switchedCalls=[];
+  let loadedIds=['initial-thread'];
+  const switched=new ThreadObserver(async(method,params)=>{
+    switchedCalls.push({method,params});
+    if(method==='thread/loaded/list') return {data:loadedIds,nextCursor:null};
+    if(method==='thread/read') return {thread:{id:params.threadId,parentThreadId:null,originator:'codex_deck_auto_compact_observer',status:{type:'idle'},updatedAt:params.threadId==='resumed-thread'?2:1}};
+    if(method==='thread/resume') return {thread:{id:params.threadId}};
+    if(method==='turn/start') return {turn:{id:'resumed-handoff'}};
+    return {};
+  },70,custom,()=>{},'Custom',false);
+  switched.onNotification({method:'thread/started',params:{thread:{id:'initial-thread',parentThreadId:null}}});
+  await switched.selection;
+  await switched.retry();
+  loadedIds=['initial-thread','resumed-thread'];
+  assert.equal(await switched.requestCompact(),undefined,'manual compaction should refresh selection before acknowledging the request');
+  assert.equal(switched.targetThreadId,'resumed-thread','a newly loaded resumed root must replace the stale pre-resume target');
+  assert.ok(switchedCalls.some(call=>call.method==='thread/unsubscribe' && call.params.threadId==='initial-thread'),'switching to a resumed root must release the stale observer subscription');
+  assert.equal(switchedCalls.filter(call=>call.method==='turn/start').at(-1).params.threadId,'resumed-thread','the handoff must start in the visible resumed conversation');
+  await switched.retry();
+  assert.equal(switched.targetThreadId,'resumed-thread','a still-loaded retired root must not make discovery oscillate back');
   const withAgent=new ThreadObserver(async(method,params)=>{
     if(method==='thread/loaded/list') return {data:['resumed-thread','child-thread']};
     if(method==='thread/read') return {thread:{id:params.threadId,parentThreadId:params.threadId==='child-thread'?'resumed-thread':null,originator:'codex-tui'}};

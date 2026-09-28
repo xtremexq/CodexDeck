@@ -7,10 +7,22 @@ $settings=Get-DeckSettings $fixture
 Assert ($settings.AutoCompactMode -eq 'Native') 'Auto-compact implementation must default to Codex native'
 Assert ($settings.AutoCompactThresholdPercent -eq 55) 'Auto-compact threshold must default to 55%'
 Assert (-not $settings.AutoCompactLaunchEnabled) 'Auto-compact launches must default off'
+Assert $settings.TerminalScrollbackEnabled 'Terminal scrollback must default on for every account'
+$scrollbackArgs=@(Get-DeckTerminalLaunchArguments $settings $true)
+Assert (($scrollbackArgs -join '|') -eq '-c|tui.alternate_screen="never"') 'Interactive launches must disable Codex alternate-screen mode when scrollback is enabled'
+$settings.TerminalScrollbackEnabled=$false
+Assert (@(Get-DeckTerminalLaunchArguments $settings $true).Count -eq 0) 'Disabled terminal scrollback still changed the Codex launch'
+$settings.TerminalScrollbackEnabled=$true
+Assert (@(Get-DeckTerminalLaunchArguments $settings $false).Count -eq 0) 'Non-interactive commands inherited the terminal scrollback override'
 Assert ($settings.ContextOptimizer -eq 'Off' -and -not $settings.CodeGraphEnabled -and $settings.CodeGraphProfile -eq 'core') 'Managed integrations must default to off with the small CodeGraph profile'
 Assert (-not $settings.Contains('UizzeMcpEnabled')) 'Paid UIZZE reference search must not appear in Deck settings'
 Assert ($settings.AutoCompactHandoffPrompt -match 'DECK_HANDOFF') 'Default handoff prompt must require the checkpoint marker'
-Assert ($settings.AutoCompactHandoffPrompt -eq 'Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.') 'Default handoff prompt is incorrect'
+Assert ($settings.AutoCompactHandoffPrompt -match 'CODEX_FINISHED') 'Default handoff prompt must offer the finished-task alternative'
+Assert ($settings.AutoCompactHandoffPrompt -eq 'Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation. If the objective, goals, and all remaining tasks or steps are already finished, do not write a handoff. Instead, provide the final answer or summary beginning with CODEX_FINISHED:') 'Default handoff prompt is incorrect'
+$priorStockHandoff='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.'
+Write-DeckJson (Join-Path $fixture 'settings.json') @{AutoCompactHandoffPrompt=$priorStockHandoff}
+Assert ((Get-DeckSettings $fixture).AutoCompactHandoffPrompt -match 'CODEX_FINISHED') 'The previous stock handoff prompt was not upgraded with the completion alternative'
+Remove-Item -LiteralPath (Join-Path $fixture 'settings.json')
 Assert (-not $settings.TrajectoryEnabled -and -not $settings.ContextManagerEnabled -and $settings.EfficiencyAnalyticsEnabled) 'Trajectory/context must remain opt-in and efficiency analytics must default on'
 Assert (-not $settings.ContextManagerAutoOpen -and $settings.EfficiencySessionLimit -eq 600) 'Context auto-open must default off and efficiency must analyze 600 sessions by default'
 Write-DeckJson (Join-Path $fixture 'settings.json') @{EfficiencySessionLimit=5000;EfficiencyLimitVersion=2}
@@ -229,7 +241,12 @@ foreach($file in @('Deck.Core.ps1','Deck.WarmupWorker.ps1','Codex-Deck.ps1','../
     [void][Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
     Assert ($errors.Count -eq 0) "Parse failed: $file / $errors"
 }
-'PASS: defaults, PID identity/cleanup, plan-aware warm-up, reset grace/expiry, deduplication, cooldown, opt-in, throttles, injection guards, worker execution, script parsing.'
+$launcherText=Get-Content -LiteralPath (Join-Path $PSScriptRoot '../bin/codex-auth.ps1') -Raw
+$asyncDrain=[regex]::Match($launcherText,'(?s)\$observerErrorTask = \$observer\.StandardError\.ReadToEndAsync\(\)(?<after>.*)')
+Assert $asyncDrain.Success 'Interactive sidecar diagnostics are not drained asynchronously'
+Assert ($asyncDrain.Groups['after'].Value -match '\$observerErrorTask\.GetAwaiter\(\)\.GetResult\(\)') 'The sidecar stderr drain is not collected during shutdown'
+Assert ($launcherText -notmatch 'add_ErrorDataReceived|BeginErrorReadLine') 'A PowerShell callback must not be attached to the sidecar stderr worker thread'
+'PASS: defaults, PID identity/cleanup, plan-aware warm-up, reset grace/expiry, deduplication, cooldown, opt-in, throttles, injection guards, worker execution, sidecar diagnostics, script parsing.'
 "Synthetic test state: $fixture"
 
 $now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()

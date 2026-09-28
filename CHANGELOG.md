@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fixed an interactive terminal crash after interrupting a turn by draining auto-compact sidecar diagnostics without a PowerShell callback on a raw .NET worker thread.
+
+- Added a General → Terminal setting, enabled by default, that preserves native terminal scrollback across all current and future account, pool, resume and failover conversations.
+- Let Custom auto-compact answer with `CODEX_FINISHED` when the complete objective is already done; Deck now leaves that final answer visible without compacting or automatically continuing.
+- Added a process-local **LAST CHAT** line to the terminal dashboard after a new or resumed conversation returns, including its conversation ID and exact resume command without persisting it into the next `codex-auth` run.
+- Fixed `!autocompact` after `/resume` or another in-terminal history switch so the manual handoff targets the newly visible conversation instead of a stale still-loaded thread. Manual requests now wait for Codex to persist an idle or resumed thread, report the actual subscription error if it never becomes ready, follow paged loaded-thread results, and drain sidecar diagnostics safely after repeated compaction activity.
+
 ## 1.8.3 - 2026-09-25
 
 - Fixed the Global Rules editor rejecting edits to saved stock rules while still detecting real external changes.

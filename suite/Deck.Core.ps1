@@ -39,8 +39,9 @@ function Get-DeckDefaults {
         WarmupResetEnabled=$true; WarmupTimedEnabled=$false; WarmupTimes=''
         WarmupStartAtLogin=$true
         FailoverEnabled=$false; FailoverMode='Ordered'; FailoverAccounts=''
+        TerminalScrollbackEnabled=$true
         AutoCompactLaunchEnabled=$false; AutoCompactMode='Native'; AutoCompactThresholdPercent=55
-        AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.'
+        AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation. If the objective, goals, and all remaining tasks or steps are already finished, do not write a handoff. Instead, provide the final answer or summary beginning with CODEX_FINISHED:'
         ContextOptimizer='Off'; CodeGraphEnabled=$false; CodeGraphProjects=''; CodeGraphProfile='core'; BrowserHarnessEnabled=$false
         TrajectoryEnabled=$false; ContextManagerEnabled=$false; ContextManagerAutoOpen=$false; ContextManagerProtected=$false
         EfficiencyAnalyticsEnabled=$true; EfficiencySessionLimit=600; EfficiencyLimitVersion=3
@@ -186,6 +187,12 @@ function Set-DeckAutoCompactLaunch([string]$Root, [bool]$Enabled) {
     Write-DeckJson (Join-Path $Root 'settings.json') $settings
     return Get-DeckSettings $Root
 }
+function Get-DeckTerminalLaunchArguments($Settings, [bool]$InteractiveConversation) {
+    if ($InteractiveConversation -and $Settings -and [bool]$Settings.TerminalScrollbackEnabled) {
+        return @('-c','tui.alternate_screen="never"')
+    }
+    return @()
+}
 function Get-DeckSettings([string]$Root) {
     $settings = Get-DeckDefaults
     $saved = Read-DeckJson (Join-Path $Root 'settings.json')
@@ -232,8 +239,11 @@ function Get-DeckSettings([string]$Root) {
     if ($saved -and $saved.CodeGraphEnabled -and -not $saved.PSObject.Properties['CodeGraphProjects'] -and (Test-Path -LiteralPath $settings.DefaultFolder -PathType Container)) {
         $settings.CodeGraphProjects=[IO.Path]::GetFullPath($settings.DefaultFolder).TrimEnd('\')
     }
-    $oldHandoff='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information.'
-    if ($settings.AutoCompactHandoffPrompt -eq $oldHandoff) {
+    $oldHandoffs=@(
+        'Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information.',
+        'Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation.'
+    )
+    if ($settings.AutoCompactHandoffPrompt -in $oldHandoffs) {
         # Preserve user-edited prompts, but migrate Deck's previous stock prompt.
         $settings.AutoCompactHandoffPrompt=(Get-DeckDefaults).AutoCompactHandoffPrompt
     }

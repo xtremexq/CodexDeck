@@ -1222,6 +1222,7 @@ if(Test-Path -LiteralPath (Join-Path $runtimeRoot 'Deck.GlobalRules.ps1')){
     throw
 }
 $deckInteractiveConversation = $codexConversation -and (-not $CodexArgs -or $CodexArgs[0] -notin @('exec','e'))
+if ($deckInteractiveConversation -and $deckSettings) { $sharedArgs += @(Get-DeckTerminalLaunchArguments $deckSettings $true) }
 $originalDeckCommandPath=$env:PATH
 if($deckInteractiveConversation){$env:PATH=$PSScriptRoot+[IO.Path]::PathSeparator+$env:PATH}
 if ($deckInteractiveConversation -and $deckSettings -and $deckSettings.AutoCompactLaunchEnabled) { $AutoCompact=$true }
@@ -1319,6 +1320,7 @@ try {
             $startInfo.CreateNoWindow = $true
             $startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
             $observer = [Diagnostics.Process]::Start($startInfo)
+            $observerErrorTask = $null
             try {
                 $ready = $observer.StandardOutput.ReadLine()
                 if ($ready -notmatch '^READY (ws://127\.0\.0\.1:\d+) (http://127\.0\.0\.1:\d+/[a-f0-9]{64}/compact)$') {
@@ -1327,6 +1329,10 @@ try {
                 }
                 $remoteUrl = $Matches[1]
                 $env:CODEX_DECK_COMPACT_URL = $Matches[2]
+                # Drain stderr with StreamReader's managed task. A PowerShell
+                # DataReceived scriptblock can run on a raw .NET worker thread
+                # without a runspace and crash with ScriptBlock.GetContextFromTLS.
+                $observerErrorTask = $observer.StandardError.ReadToEndAsync()
                 if ($deckSession) { Set-DeckSessionCompactControl $deckSession $env:CODEX_DECK_COMPACT_URL }
                 $launchArgs = @($sharedArgs) + @($nativeAutoCompactArgs) + @($CodexArgs) + @($globalRuleArgs)
                 if ($failoverProxy) { $launchArgs += @(Get-DeckSessionRoutingArguments $failoverProxy ([bool]$poolEntry)) }
@@ -1336,7 +1342,11 @@ try {
             } finally {
                 try { $observer.StandardInput.Close() } catch {}
                 if (-not $observer.WaitForExit(3000)) { $observer.Kill(); [void]$observer.WaitForExit(3000) }
-                $observerLog = $observer.StandardError.ReadToEnd().Trim()
+                if ($observerErrorTask) {
+                    $observerLog = ($observerErrorTask.GetAwaiter().GetResult()).Trim()
+                } else {
+                    $observerLog = $observer.StandardError.ReadToEnd().Trim()
+                }
                 if ($observerLog) {
                     if ($observer.ExitCode -ne 0) { Write-Warning $observerLog }
                     else { Write-Host $observerLog }

@@ -60,6 +60,15 @@ function Get-DeckTerminalThemePageSize([string]$Theme, [int]$Height) {
         default { return [Math]::Max(1,$Height - 18) }
     }
 }
+function Get-DeckTerminalRecentConversation([string]$SuiteRoot, [string]$Account, [DateTimeOffset]$Since) {
+    if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){return}
+    $cutoff=$Since.UtcDateTime.AddSeconds(-2)
+    @(Get-DeckSessionHistory $SuiteRoot $Account | Where-Object { $_.Account -eq $Account -and $_.UpdatedAt -ge $cutoff } | Sort-Object UpdatedAt -Descending) | Select-Object -First 1
+}
+function Format-DeckTerminalLastConversation($Conversation) {
+    if(-not $Conversation -or $Conversation.Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $Conversation.Id -notmatch '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'){return ''}
+    return 'LAST CHAT  {0}  |  codex-auth resume {1}' -f $Conversation.Account,$Conversation.Id
+}
 function Get-DeckTerminalThemeEntry([string]$Name,$Cache,$Profiles,$Sessions,$Tasks,[bool]$Mask) {
     $row=$Cache[$Name]; $profile=$Profiles[$Name]
     $primary=$row.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1
@@ -84,13 +93,14 @@ function Format-DeckTerminalThemePercent($Window) {
     if(-not $Window -or $null -eq $Window.RemainingPct){return '  ?%'}
     return ('{0,3}%' -f [int][Math]::Min(100,[Math]::Max(0,[double]$Window.RemainingPct)))
 }
-function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[int]$Selected,[int]$Width,[int]$Height,[string]$Filter,[string]$Notice,[bool]$Mask,$WarmupSettings,$WarmupHistory,[bool]$AutoCompact,[int]$CompactThreshold,[bool]$CompactAdjusting,[string]$CompactMode,[string]$Theme) {
+function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[int]$Selected,[int]$Width,[int]$Height,[string]$Filter,[string]$Notice,[bool]$Mask,$WarmupSettings,$WarmupHistory,[bool]$AutoCompact,[int]$CompactThreshold,[bool]$CompactAdjusting,[string]$CompactMode,[string]$Theme,$LastConversation=$null) {
     $lines=[Collections.Generic.List[object]]::new()
     function Add-Line([string]$Text,[string]$Color='Gray',[string]$Background='Black') {
         [void]$lines.Add(@{Text=(ConvertTo-DeckTerminalText $Text ([Math]::Max(1,$Width - 1)));Color=$Color;Background=$Background})
     }
     $rule='  '+('-' * [Math]::Max(1,[Math]::Min(78,$Width - 4)))
-    $pageSize=Get-DeckTerminalThemePageSize $Theme $Height
+    $lastConversationLine=Format-DeckTerminalLastConversation $LastConversation
+    $pageSize=[Math]::Max(1,(Get-DeckTerminalThemePageSize $Theme $Height)-$(if($lastConversationLine){1}else{0}))
     $start=[int]([Math]::Floor($Selected / $pageSize) * $pageSize)
     $end=[Math]::Min($Names.Count,$start+$pageSize)
     $entries=@(for($i=$start;$i -lt $end;$i++){Get-DeckTerminalThemeEntry $Names[$i] $Cache $Profiles $Sessions $Tasks $Mask})
@@ -163,11 +173,12 @@ function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[in
     $warmMode=if(-not $WarmupSettings -or -not $WarmupSettings.WarmupEnabled){'PAUSED'}elseif($WarmupSettings.WarmupSchedulingEnabled){'SCHEDULED'}else{'UNSCHEDULED'}
     $warmState=if($WarmupSettings -and $active){Get-DeckWarmupStatus $WarmupSettings $(if($Cache[$active.Name]){$Cache[$active.Name]}else{@{Account=$active.Name}}) $WarmupHistory[$active.Name]}else{'No account selected'}
     Add-Line ('  STATUS    Warm-up {0}  |  {1}' -f $warmMode,$warmState) 'Yellow'
+    if($lastConversationLine){Add-Line ('  '+$lastConversationLine) 'DarkCyan'}
     Add-Line ('  NOTICE    '+$Notice) 'Yellow'
     return $lines.ToArray()
 }
-function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 55, [bool]$CompactAdjusting = $false, [string]$CompactMode = 'Native', [string]$Theme = 'Default') {
-    if($Theme -in @('Focus','Cards','Ledger','Split')){return Get-DeckTerminalThemeFrame $Names $Cache $Profiles $Sessions $Tasks $Selected $Width $Height $Filter $Notice $Mask $WarmupSettings $WarmupHistory $AutoCompact $CompactThreshold $CompactAdjusting $CompactMode $Theme}
+function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 55, [bool]$CompactAdjusting = $false, [string]$CompactMode = 'Native', [string]$Theme = 'Default', $LastConversation = $null) {
+    if($Theme -in @('Focus','Cards','Ledger','Split')){return Get-DeckTerminalThemeFrame $Names $Cache $Profiles $Sessions $Tasks $Selected $Width $Height $Filter $Notice $Mask $WarmupSettings $WarmupHistory $AutoCompact $CompactThreshold $CompactAdjusting $CompactMode $Theme $LastConversation}
     $lines = [Collections.Generic.List[object]]::new()
     function Add-Line([string]$Text, [string]$Color = 'Gray', [string]$Background = 'Black') {
         $lines.Add(@{ Text = (ConvertTo-DeckTerminalText $Text ([Math]::Max(1,$Width - 1))); Color = $Color; Background = $Background })
@@ -177,7 +188,8 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     Add-Line '  Usage remaining  |  cached instantly, fresh checks in background' 'DarkGray'
     Add-Line ('  Filter: {0}' -f $(if ($Filter) { $Filter } else { 'all accounts  (/ to search)' })) 'Cyan'
     Add-Line ('  {0,-18} {1,-9} {2,-18} {3,-18} {4,-14} {5}' -f 'ACCOUNT','PLAN','PRIMARY','WEEKLY','STATE','NEXT RESET') 'DarkGray'
-    $pageSize = [Math]::Max(1, $Height - 18)
+    $lastConversationLine=Format-DeckTerminalLastConversation $LastConversation
+    $pageSize = [Math]::Max(1, $Height - 18 - $(if($lastConversationLine){1}else{0}))
     $start = [int]([Math]::Floor($Selected / $pageSize) * $pageSize)
     for ($i = $start; $i -lt [Math]::Min($Names.Count, $start + $pageSize); $i++) {
         $name = $Names[$i]; $row = $Cache[$name]; $profile = $Profiles[$name]
@@ -215,6 +227,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
         $warmMode=if(-not $WarmupSettings.WarmupEnabled){'PAUSED'}elseif($WarmupSettings.WarmupSchedulingEnabled){'SCHEDULED'}else{'UNSCHEDULED'}
         Add-Line ('  AUTO WARM-UP: '+$warmMode+' | '+$warmState) 'Yellow'
     }
+    if($lastConversationLine){Add-Line ('  '+$lastConversationLine) 'DarkCyan'}
     Add-Line '  WARMUP   U run now  T daily times  W select account  P pause/resume' 'DarkMagenta'
     Add-Line ('  ' + $Notice) 'Yellow'
     if($CompactAdjusting){
@@ -279,6 +292,7 @@ function Show-DeckTerminal {
     $profiles = @{}; $tasks = @{}; $pending = [Collections.Generic.Queue[string]]::new()
     $names=@(); $sessions=@(); $warmHistory=@{}; $stateRefreshAt=[DateTimeOffset]::MinValue
     $selected = 0; $filter = ''; $notice = 'Ready. Cached usage is shown; press R or A for fresh checks.'; $mask = $true; $autoCompact = [bool]$warmSettings.AutoCompactLaunchEnabled
+    $dashboardState=@{LastConversation=$null}
     $queueAll=$CheckAll.IsPresent
     $compactAdjusting=$false; $compactDraft=[int]$warmSettings.AutoCompactThresholdPercent
     $interactive = -not $Snapshot -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
@@ -342,7 +356,7 @@ function Show-DeckTerminal {
             $width = 110; $height = [Math]::Max(25,$visible.Count + 18)
             if ($interactive) { $width = [Console]::WindowWidth; $height = [Console]::WindowHeight }
             $compactThreshold=if($compactAdjusting){$compactDraft}else{[int]$warmSettings.AutoCompactThresholdPercent}
-            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory $autoCompact $compactThreshold $compactAdjusting $warmSettings.AutoCompactMode $warmSettings.DashboardTheme)
+            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory $autoCompact $compactThreshold $compactAdjusting $warmSettings.AutoCompactMode $warmSettings.DashboardTheme $dashboardState.LastConversation)
             if (-not $interactive) { $frame | ForEach-Object { Write-Output $_.Text }; return }
             $signature = "$width/$height/" + (($frame | ForEach-Object { $_.Text + $_.Color + $_.Background }) -join "`n")
             if ($signature -ne $lastFrame) {
@@ -397,7 +411,7 @@ function Show-DeckTerminal {
                 }
                 'H' {
                     [Console]::CursorVisible=$true
-                    try { Show-DeckHistoryBrowser $SuiteRoot $AuthScript } catch { $notice=$_.Exception.Message }
+                    try { Show-DeckHistoryBrowser $SuiteRoot $AuthScript -DashboardState $dashboardState } catch { $notice=$_.Exception.Message }
                     finally { [Console]::CursorVisible=$false; Clear-Host; $lastFrame='' }
                 }
                 'F2' {
@@ -482,8 +496,14 @@ function Show-DeckTerminal {
                                 $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$AuthScript,$name)
                                 if ($action -eq 'Enter' -and $autoCompact) { $arguments += @('-AutoCompact',(([int]$warmSettings.AutoCompactThresholdPercent).ToString()+'%')) }
                                 if ($action -in @('L','N')) { $arguments += 'login' }
+                                $launchedAt=[DateTimeOffset]::UtcNow
+                                if($action -eq 'Enter'){$dashboardState.LastConversation=$null}
                                 & powershell.exe @arguments
                                 $notice = "$name returned (exit $LASTEXITCODE)."
+                                if($action -eq 'Enter'){
+                                    $recent=Get-DeckTerminalRecentConversation $SuiteRoot $name $launchedAt
+                                    if($recent){$dashboardState.LastConversation=$recent; $notice="$name returned (exit $LASTEXITCODE). Last conversation is ready to resume below."}
+                                }
                                 [void]$profiles.Remove($name); $stateRefreshAt=[DateTimeOffset]::MinValue
                             }
                         } catch { $notice = $_.Exception.Message }
@@ -551,7 +571,7 @@ function Show-DeckPoolPicker([string]$SuiteRoot, [string]$Environment, [string[]
     }
 }
 
-function Show-DeckHistoryBrowser([string]$SuiteRoot, [string]$AuthScript, [string]$Filter = '') {
+function Show-DeckHistoryBrowser([string]$SuiteRoot, [string]$AuthScript, [string]$Filter = '', [hashtable]$DashboardState = $null) {
     if (-not [Console]::IsOutputRedirected) { Clear-Host; Write-Host 'Loading local session history...' -ForegroundColor Cyan }
     $rows=@(Get-DeckSessionHistory $SuiteRoot $Filter)
     if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
@@ -589,6 +609,7 @@ function Show-DeckHistoryBrowser([string]$SuiteRoot, [string]$AuthScript, [strin
         try {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $AuthScript $current.Account resume $current.Id
             $message='Session returned (exit '+$LASTEXITCODE+').'
+            if($DashboardState){$DashboardState.LastConversation=$current}
         } finally { Pop-Location }
     } while($true)
 }

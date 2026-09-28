@@ -34,6 +34,12 @@ $empty = @(Get-DeckTerminalFrame @() @{} @{} @() @{} 0 60 25 '' 'Ready')
 $compactFrame = @(Get-DeckTerminalFrame $names @{} $profiles @() @{} 0 100 25 '' 'Ready' $true $null @{} $true 72)
 Assert (($compactFrame.Text -join "`n") -match 'C compact \[x\] Native 72%') 'Auto-compact selected state or configured threshold missing'
 Assert (($empty.Text -join "`n") -match 'No matching accounts') 'Missing empty state'
+$lastConversation=[pscustomobject]@{Account='account40';Id='12345678-1234-1234-1234-123456789abc'}
+$lastFrame=@(Get-DeckTerminalFrame $names @{} $profiles @() @{} 39 100 25 '' 'Returned' $true $null @{} $false 55 $false 'Native' 'Default' $lastConversation)
+$lastText=$lastFrame.Text -join "`n"
+Assert ($lastText -match 'LAST CHAT\s+account40' -and $lastText -match 'codex-auth resume 12345678-1234-1234-1234-123456789abc') 'Dashboard did not retain the last closed conversation resume command'
+Assert ($lastFrame.Count -le 24) 'Last conversation line overflowed the terminal frame'
+Assert (($frame.Text -join "`n") -notmatch 'LAST CHAT') 'A brand-new dashboard invented a last conversation'
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('deck-terminal-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'deck'))
 $memoryRoot=Join-Path $fixture 'accounts/account1/memories';[void][IO.Directory]::CreateDirectory($memoryRoot)
@@ -42,6 +48,16 @@ Assert ($instructionsPath -eq (Join-Path $fixture 'accounts/account1/AGENTS.md')
 $skillsPath=Get-DeckSkillsDirectory $fixture account1 -Create
 Assert ((Test-Path -LiteralPath $skillsPath -PathType Container) -and $skillsPath -eq (Join-Path $fixture 'accounts/account1/skills')) 'Skills directory path incorrect'
 [IO.File]::WriteAllText((Join-Path $fixture 'accounts/account1/auth.json'),'{}',[Text.UTF8Encoding]::new($false))
+$conversationId='87654321-4321-4321-4321-cba987654321'
+$conversationDirectory=Join-Path $fixture 'accounts/account1/sessions/2026/09/27'
+[void][IO.Directory]::CreateDirectory($conversationDirectory)
+$conversationPath=Join-Path $conversationDirectory "rollout-2026-09-27T00-00-00-$conversationId.jsonl"
+$conversationHeader=@{type='session_meta';payload=@{id=$conversationId;cwd=$fixture;model_provider='openai'}} | ConvertTo-Json -Compress
+$conversationStarted=[DateTimeOffset]::UtcNow.AddSeconds(-1)
+[IO.File]::WriteAllText($conversationPath,$conversationHeader,[Text.UTF8Encoding]::new($false))
+$recentConversation=Get-DeckTerminalRecentConversation $fixture 'account1' $conversationStarted
+Assert ($recentConversation.Id -eq $conversationId -and $recentConversation.Account -eq 'account1') 'Dashboard did not resolve the conversation updated by the returned launch'
+Assert (-not (Get-DeckTerminalRecentConversation $fixture 'account1' ([DateTimeOffset]::UtcNow.AddMinutes(1)))) 'Dashboard reused a stale conversation after a later launch'
 $checkQueue=[Collections.Generic.Queue[string]]::new()
 $checkProfiles=@{account1=@{PlanType='plus'};pool=@{PlanType='pool'}}
 $queued=Add-DeckTerminalCheckQueue @('account1','pool') $checkProfiles @{} $checkQueue (Join-Path $fixture 'accounts')
@@ -64,6 +80,7 @@ Assert ($dashboard -notmatch '\$attempted|TotalMinutes\s+-lt\s+5') 'Opening the 
 Assert ($dashboard -match 'Auto-compact enabled for account and pool launches') 'Dashboard does not advertise pool auto-compact support'
 Assert ($dashboard -notmatch 'Auto-compact needs an individual account') 'Dashboard still blocks pool auto-compact launches'
 Assert ($dashboard -match '\$queueAll=\$CheckAll\.IsPresent' -and $dashboard -match 'Add-DeckTerminalCheckQueue') 'Dashboard -a startup does not reuse the A shortcut queue'
+Assert ($dashboard -match '\$dashboardState=@\{LastConversation=\$null\}' -and $dashboard -match 'Get-DeckTerminalRecentConversation') 'Dashboard does not keep the returned conversation only in its current process'
 $snapshot = @(Show-DeckTerminal -SuiteRoot $fixture -AuthScript 'unused' -Snapshot)
 Assert (($snapshot -join "`n") -match 'CODEX / DECK') 'Snapshot did not render'
 'PASS: terminal quota, sanitization, cache merge, paging, masking, empty state and snapshot.'
