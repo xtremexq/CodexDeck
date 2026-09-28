@@ -189,10 +189,11 @@ function Set-DeckAutoCompactLaunch([string]$Root, [bool]$Enabled) {
 }
 function Get-DeckTerminalLaunchArguments($Settings, [bool]$InteractiveConversation) {
     if ($InteractiveConversation -and $Settings -and [bool]$Settings.TerminalScrollbackEnabled) {
-        # raw_output_mode is Codex's dedicated copy/scrollback mode. Keep the
-        # alternate-screen override too so every supported CLI version stays
-        # on the terminal's normal screen buffer.
-        return @('-c','tui.alternate_screen="never"','-c','tui.raw_output_mode=true')
+        # --no-alt-screen is Codex's explicit per-launch override. The config
+        # value alone is not honored consistently by the remote client used for
+        # resumed Deck conversations, so retain it as a compatibility fallback
+        # and also enable raw output for normal terminal scrollback/copying.
+        return @('--no-alt-screen','-c','tui.alternate_screen="never"','-c','tui.raw_output_mode=true')
     }
     return @()
 }

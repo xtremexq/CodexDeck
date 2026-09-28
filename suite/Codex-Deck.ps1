@@ -683,7 +683,18 @@ function Open-DeckTerminal([string]$Account,[switch]$NewAccount) {
     $auth = (Join-Path $HOME '.local/bin/codex-auth.cmd').Replace("'", "''")
     $code = "Set-Location -LiteralPath '" + $folder.Replace("'", "''") + "'; & '$auth' '$Account'"
     if($NewAccount){$code+=' -NewAccount'}
-    Start-Process powershell.exe -ArgumentList ('-NoProfile -NoExit -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))) | Out-Null
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+    $wt=Get-Command wt.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if($wt){
+        # Deck's desktop action should use the user's Windows Terminal profile,
+        # not the legacy black-and-white Windows PowerShell console.
+        $workingDirectory='"'+$folder.Replace('"','\"')+'"'
+        Start-Process -FilePath $wt.Source -ArgumentList @('-w','new','-d',$workingDirectory,'pwsh.exe','-NoLogo','-NoExit','-EncodedCommand',$encoded) | Out-Null
+        return
+    }
+    $shell=Get-Command pwsh.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if(-not $shell){$shell=Get-Command powershell.exe -ErrorAction Stop | Select-Object -First 1}
+    Start-Process -FilePath $shell.Source -ArgumentList @('-NoLogo','-NoProfile','-NoExit','-EncodedCommand',$encoded) | Out-Null
 }
 function Edit-DeckConfig([string]$Path, [string]$Label) {
     $original = if (Test-Path -LiteralPath $Path) { [IO.File]::ReadAllText($Path) } else { '' }

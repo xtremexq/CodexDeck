@@ -9,7 +9,7 @@ Assert ($settings.AutoCompactThresholdPercent -eq 55) 'Auto-compact threshold mu
 Assert (-not $settings.AutoCompactLaunchEnabled) 'Auto-compact launches must default off'
 Assert $settings.TerminalScrollbackEnabled 'Terminal scrollback must default on for every account'
 $scrollbackArgs=@(Get-DeckTerminalLaunchArguments $settings $true)
-Assert (($scrollbackArgs -join '|') -eq '-c|tui.alternate_screen="never"|-c|tui.raw_output_mode=true') 'Interactive launches must force Codex raw scrollback on the normal screen buffer when scrollback is enabled'
+Assert (($scrollbackArgs -join '|') -eq '--no-alt-screen|-c|tui.alternate_screen="never"|-c|tui.raw_output_mode=true') 'Interactive launches must explicitly disable Codex alternate-screen mode and force raw scrollback when scrollback is enabled'
 $settings.TerminalScrollbackEnabled=$false
 Assert (@(Get-DeckTerminalLaunchArguments $settings $true).Count -eq 0) 'Disabled terminal scrollback still changed the Codex launch'
 $settings.TerminalScrollbackEnabled=$true
