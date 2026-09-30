@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Fixed premature Custom auto-compaction by measuring current context usage instead of cumulative conversation tokens, retaining the last reported context capacity when later notifications omit it.
+- Fixed automatic handoff requests accepted after a turn's final answer but never processed by Codex: Deck now requests the handoff once in a fresh turn before deciding whether to compact.
+- Fixed manual Custom compaction waiting indefinitely on busy work by interrupting the active turn and requesting its handoff once Codex is idle. Ordered turn-start notifications with other observer events so stale idle events cannot erase a new active turn.
+
 ## 1.8.7 - 2026-09-28
 
 - Fixed Codex app-server crashing on launch with `unexpected argument '--no-alt-screen'` during interactive account, dashboard, and resume commands by stripping the client-only flag from the auto-compact sidecar's server configuration and capturing app-server startup diagnostics.

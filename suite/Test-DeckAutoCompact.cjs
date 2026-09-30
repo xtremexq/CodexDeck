@@ -37,13 +37,52 @@ async function main() {
   await controller.onTurnCompleted({threadId:'thread-1',turn:{id:'turn-2',status:'completed'}});
   assert.equal(calls.at(-1).params.input[0].text,'A later user message.');
 
+  // Usage events may omit capacity after establishing it.
+  const cacheCalls=[];
+  const cacheController=new AutoCompactController(async(method,params)=>{cacheCalls.push({method,params});if(method==='turn/start')return {turn:{id:'cache-turn'}};return {};},70);
+  cacheController.threadId='cache-thread';
+  await cacheController.start('Work');
+  // First event establishes the context window.
+  await cacheController.onUsage({threadId:'cache-thread',turnId:'cache-turn',tokenUsage:{last:{totalTokens:100},modelContextWindow:1000}});
+  assert.equal(cacheController.cachedContextWindow,1000,'modelContextWindow must be cached from the first event');
+  // Later event with null modelContextWindow must still use the cached value.
+  await cacheController.onUsage({threadId:'cache-thread',turnId:'cache-turn',tokenUsage:{last:{totalTokens:301},modelContextWindow:null}});
+  assert.equal(cacheCalls.at(-1).method,'turn/steer','null modelContextWindow must not prevent autocompact when a cached value exists');
+  // An event with the field completely absent must also use the cached value.
+  const cache2Calls=[];
+  const cache2Controller=new AutoCompactController(async(method,params)=>{cache2Calls.push({method,params});if(method==='turn/start')return {turn:{id:'c2-turn'}};return {};},70);
+  cache2Controller.threadId='c2-thread';
+  await cache2Controller.start('Work');
+  await cache2Controller.onUsage({threadId:'c2-thread',turnId:'c2-turn',tokenUsage:{last:{totalTokens:100},modelContextWindow:1000}});
+  await cache2Controller.onUsage({threadId:'c2-thread',turnId:'c2-turn',tokenUsage:{last:{totalTokens:310}}});
+  assert.equal(cache2Controller.cachedContextWindow,1000,'missing modelContextWindow must not clear the cache');
+  assert.equal(cache2Calls.at(-1).method,'turn/steer','missing modelContextWindow must not prevent autocompact when cached');
+  // Repeated model calls must not count the same context toward the limit again.
+  const totalCalls=[];
+  const totalController=new AutoCompactController(async(method,params)=>{totalCalls.push({method,params});if(method==='turn/start')return {turn:{id:'tot-turn'}};return {};},70);
+  totalController.threadId='tot-thread';
+  await totalController.start('Work');
+  await totalController.onUsage({threadId:'tot-thread',turnId:'tot-turn',tokenUsage:{last:{totalTokens:50},total:{totalTokens:5000},modelContextWindow:1000}});
+  assert.equal(totalController.usagePercent,5,'usage must measure the current context, not cumulative session cost');
+  assert.equal(totalCalls.length,1,'a large cumulative total must not trigger compaction');
+  await totalController.onUsage({threadId:'tot-thread',turnId:'tot-turn',tokenUsage:{total:{totalTokens:6000},modelContextWindow:null}});
+  assert.equal(totalCalls.length,1,'an absent current-context count must not fall back to cumulative usage');
+  await totalController.onUsage({threadId:'tot-thread',turnId:'tot-turn',tokenUsage:{last:{totalTokens:310},total:{totalTokens:7000},modelContextWindow:1000}});
+  assert.equal(totalCalls.at(-1).method,'turn/steer','current context reaching the limit must trigger compaction');
+  await totalController.onUsage({threadId:'tot-thread',turnId:'tot-turn',tokenUsage:{last:{totalTokens:50},total:{totalTokens:8000},modelContextWindow:null}});
+  assert.equal(totalController.armed,true,'a smaller context must rearm even though cumulative usage keeps growing');
+  totalController.armed=false;
+  await totalController.onUsage({threadId:'tot-thread',turnId:'tot-turn',tokenUsage:{last:{totalTokens:0},total:{totalTokens:8000}}});
+  assert.equal(totalController.usagePercent,0,'an empty context is valid usage');
+  assert.equal(totalController.armed,true,'an empty context must rearm the threshold');
+
   const manualCalls=[];
   const manual=new AutoCompactController(async(method,params)=>{manualCalls.push({method,params});if(method==='turn/start')return {turn:{id:'manual-turn'}};return {};},70,()=>{},HANDOFF_REQUEST,'Custom',false);
   manual.threadId='manual-thread'; manual.activeTurnId='working-turn';
   await manual.onUsage({threadId:'manual-thread',turnId:'working-turn',tokenUsage:{last:{totalTokens:90},modelContextWindow:100}});
   assert.equal(manualCalls.length,0,'manual-only mode must not trigger at the automatic threshold');
   assert.equal(await manual.requestCompact(),true);
-  assert.equal(manualCalls.length,0,'manual custom compaction must not steer a turn that may be ending after Esc');
+  assert.deepEqual(manualCalls.map(call=>call.method),['turn/interrupt'],'manual compaction must stop a busy or cancelling turn before requesting a fresh handoff');
   assert.equal(await manual.requestCompact(),false,'a second request must not start another cycle');
   await manual.onThreadStatus({type:'idle'});
   assert.equal(manualCalls.at(-1).method,'turn/start','manual custom compaction must start a fresh handoff after the interrupted thread becomes idle');
@@ -54,6 +93,11 @@ async function main() {
   await manual.onItem({turnId:'manual-compact',item:{type:'contextCompaction'}});
   await manual.onTurnCompleted({threadId:'manual-thread',turn:{id:'manual-compact',status:'completed'}});
   assert.equal(manualCalls.at(-1).params.input[0].text,replayPrompt(`${HANDOFF}: manual state`));
+  const idleCalls=[];
+  const idleManual=new AutoCompactController(async(method,params)=>{idleCalls.push({method,params});return {turn:{id:'idle-checkpoint'}};},70);
+  idleManual.threadId='idle-thread';
+  await idleManual.requestCompact();
+  assert.deepEqual(idleCalls.map(call=>call.method),['turn/start'],'an idle manual request must not interrupt its own new checkpoint');
 
   const nativeCalls=[];
   const native=new AutoCompactController(async(method,params)=>{nativeCalls.push({method,params});return {};},70,()=>{},HANDOFF_REQUEST,'Native',false);
@@ -69,10 +113,10 @@ async function main() {
   assert.equal(await native.requestCompact(),true,'native compaction may be requested again after completion');
   assert.equal(nativeCalls.length,2,'idle native compaction must start immediately');
 
-  const skipped=[];
+  const skipped=[]; let missingId=0;
   const noHandoff=new AutoCompactController(async(method,params)=>{
     skipped.push(method);
-    if(method==='turn/start') return {turn:{id:'one'}};
+    if(method==='turn/start') return {turn:{id:++missingId===1?'one':'two'}};
     return {};
   },70);
   noHandoff.once=true;
@@ -81,10 +125,35 @@ async function main() {
   await noHandoff.onUsage({threadId:'thread-2',turnId:'one',tokenUsage:{last:{totalTokens:75},modelContextWindow:100}});
   await noHandoff.onItem({turnId:'one',item:{type:'agentMessage',phase:'final_answer',text:'Incomplete handoff'}});
   await noHandoff.onTurnCompleted({threadId:'thread-2',turn:{id:'one',status:'completed'}});
+  assert.equal(noHandoff.phase,'checkpoint','accepted steering without a handoff must retry in a fresh turn');
+  assert.equal(skipped.filter(method=>method==='turn/start').length,2,'an unconsumed steer must receive exactly one fresh checkpoint turn');
+  await noHandoff.onTurnCompleted({threadId:'thread-2',turn:{id:'two',status:'completed'}});
   assert.equal(noHandoff.phase,'normal');
   assert.ok(!skipped.includes('thread/compact/start'),'incomplete handoff must never compact');
   assert.equal(noHandoff.done,true,'one-shot worker must exit if handoff fails');
   assert.equal(noHandoff.failed,true,'incomplete one-shot work must not report success');
+  const retryCalls=[]; let retryId=0;
+  const lateSteer=new AutoCompactController(async(method,params)=>{
+    retryCalls.push({method,params});
+    return method==='turn/start'?{turn:{id:`retry-${++retryId}`}}:{};
+  },70);
+  lateSteer.threadId='late-thread';
+  await lateSteer.start('Work');
+  await lateSteer.onUsage({threadId:'late-thread',turnId:'retry-1',tokenUsage:{last:{totalTokens:300},modelContextWindow:1000}});
+  // CLI 0.159 sends idle before turn/completed, after accepting the final-answer steer.
+  await lateSteer.onThreadStatus({type:'idle'});
+  await lateSteer.onTurnCompleted({threadId:'late-thread',turn:{id:'retry-1',status:'completed',items:[]}});
+  assert.equal(lateSteer.checkpointTurnId,'retry-2','the late steer must start a distinct checkpoint turn');
+  await lateSteer.onItem({turnId:'retry-2',item:{type:'agentMessage',phase:'final_answer',text:`${HANDOFF}: preserved state`}});
+  await lateSteer.onTurnCompleted({threadId:'late-thread',turn:{id:'retry-2',status:'completed'}});
+  assert.equal(retryCalls.at(-1).method,'thread/compact/start','the fresh handoff must proceed to compaction');
+  const cancelledCalls=[];
+  const cancelled=new AutoCompactController(async(method,params)=>{cancelledCalls.push({method,params});return {turn:{id:'cancelled-turn'}};},70);
+  cancelled.threadId='cancelled-thread';
+  await cancelled.start('Work');
+  await cancelled.onUsage({threadId:'cancelled-thread',turnId:'cancelled-turn',tokenUsage:{last:{totalTokens:300},modelContextWindow:1000}});
+  await cancelled.onTurnCompleted({threadId:'cancelled-thread',turn:{id:'cancelled-turn',status:'interrupted'}});
+  assert.equal(cancelledCalls.filter(call=>call.method==='turn/start').length,1,'an explicit user interruption must not restart work through a checkpoint retry');
   const finishedCalls=[]; const finishedReports=[];
   const finished=new AutoCompactController(async(method,params)=>{
     finishedCalls.push({method,params});
@@ -229,6 +298,7 @@ async function main() {
   await interrupted.requestCompact();
   assert.ok(!interruptedCalls.some(call=>call.method==='turn/steer'),'an Esc-interrupted manual request must never steer the cancelling turn');
   assert.ok(!interruptedCalls.some(call=>call.method==='turn/start'),'the replacement handoff must wait until Codex reports the interrupted thread idle');
+  assert.equal(interruptedCalls.filter(call=>call.method==='turn/interrupt').length,1,'manual compaction must explicitly release a busy turn instead of waiting indefinitely');
   interruptedStatus='idle';
   interrupted.onNotification({method:'thread/status/changed',params:{threadId:'interrupted-thread',status:{type:'idle'}}});
   await interrupted.serial.get('interrupted-thread');
@@ -278,6 +348,7 @@ async function main() {
   await observer.serial.get('native-thread');
   assert.equal(observerCalls.at(-1).method,'thread/compact/start');
   observer.onNotification({method:'turn/started',params:{threadId:'native-thread',turn:{id:'compact-turn'}}});
+  await observer.serial.get('native-thread');
   assert.equal(observer.controllers.get('native-thread').activeTurnId,null,'compaction must not replace the active conversation turn');
   observer.onNotification({method:'item/completed',params:{threadId:'native-thread',turnId:'compact-turn',item:{type:'contextCompaction'}}});
   observer.onNotification({method:'turn/completed',params:{threadId:'native-thread',turn:{id:'compact-turn',status:'completed'}}});
@@ -288,6 +359,10 @@ async function main() {
   assert.equal(observer.targetThreadId,'next-thread','a TUI history switch must select the newly resumed conversation');
   assert.deepEqual([...observer.controllers.keys()],['next-thread'],'only the active TUI conversation may remain observed');
   assert.ok(observerCalls.some(call=>call.method==='thread/unsubscribe' && call.params.threadId==='native-thread'),'switching history must unsubscribe the previous conversation');
+  observer.onNotification({method:'thread/status/changed',params:{threadId:'next-thread',status:{type:'idle'}}});
+  observer.onNotification({method:'turn/started',params:{threadId:'next-thread',turn:{id:'next-working-turn'}}});
+  await observer.serial.get('next-thread');
+  assert.equal(observer.controllers.get('next-thread').activeTurnId,'next-working-turn','a queued idle notification must not erase the newly started turn');
   const routedCalls=[];
   const routed=new ThreadObserver(async(method,params)=>{routedCalls.push({method,params});return {};},70,custom,()=>{},'Native',false);
   routed.onNotification({method:'thread/started',params:{thread:{id:'routed-thread',parentThreadId:null}}});

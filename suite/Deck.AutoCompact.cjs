@@ -18,9 +18,11 @@ class AutoCompactController {
     this.handoffRequest=completionAwareRequest(handoffRequest); this.mode=mode; this.autoEnabled=autoEnabled;
     this.threadId=null; this.activeTurnId=null; this.phase='normal'; this.armed=true;
     this.handoff=''; this.finished=''; this.checkpointTurnId=null; this.compactionTurnId=null;
-    this.checkpointInterrupted=false;
+    this.checkpointInterrupted=false; this.checkpointSteered=false;
     this.compactionItemDone=false; this.compactionTurnDone=false; this.usagePercent=null;
     this.queue=[]; this.once=false; this.done=false; this.failed=false;
+    // Retain the last known capacity when a usage notification omits it.
+    this.cachedContextWindow=0;
   }
   async start(prompt, extra = {}) {
     const input=Array.isArray(prompt)?prompt:textInput(prompt);
@@ -31,9 +33,13 @@ class AutoCompactController {
   async onUsage(event) {
     if(event.threadId!==this.threadId) return;
     const usage=event.tokenUsage || {};
-    const tokens=usage.last?.totalTokens || 0;
-    const window=usage.modelContextWindow || 0;
-    if(!tokens || !window) return;
+    // Each model call includes the retained context in last.totalTokens. The
+    // session-wide total counts that context repeatedly and survives compaction;
+    // using it triggers early and prevents the threshold from rearming.
+    const tokens=usage.last?.totalTokens;
+    if(typeof usage.modelContextWindow==='number' && usage.modelContextWindow>0) this.cachedContextWindow=usage.modelContextWindow;
+    const window=this.cachedContextWindow;
+    if(!Number.isFinite(tokens) || tokens<0 || !window) return;
     const exactPercent=tokens/window*100;
     const usedLimit=100-this.threshold;
     this.usagePercent=Math.round(exactPercent);
@@ -52,20 +58,26 @@ class AutoCompactController {
     } else {
       this.armed=false;
       this.report('Manual compaction requested: requesting task-state handoff.');
-      // A manual request can arrive immediately after the user presses Esc.
-      // Never steer the turn that is being cancelled: app-server can accept and
-      // display that input while the dying turn no longer has a model loop to
-      // consume it. Queue a fresh checkpoint turn after Codex becomes idle.
+      // An explicit request must also work during a long-running turn or just
+      // after Esc. Stop that turn and request the checkpoint once it is idle;
+      // steering a cancelling turn can display input without consuming it.
+      const interruptedTurnId=this.activeTurnId;
       await this.startCustomCompact(null);
+      if(interruptedTurnId) {
+        this.report('Stopping the active turn so the manual handoff can start.');
+        try { await this.rpc('turn/interrupt',{threadId:this.threadId,turnId:interruptedTurnId}); }
+        catch(error) { this.report(`Waiting for the active turn to become idle: ${error.message}`); }
+      }
     }
     return this.phase!=='normal';
   }
   async startCustomCompact(turnId = this.activeTurnId) {
-    this.phase='checkpoint'; this.handoff=''; this.finished=''; this.checkpointTurnId=null; this.checkpointInterrupted=false;
+    this.phase='checkpoint'; this.handoff=''; this.finished=''; this.checkpointTurnId=null; this.checkpointInterrupted=false; this.checkpointSteered=false;
     if(this.activeTurnId && turnId===this.activeTurnId) {
+      const checkpointTurnId=this.activeTurnId;
       try {
-        await this.rpc('turn/steer',{threadId:this.threadId,expectedTurnId:this.activeTurnId,input:textInput(this.handoffRequest)});
-        this.checkpointTurnId=this.activeTurnId;
+        await this.rpc('turn/steer',{threadId:this.threadId,expectedTurnId:checkpointTurnId,input:textInput(this.handoffRequest)});
+        this.checkpointTurnId=checkpointTurnId; this.checkpointSteered=true;
         return;
       } catch(error) { this.report(`Active turn ended before steering: ${error.message}`); }
     }
@@ -144,6 +156,16 @@ class AutoCompactController {
       if(!this.handoff) this.handoff=handoffFallback?.text || '';
       const handoffTurnFinished=turn.status==='completed' || (this.checkpointInterrupted && turn.status==='interrupted');
       if(!handoffTurnFinished || !this.handoff.trimStart().startsWith(HANDOFF)) {
+        if(this.checkpointSteered && turn.status==='completed') {
+          // Usage can arrive after the final answer. Codex may acknowledge and
+          // display a steer while the turn is already ending, without running
+          // inference for it. Give it one fresh turn; never compact without a
+          // real handoff and never retry a user-interrupted checkpoint.
+          this.checkpointTurnId=null; this.checkpointSteered=false;
+          this.report('The active turn ended without a handoff; requesting it in a fresh turn.');
+          await this.startCheckpoint();
+          return;
+        }
         this.phase='normal'; this.failCycle('Handoff was missing or incomplete; compaction skipped to preserve the task.');
         await this.drain(); return;
       }

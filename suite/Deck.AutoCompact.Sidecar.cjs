@@ -282,14 +282,12 @@ class ThreadObserver {
     }
     const controller=this.controllers.get(event.threadId);
     if(!controller) return;
-    if(message.method==='turn/started') {
-      if(['normal','checkpoint','native-pending'].includes(controller.phase)) controller.activeTurnId=event.turn?.id || null;
-      return;
-    }
-    if(!['item/completed','thread/tokenUsage/updated','turn/completed','thread/status/changed'].includes(message.method)) return;
+    if(!['turn/started','item/completed','thread/tokenUsage/updated','turn/completed','thread/status/changed'].includes(message.method)) return;
     const previous=this.serial.get(event.threadId) || Promise.resolve();
     const next=previous.then(async()=>{
-      if(message.method==='thread/status/changed') await controller.onThreadStatus(event.status);
+      if(message.method==='turn/started') {
+        if(['normal','checkpoint','native-pending'].includes(controller.phase)) controller.activeTurnId=event.turn?.id || null;
+      } else if(message.method==='thread/status/changed') await controller.onThreadStatus(event.status);
       else if(message.method==='item/completed') await controller.onItem(event);
       else if(message.method==='thread/tokenUsage/updated') {
         if(!controller.activeTurnId && controller.phase==='normal') controller.activeTurnId=event.turnId;
