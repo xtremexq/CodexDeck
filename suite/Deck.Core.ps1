@@ -872,7 +872,7 @@ function Get-DeckWarmupReply([string]$Output) {
 function Request-DeckWarmup([string]$SuiteRoot, [string]$Account, [switch]$NoStart) {
     if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or -not (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$Account/auth.json"))){throw 'Select a signed-in account.'}
     $path=Join-Path $SuiteRoot "deck/warmup-requests/$Account.json"
-    if(-not (Test-Path -LiteralPath $path)){Write-DeckJson $path @{Account=$Account;Mode='Manual';At=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()}}
+    Write-DeckJson $path @{Account=$Account;Mode='Manual';At=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()}
     if(-not $NoStart){Start-DeckWarmupScheduler $SuiteRoot}
 }
 function Set-DeckWarmupTimes([string]$SuiteRoot, [string]$Times) {
@@ -904,6 +904,7 @@ function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, 
     $unix=$Now.ToUnixTimeSeconds(); $candidates=@()
     foreach($account in @($Accounts)){
         $record=$Cache[$account]
+        if($record -and ($record.Error -or $record.Status -eq 'error')){$candidates+=$Now.AddMinutes([Math]::Max(20,$UnknownDelayMinutes)); continue}
         $blockedWindows=@($record.Windows | Where-Object { $_.Dead -or ($null -ne $_.UsedPct -and $_.UsedPct -ge 99.5) })
         if($blockedWindows.Count){
             # A reset on one window cannot make the account usable while another
@@ -913,11 +914,12 @@ function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, 
             else{$candidates+=$Now.AddMinutes([Math]::Max(20,$UnknownDelayMinutes))}
             continue
         }
-        if($record -and ($record.Error -or $record.Status -eq 'error')){$candidates+=$Now.AddMinutes([Math]::Max(20,$UnknownDelayMinutes)); continue}
-        $reset=if($Resets[$account]){[long]$Resets[$account]}else{
-            $primary=Get-DeckWarmupWindow $record
-            if($primary.ResetsAtUnix){[long]$primary.ResetsAtUnix}else{0}
-        }
+        $primary=Get-DeckWarmupWindow $record
+        $reset=Get-DeckWarmupReset $record $Resets[$account] $unix
+        # Retain an observed reset while it can still be warmed. Once that
+        # opportunity has passed, schedule the latest provider boundary rather
+        # than retrying an obsolete reset forever.
+        if((-not $reset -or $unix -gt ([long]$reset+60*$Settings.WarmupMaxDelayMinutes)) -and $primary.ResetsAtUnix -and [long]$primary.ResetsAtUnix -gt $unix){$reset=[long]$primary.ResetsAtUnix}
         if(-not $reset){$candidates+=$Now.AddMinutes($UnknownDelayMinutes); continue}
         $due=[DateTimeOffset]::FromUnixTimeSeconds($reset).AddSeconds($Settings.WarmupGraceSeconds).ToLocalTime()
         if($due -gt $Now){$candidates+=$due; continue}
@@ -933,6 +935,13 @@ function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, 
     }
     $candidates | Sort-Object | Select-Object -First 1
 }
+function Get-DeckWarmupSettingsStamp($Settings, $Accounts) {
+    $values=[ordered]@{}
+    foreach($key in @((Get-DeckDefaults).Keys | Where-Object {$_ -like 'Warmup*'} | Sort-Object)){$values[$key]=$Settings.$key}
+    $values.Accounts=@($Accounts | Sort-Object -Unique)
+    $hash=[Security.Cryptography.SHA256]::Create()
+    try{return [Convert]::ToBase64String($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $values -Compress -Depth 5))))}finally{$hash.Dispose()}
+}
 function Test-DeckWarmupScheduleHealthy([string]$SuiteRoot, $Settings) {
     if($env:OS -ne 'Windows_NT'){return $true}
     $taskName='CodexDeck Warmup Scheduling'
@@ -945,6 +954,7 @@ function Test-DeckWarmupScheduleHealthy([string]$SuiteRoot, $Settings) {
     try{
         $task=Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
         if(-not $task){return $false}
+        if([string]$task.State -eq 'Disabled'){return $false}
         $action=@($task.Actions | Select-Object -First 1)[0]
         $worker=Join-Path $SuiteRoot 'Deck.WarmupWorker.ps1'
         if(-not $action -or [IO.Path]::GetFileName([string]$action.Execute) -ine 'wscript.exe' -or ([string]$action.Arguments).IndexOf($worker,[StringComparison]::OrdinalIgnoreCase) -lt 0){return $false}
@@ -975,7 +985,7 @@ function Sync-DeckWarmupStartup([string]$SuiteRoot, $Settings, $NextRun = $null)
     $backgroundLauncher=Join-Path $SuiteRoot 'Deck.Background.vbs'
     if(-not (Test-Path -LiteralPath $backgroundLauncher -PathType Leaf)){throw 'Background launcher is not installed.'}
     if($null -eq $NextRun){
-        $cache=ConvertTo-DeckMap (Read-DeckJson (Join-Path $SuiteRoot 'deck/cache.json'))
+        $cache=Get-DeckUsageCache (Join-Path $SuiteRoot 'deck')
         $history=ConvertTo-DeckMap (Read-DeckJson (Join-Path $SuiteRoot 'deck/warmup.json'))
         $resets=@{}; $saved=Read-DeckJson (Join-Path $SuiteRoot 'deck/warmup-resets.json'); if($saved){foreach($property in $saved.PSObject.Properties){$resets[$property.Name]=[long]$property.Value}}
         $accounts=@(Get-DeckWarmupAccounts $SuiteRoot $Settings $cache)
@@ -997,7 +1007,7 @@ function Sync-DeckWarmupStartup([string]$SuiteRoot, $Settings, $NextRun = $null)
     # ever fails, this watchdog gives the existing task another chance to repair
     # itself instead of leaving warm-up silently dead until the next sign-in.
     $watchdogInterval=New-TimeSpan -Minutes 15
-    $triggers+=New-ScheduledTaskTrigger -Once -At ([datetime]::Now.Add($watchdogInterval)) -RepetitionInterval $watchdogInterval -RepetitionDuration (New-TimeSpan -Days 1)
+    $triggers+=New-ScheduledTaskTrigger -Once -At ([datetime]::Now.Add($watchdogInterval)) -RepetitionInterval $watchdogInterval
     if(-not $triggers.Count){$triggers+=New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes(1))}
     $scriptHost=Join-Path $env:SystemRoot 'System32\wscript.exe'
     $actionArguments=@('//B','//Nologo',$backgroundLauncher,$worker) | ForEach-Object { ConvertTo-DeckProcessArgument ([string]$_) }
@@ -1054,14 +1064,17 @@ function Invoke-DeckQueuedWarmups([string]$SuiteRoot, $Settings, $Tasks, $Histor
 }
 
 function Get-DeckWarmupReset($Record, $PreviousReset, [long]$Now) {
+    $primary=Get-DeckWarmupWindow $Record
     if ($PreviousReset) {
-        # A known future boundary is authoritative. Inferring the current window
-        # start from its end would make the just-warmed window look new and can
-        # send a duplicate warm-up while integer usage still rounds to zero.
-        if ([long]$PreviousReset -gt $Now) { return [long]$PreviousReset }
+        # A known future boundary stays a boundary, even when the provider
+        # revises its time. Do not reinterpret it as a fresh window start while
+        # integer usage still rounds to zero after a successful warm-up.
+        if ([long]$PreviousReset -gt $Now) {
+            if($primary.ResetsAtUnix -and [long]$primary.ResetsAtUnix -gt $Now){return [long]$primary.ResetsAtUnix}
+            return [long]$PreviousReset
+        }
         if ($Now - [long]$PreviousReset -le 3600) { return [long]$PreviousReset }
     }
-    $primary=Get-DeckWarmupWindow $Record
     # A full, freshly reported empty window also permits discovery after starting Deck.
     # The inferred start must be in the past; future/incomplete data is never eligible.
     if ($primary.ResetsAtUnix -and $null -ne $primary.UsedPct -and $primary.UsedPct -eq 0) {

@@ -29,7 +29,7 @@ function Invoke-DeckWorkerBatch($Accounts, [ValidateSet('Check','Warm-up')][stri
             $task=$active[$account]; $timeout=([DateTimeOffset]::UtcNow-$task.Started).TotalSeconds -gt 120
             if($timeout){Stop-DeckTask $task}
             if($timeout -or (Test-DeckTaskReady $task)){
-                $results[$account]=[pscustomobject]@{Success=(-not $timeout -and $task.Process.ExitCode -eq 0);Output=$(if($task.Out.IsCompleted){[string]$task.Out.Result}else{''});Error=$(if($timeout){'Timed out'}elseif($task.Err.IsCompleted){[string]$task.Err.Result}else{''})}
+                $results[$account]=[pscustomobject]@{Success=(-not $timeout -and $task.Process.ExitCode -eq 0);Output=$(if($task.Out.IsCompleted){[string]$task.Out.Result}else{''});Error=$(if($timeout){'Timed out'}elseif($task.Process.ExitCode -ne 0){Get-DeckTaskFailureMessage $task}else{''})}
                 Dispose-DeckTask $task; $active.Remove($account)
             }
         }
@@ -43,22 +43,17 @@ function Read-DeckResetMap {
     return $map
 }
 function Save-DeckWorkerState($Cache,$Resets,$History,$Checked,$Warmed,[string]$Outcome) {
-    $latest=Get-DeckUsageCache $root
-    foreach($account in @($Cache.Keys)){$latest[$account]=$Cache[$account]}
-    $latest=Save-DeckUsageCache $root $latest 'cache.json'
+    $latest=Save-DeckUsageCache $root $Cache 'cache.json'
     Write-DeckJson (Join-Path $root 'warmup-resets.json') $Resets
     Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $History)
     $settings=Get-DeckSettings $root; $accounts=@(Get-DeckWarmupAccounts $SuiteRoot $settings $latest)
     $next=Get-DeckNextWarmupRun $settings $accounts $latest $Resets $History ([DateTimeOffset]::Now) 20
-    Write-DeckJson $statePath ([ordered]@{LastRun=[DateTimeOffset]::Now.ToString('o');Outcome=$Outcome;Checked=@($Checked);Warmed=@($Warmed);NextRun=$(if($next){([DateTimeOffset]$next).ToString('o')}else{$null})})
+    Write-DeckJson $statePath ([ordered]@{LastRun=[DateTimeOffset]::Now.ToString('o');Outcome=$Outcome;Checked=@($Checked);Warmed=@($Warmed);SettingsStamp=(Get-DeckWarmupSettingsStamp $settings $accounts);NextRun=$(if($next){([DateTimeOffset]$next).ToString('o')}else{$null})})
     Write-DeckJson (Join-Path $root 'warmup-state-changed.json') @{At=[DateTimeOffset]::Now.ToString('o')}
     Sync-DeckWarmupStartup $SuiteRoot $settings $next
 }
 
-$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $created=$false
-$mutex=[Threading.Mutex]::new($true,"Local\CodexDeckWarmup-$sid",[ref]$created)
-if(-not $created){$mutex.Dispose(); exit 0}
-try{
+function Invoke-DeckWarmupWorker {
     $settings=Get-DeckSettings $root
     $cache=Get-DeckUsageCache $root
     $history=ConvertTo-DeckMap (Read-DeckJson (Join-Path $root 'warmup.json'))
@@ -77,15 +72,21 @@ try{
         if($valid -and $request.Mode -eq 'Manual'){$valid=$unix-[long]$request.At -le 3600}
         if($valid){$requests[$account]=[pscustomobject]@{Request=$request;Path=$file.FullName}}else{Remove-Item -LiteralPath $file.FullName -ErrorAction SilentlyContinue}
     }
-    # The scheduled task includes a 15-minute watchdog in addition to its exact
-    # next-reset trigger. Watchdog wakes are intentionally network-free when the
-    # recorded exact run is still in the future; they only keep the task healthy.
+    # Reconcile the exact run with current desktop/terminal quota snapshots and
+    # selection changes before deciding that a watchdog wake can stay idle.
     $workerState=Read-DeckJson $statePath; $scheduledDue=$true; $recordedNext=$null
     if($workerState.NextRun){
         try{$recordedNext=[DateTimeOffset]$workerState.NextRun; $scheduledDue=$now -ge $recordedNext.AddSeconds(-5)}catch{}
     }
+    $settingsStamp=Get-DeckWarmupSettingsStamp $settings $accounts
+    if($workerState.SettingsStamp -ne $settingsStamp){$scheduledDue=$true}
+    $computedNext=Get-DeckNextWarmupRun $settings $accounts $cache $resets $history $now 20
+    if($computedNext -and $recordedNext -and $computedNext -lt $recordedNext){
+        $recordedNext=[DateTimeOffset]$computedNext
+        if($now -ge $recordedNext.AddSeconds(-5)){$scheduledDue=$true}
+    }
     if(-not $requests.Count -and -not $scheduledDue){
-        Write-DeckJson $statePath ([ordered]@{LastRun=$now.ToString('o');Outcome='Watchdog idle; exact run still scheduled';Checked=@();Warmed=@();NextRun=$recordedNext.ToString('o')})
+        Write-DeckJson $statePath ([ordered]@{LastRun=$now.ToString('o');Outcome='Watchdog idle; exact run still scheduled';Checked=@();Warmed=@();SettingsStamp=$settingsStamp;NextRun=$recordedNext.ToString('o')})
         Sync-DeckWarmupStartup $SuiteRoot $settings $recordedNext
         Write-DeckWarmupLog ('watchdog idle; next='+$recordedNext.ToString('o'))
         return
@@ -100,14 +101,24 @@ try{
                 $records=@(Expand-DeckCheckRecords ($result.Output|ConvertFrom-Json)); if($records.Count -ne 1 -or $records[0].Account -ne $account){throw 'Unexpected quota response.'}
                 $record=$records[0]; if($record.Status -eq 'error'){throw $record.Error}; $record|Add-Member NoteProperty CheckedAt ([DateTimeOffset]::Now.ToString('o')) -Force
                 $cache[$account]=$record; $changed[$account]=$record; $checked+=$account
-            }catch{Write-DeckWarmupLog ("check failed for ${account}: "+$_.Exception.Message)}
+            }catch{
+                $message=$_.Exception.Message
+                $failedRecord=if($cache[$account]){$cache[$account] | Select-Object *}else{[pscustomobject]@{Account=$account;Windows=@()}}
+                $failedRecord | Add-Member NoteProperty Error $message -Force
+                $failedRecord | Add-Member NoteProperty Status 'error' -Force
+                $failedRecord | Add-Member NoteProperty CheckedAt ([DateTimeOffset]::Now.ToString('o')) -Force
+                $cache[$account]=$failedRecord; $changed[$account]=$failedRecord
+                Write-DeckWarmupLog ("check failed for ${account}: "+$message)
+            }
         }
     }
+    $now=[DateTimeOffset]::Now; $unix=$now.ToUnixTimeSeconds()
     $warmJobs=@{}
     foreach($account in @($requests.Keys)){$warmJobs[$account]=[pscustomobject]@{Mode=[string]$requests[$account].Request.Mode;Reset=0;Path=$requests[$account].Path}}
     foreach($account in @($accounts)){
-        $record=$cache[$account]; if(-not $record){continue}
+        $record=$cache[$account]; if(-not $record -or $account -notin $checked){continue}
         $previous=Get-DeckWarmupReset $record $resets[$account] $unix
+        if($previous){$resets[$account]=[long]$previous}
         if(Test-DeckWarmup $settings $record $previous $history[$account] $unix){
             if($warmJobs[$account]){$warmJobs[$account].Reset=$previous}else{$warmJobs[$account]=[pscustomobject]@{Mode='Reset';Reset=$previous;Path=$null}}
         }
@@ -133,18 +144,47 @@ try{
             $history[$account].Outcome=if($reply){'Replied: '+$reply}elseif($result.Success){'No assistant reply / unconfirmed'}else{'Request failed'}
             $history[$account].Reply=[string]$reply; $history[$account]|Add-Member NoteProperty CompletedAt ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -Force
             if($reply){$warmed+=$account}
+            else{
+                $message=if($result.Error){$result.Error}else{'No completed assistant reply.'}
+                $history[$account] | Add-Member NoteProperty Error $message -Force
+                Write-DeckWarmupLog ("warm-up failed for ${account}: "+$message)
+            }
         }
         # A successful prompt starts/changes quota state. Refresh those accounts so
         # the following scheduled wake uses the provider's real next reset time.
         $post=Invoke-DeckWorkerBatch @($warmJobs.Keys) Check $settings.WarmupModel
         foreach($account in @($warmJobs.Keys)){
-            $result=$post[$account]; if(-not $result.Success){continue}
-            try{$records=@(Expand-DeckCheckRecords ($result.Output|ConvertFrom-Json)); if($records.Count -ne 1 -or $records[0].Account -ne $account){continue}; $record=$records[0]; if($record.Status -eq 'error'){continue}; $record|Add-Member NoteProperty CheckedAt ([DateTimeOffset]::Now.ToString('o')) -Force; $cache[$account]=$record; $changed[$account]=$record; $primary=Get-DeckWarmupWindow $record; if($primary.ResetsAtUnix -and [long]$primary.ResetsAtUnix -gt [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() -and ($history[$account].Outcome -like 'Replied:*' -or $primary.UsedPct -gt 0)){$resets[$account]=[long]$primary.ResetsAtUnix}}catch{}
+            $result=$post[$account]
+            try{
+                if(-not $result.Success){throw $(if($result.Error){$result.Error}else{'Quota refresh failed.'})}
+                $records=@(Expand-DeckCheckRecords ($result.Output|ConvertFrom-Json)); if($records.Count -ne 1 -or $records[0].Account -ne $account){throw 'Unexpected quota response.'}
+                $record=$records[0]; if($record.Status -eq 'error'){throw $record.Error}
+                $record|Add-Member NoteProperty CheckedAt ([DateTimeOffset]::Now.ToString('o')) -Force
+                $cache[$account]=$record; $changed[$account]=$record; $primary=Get-DeckWarmupWindow $record
+                if($primary.ResetsAtUnix -and [long]$primary.ResetsAtUnix -gt [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() -and ($history[$account].Outcome -like 'Replied:*' -or $primary.UsedPct -gt 0)){$resets[$account]=[long]$primary.ResetsAtUnix}
+            }catch{
+                $message=$_.Exception.Message
+                $failedRecord=if($cache[$account]){$cache[$account] | Select-Object *}else{[pscustomobject]@{Account=$account;Windows=@()}}
+                $failedRecord | Add-Member NoteProperty Error $message -Force
+                $failedRecord | Add-Member NoteProperty Status 'error' -Force
+                $failedRecord | Add-Member NoteProperty CheckedAt ([DateTimeOffset]::Now.ToString('o')) -Force
+                $cache[$account]=$failedRecord; $changed[$account]=$failedRecord
+                Write-DeckWarmupLog ("quota refresh failed for ${account}: "+$message)
+            }
         }
     }
     $summary="checked=$($checked.Count); warmed=$($warmed.Count); selected=$($accounts.Count)"
     Save-DeckWorkerState $changed $resets $history $checked $warmed $summary
     Write-DeckWarmupLog $summary
+}
+
+$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $created=$false
+$mutex=[Threading.Mutex]::new($true,"Local\CodexDeckWarmup-$sid",[ref]$created)
+if(-not $created){$mutex.Dispose(); exit 0}
+try{
+    # A manual request can arrive while another worker holds the mutex. Its
+    # launcher exits, so the active worker must drain the newly queued request.
+    do{Invoke-DeckWarmupWorker}while(@(Get-ChildItem -LiteralPath (Join-Path $root 'warmup-requests') -Filter '*.json' -File -ErrorAction SilentlyContinue).Count)
 }catch{
     $message=$_.Exception.Message; Write-DeckWarmupLog ('worker failed: '+$message)
     try{Write-DeckJson $statePath ([ordered]@{LastRun=[DateTimeOffset]::Now.ToString('o');Outcome='Failed: '+$message;Checked=@();Warmed=@();NextRun=[DateTimeOffset]::Now.AddMinutes(20).ToString('o')}); Sync-DeckWarmupStartup $SuiteRoot (Get-DeckSettings $root) ([DateTimeOffset]::Now.AddMinutes(20))}catch{}

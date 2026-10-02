@@ -23,6 +23,7 @@ try {
     $status=Get-DeckBundledSkillStatus $fixture account1 $debugSkill
     Assert ($status.Desired -and $status.Active -and -not $status.Blocked) 'Default Deck skill was not activated.'
     Assert (Test-Path -LiteralPath (Join-Path $fixture 'accounts/account1/skills/debug-swarm/SKILL.md') -PathType Leaf) 'Activated Deck skill is unavailable to CODEX_HOME.'
+    Assert (Test-Path -LiteralPath (Join-Path $fixture 'accounts/account1/skills/debug-swarm/scripts/New-WorkerLaunch.ps1') -PathType Leaf) 'Activated Debug Swarm skill is missing its argument builder.'
 
     Set-DeckGlobalSkillEnabled $fixture debug-swarm $false
     Sync-DeckBundledSkills $fixture account1 | Out-Null

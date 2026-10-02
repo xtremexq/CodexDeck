@@ -11,9 +11,21 @@ Coordinate independent Codex CLI sessions and synthesize their findings. Activat
 
 - Preserve the user's account or pool, model, reasoning effort, concurrency cap, mutation boundary, and stopping condition exactly.
 - Inspect repository instructions and working-tree state before assigning work. Existing changes belong to the user.
-- Split the problem into non-overlapping investigation units with one named owner each. Prefer components, providers, failure classes, or code paths that can be investigated independently.
+- Split the problem into non-overlapping investigation units with one named owner each. Rows sharing an extractor belong to one owner. Name a shared-runtime owner (normally the coordinator) so a cross-family defect has somewhere to go.
 - Default workers to diagnosis only. The coordinating session owns synthesis and code changes unless the user explicitly authorizes worker edits.
 - Never give a worker permission broader than the parent task. Keep credentials and production access scoped to the minimum required.
+
+## Resolve launch capabilities
+
+Before opening terminals, build all worker specifications in one pass: task, owner, account, model, effort, execution mode, effective permissions, network needs, test/build commands, auto-compact mode and threshold, and log/status/report paths. Reuse the bundled argument builder rather than rediscovering wrapper syntax or account settings for each worker. Leave account-wide settings unchanged.
+
+- Separate **code ownership** from **execution permissions**. A worker restricted to one family's source files still needs to start child processes, write normal test/build artifacts, and make authorized live requests. Diagnosis-only means no implementation edits; authorized tests may need temporary artifacts.
+- Carry the parent's effective permission and approval policy explicitly into the launch. In an authorized `danger-full-access` session, preserve that mode for repair workers; do not silently replace it with `read-only`, `workspace-write`, or `windows.sandbox="unelevated"`. If the parent requires a restricted profile, preserve its path/host restrictions through the actual launcher and verify its capabilities. Never bypass a parent restriction to make a test succeed.
+- Legacy account sandbox settings can override a permission profile. Do not combine named/custom permission profiles with copied legacy sandbox overrides. `sandbox_workspace_write.network_access=true` alone does not prove that HTTP or child-process spawning works.
+- The first worker's first tool batch must exercise the required capabilities **inside its actual Codex session**: a focused test or lightweight command using the same subprocess runner, a permitted artifact write when needed, and a representative authorized network request when needed. Include any user-mandated first command in this batch; reuse its capability evidence instead of duplicating it. If compilation/build is required, exercise its subprocess path too. A successful request or test in the parent shell is insufficient.
+- `spawn EPERM`, `spawnSync EPERM`, sandbox access failures, authentication failures, and unsupported launch flags are **launch/environment blockers**, not provider failures. Stop the affected launch wave, correct only the owned launch configuration within existing authorization, and retry the capability check once. Do not spend each worker's investigation on an unusable environment or label it externally blocked by a provider.
+
+The helper [scripts/New-WorkerLaunch.ps1](scripts/New-WorkerLaunch.ps1) returns a `codex-auth` splatting hashtable without starting a process. Use it for exact-account workers with standard sandbox modes. For a required custom permission profile or pool, retain explicit-array launching and the same capability checks; do not flatten those restrictions into a standard mode.
 
 ## Launch real workers
 
@@ -25,30 +37,33 @@ Treat foreground and background as user-visible execution modes:
 - **Background** means a headless or tool-attached process. Retain its process/session ID and output or log path so it can be checked later.
 - Honor the requested mode exactly. Do not silently substitute a tool PTY for a foreground terminal.
 
-For an exact-account diagnostic worker, pass Codex CLI arguments as one explicit array. Use `-Direct` if you want native Codex `exec` without Deck routing. Add `-AutoCompact` to use the implementation selected in CodexDeck Settings: Native is the default and applies Codex's own token threshold, while Custom uses Deck's supervised app-server session. PowerShell otherwise interprets Codex's `-C` as a second binding of the wrapper's `-CodexArgs` parameter, so `codex-auth account15 exec -C ...` fails before Codex starts:
+For an exact-account worker, use `-Direct -Failover Off` with one explicit `-CodexArgs` array. PowerShell otherwise interprets Codex's `-C` as a second binding of the wrapper's `-CodexArgs` parameter, so `codex-auth account15 exec -C ...` fails before Codex starts. This example uses the already established parent policy and an explicit requested 50% auto-compact threshold:
 
 ```powershell
-$workerArgs = @('exec', '-C', $projectRoot, '-m', $model,
-    '-c', "model_reasoning_effort=`"$effort`"", '-c', 'agents.enabled=false',
-    '-c', 'windows.sandbox="unelevated"',
-    '-s', 'read-only', $prompt)
-& codex-auth $account -Direct -Failover Off -CodexArgs $workerArgs
+$launch = & "$skillRoot/scripts/New-WorkerLaunch.ps1" `
+    -Account $account -ProjectRoot $projectRoot -Model $model -Effort $effort `
+    -Mode Repair -ParentSandboxMode $parentSandboxMode `
+    -ApprovalPolicy $parentApprovalPolicy -ParentNetworkAccess $parentNetworkAccess `
+    -NeedsNetwork -AutoCompactFreePercent 50 -Prompt $prompt `
+    -OutputLastMessage $reportPath
+& codex-auth @launch
 ```
 
-If the user requests auto-compaction for workers, replace that launch line with `& codex-auth $account -AutoCompact -Failover Off -CodexArgs $workerArgs`. Add `-Direct` when exact-account isolation is required; without `-Direct`, Deck retains manual in-session account switching. For pools, use `& codex-auth $pool -AutoCompact -CodexArgs $workerArgs` (and `-UseAccount $account` when an initial member is specified). Native mode keeps normal Codex execution and applies the configured native threshold; Custom mode uses Deck's supervised session and HTTP-only provider. If the user specifically requests the custom handoff/compact/replay behavior, select Custom in Settings before launching the worker. Preflight one worker before a wave and verify actual completion: a startup banner, WebSocket 426, or idle prompt is not a finished investigation. `-AutoCompact` is opt-in per worker. Custom supervised `exec` needs its prompt as an argument (stdin is reserved for supervision); unsupported exec-only flags fail explicitly. Keep a background tool-attached worker attached to its PTY/session.
+`-AutoCompact` is opt-in per `exec` worker. Read the selected Native/Custom mode once from Deck settings. To request 50% context remaining explicitly, prepend `'50%'` as the **first** element of `CodexArgs` and pass `-AutoCompact`; the helper does both. Record the actual mode and threshold in each worker's launch status. Adding a flag to later workers does not change already running workers. Native uses Codex's token threshold; Custom uses Deck supervision. Custom requires the prompt as an argument and rejects `--json`, `--worktree`, and `--add-dir`. The helper uses arguments compatible with both modes and does not emit `--json`. For pools, use `& codex-auth $pool -AutoCompact -CodexArgs $workerArgs` (and `-UseAccount $account` when specified).
 
-For foreground workers on Windows, launch the same command in `wt.exe -w new new-tab --title <job> -d <project> pwsh.exe -NoExit -EncodedCommand <encoded script>`. Launch it as a normal visible desktop process; if `Start-Process` is needed, never pass `-WindowStyle Hidden`. Tee each worker's output to a distinct log or status file, print a clear completion/exit-code line, and leave the tab open. `wt.exe` returning confirms only that the window was requested, so verify from the log/status signal that Codex accepted the task and reached its first tool call or response.
+Preflight one worker before the wave, waiting only for task acceptance and the required capability check, not the entire investigation. Then launch the remaining workers in one batch. A banner, process ID, WebSocket 426, or idle prompt proves neither capability nor completion. Keep background tool-attached workers attached to their PTY/session.
+
+For foreground workers on Windows, launch the same command in `wt.exe -w new new-tab --title <job> -d <project> pwsh.exe -NoExit -EncodedCommand <encoded script>`. Launch it as a normal visible desktop process; `Start-Process pwsh.exe -WindowStyle Normal -ArgumentList ...` is also valid. Write a distinct transcript/log, have the worker write a capability status file from inside its session, print a completion/exit-code line, and leave the terminal open. If native output bypasses `Tee-Object`, use `Start-Transcript` plus the worker's status and final `-o` report; do not repeatedly relaunch because a tee is empty. A window request is not evidence that Codex accepted the task.
 
 If the user explicitly wants the bare interactive command, start `codex-auth <account>` in the requested execution mode, wait for its Codex prompt, and send the investigation brief **into that same terminal session**. Do not launch a second Codex command from the parent shell. An interactive worker remains open after answering, so inspect its response to determine completion; for a clear process exit and immediate completion signal, prefer the explicit-array `exec` form above.
 
 After each launch, verify within a short bounded interval that the assigned task actually reached Codex: observe the `exec` startup/output or the interactive prompt accepting the brief, confirm progress beyond startup (for example a tool call), and record the process and Codex session IDs. A `426` WebSocket error, idle dashboard/prompt, authentication failure, or quota error is **not** a started investigation. Close only that owned failed process tree, and do not count it toward completed investigations. Preserve output or a resumable session ID so completion and final reports can be checked later. Do not leave ten unverified terminals idle.
 
-- Use the user's requested concurrency, never more than 10 simultaneous workers. If more tasks remain, run waves and report the remaining count.
+- Use the user's requested concurrency. When unspecified, cap the swarm at 10 simultaneous workers. Respect any separate repository extraction/build limits; a worker count does not increase those limits.
 - For a small model such as Luna, give each worker one narrow target and a compact evidence-led brief. Keep non-negotiable safety constraints and report format; omit repeated background prose and unrelated provider history. Do not assume high reasoning effort removes context or tool-use limits.
 - Have each worker identify the likely cause and recommend one code-level fix that addresses it and helps prevent recurrence. Use enough evidence to separate verified facts from guesses. If the cause is still unclear, state the quickest check that would settle it. Avoid generic mitigations presented as fixes and speculative redesigns.
 - If no model or effort is specified, inherit the coordinating session's choices. Do not silently substitute another explicitly requested model.
-- Keep diagnostic workers' filesystem access read-only. When live requests are needed to debug a target, give that worker restricted outbound network access to the specific provider, diagnostics, API, redirect, and media hosts it must reach. Add hosts as evidence reveals them; do not grant unrestricted network or writable filesystem access to make a request succeed. Verify a representative read-only request from inside the worker before treating live evidence as available.
-- On Windows, use `-c 'windows.sandbox="unelevated"'` and `-s read-only` for repository-only diagnostic workers to avoid repeated UAC setup prompts. These legacy sandbox settings, including an account config's `sandbox_mode`, can override a custom permission profile and leave shell HTTP blocked. For a worker that needs live requests, configure and verify an effective per-worker read-only filesystem profile with the required host allowlist through its actual Direct or Deck-supervised launch path; do not simply add a network setting to the example command above. Keep account-wide config unchanged. If the launcher cannot preserve both restrictions, fix the launch path or report the blocker instead of claiming live provider verification.
+- Scope live requests to the target's authorized diagnostics, API, redirect, and media hosts. Preserve any parent host allowlist. Pass needed read-only credentials through transient environment variables; never save them in launch scripts, prompts, status files, fixtures, or reports, and never dump the environment.
 - Start workers concurrently when useful, retain each terminal/session identifier, and maintain a clear task-to-session mapping.
 - If the user says to stop after launch, report what is running and end the turn without polling.
 
@@ -57,13 +72,26 @@ Every worker brief must state:
 - its single investigation target and relevant evidence;
 - the project root and applicable repository instructions;
 - whether live network or production diagnostics are needed, and the specific hosts and read-only requests allowed for this target;
-- no file edits, commits, cleanup, or state changes in diagnosis-only mode;
+- its capability preflight commands and status path, authorized edit paths or diagnosis-only boundary, focused tests/build commands, and shared-runtime owner;
+- no implementation edits in diagnosis-only mode; no commits, pushes, deployment, cleanup, or unrelated state changes unless separately authorized;
 - no child agents, subagents, delegation, or background model processes;
 - the likely cause with supporting evidence and uncertainty, exact patch locations and steps, and overlap with other targets when relevant;
 
 Ask for a concise, decision-first report: cause, supporting evidence, best fix, and any blocker. Keep only detail needed to apply the fix.
 
 Do not put secrets in the final worker report. Passing a user-authorized read-only credential to a worker is allowed only when that worker needs it; instruct the worker not to print it.
+
+## Provider investigation contract
+
+For provider/resolver workers, include these rules in the brief, even for a small model:
+
+- Run the repository coordinator first when requested. Map player/diagnostic aliases to installed rows and implementation families before interpreting an empty result; do not silently enable a disabled row or substitute another provider.
+- **Zero recent events is not a stopping condition.** The coordinator may select audit work only from incident events. An empty bundle, alias mismatch, missing trace fields, or an audit with zero rows must trigger a separate bounded live title/input matrix using the installed extractor and media validation path. Include the user's failing seed and at least five distinct titles spanning every supported media type, or the stronger repository requirement. Record selected row, failed phase, extraction candidates, validation/recovery attempt, and final availability for every case. Missing telemetry means unknown recovery, not success or an upstream blocker.
+- Distinguish extractor failure, local serialization/probe failure, upstream HTTP rejection, and legitimate title absence. A missing symbol causing local HTTP 502 is a **shared code defect** even if live extraction succeeds. Reproduce it, identify the file/symbol and focused regression, and route it to the named owner. Continue independent cases that the defect does not block. If family workers cannot edit shared files, the coordinator owns the authorized fix; ownership is not an external blocker.
+- Classify verified HTTP 429/backoff as upstream rate limiting and verified no-source responses as catalogue misses. Do not force code changes without evidence or bypass provider ownership, access controls, or rate limits. Report a launch blocker separately from the provider result; an unrun test is not a passing test.
+- A repair requires a sanitized contract fixture, focused regression tests, relevant shared regressions, TypeScript/build when required, and the title matrix. Validate the same installed pack and changed contract; never include credentials or raw production responses. Keep discovery/recovery bounded and honor the repository's aggregate concurrency limit.
+
+Use concrete report outcomes such as `launch-blocked`, `shared-code-defect`, `provider-code-defect`, `upstream-limited`, `catalogue-miss`, `verified-working`, or `unreproduced`, with the evidence and remaining action. Avoid an undifferentiated "externally blocked" result that hides local launch or code failures.
 
 ## Resume and synthesize
 
@@ -74,7 +102,7 @@ Review reports as evidence, not authority:
 1. Confirm claimed files, symbols, diagnostics, and reproduction paths in the repository.
 2. Merge duplicate root causes and surface disagreements.
 3. Distinguish code defects from upstream outages, stale telemetry, environment failures, and title/input-specific absence.
-4. Identify the best durable fix for each confirmed cause, addressing shared causes before leaf symptoms. If evidence is insufficient, gather the smallest useful missing evidence before changing code.
+4. Identify the best durable fix for each confirmed cause, addressing shared causes before leaf symptoms. Route shared defects to their named owner rather than leaving all family workers blocked. Fix launch configuration failures before trusting live results or test claims. If evidence is insufficient, gather the smallest useful missing evidence before changing code.
 5. When the parent task authorizes implementation, apply all supported in-scope fixes, preserve unrelated work, and validate the result. Do not stop at worker reports or a patch plan and wait for a new request. For provider/resolver work, cover at least five distinct titles or inputs across every supported media/input type where practical.
 6. When the parent task is diagnosis-only, return the concrete fixes and remaining evidence gaps without editing the codebase.
 

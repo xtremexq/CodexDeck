@@ -286,6 +286,8 @@ Assert ($null -eq (Get-DeckWarmupReset $fresh $null $now)) 'Used window inferred
 $fresh.Windows[0].UsedPct=0; $futureBoundary=$now+18000
 $fresh.Windows[0].ResetsAtUnix=$futureBoundary
 Assert ((Get-DeckWarmupReset $fresh $futureBoundary $now) -eq $futureBoundary) 'Known future reset was reinterpreted as a fresh window start'
+$fresh.Windows[0].ResetsAtUnix=$now+7200
+Assert ((Get-DeckWarmupReset $fresh $futureBoundary $now) -eq ($now+7200)) 'New provider boundary was hidden by an obsolete future reset'
 $settings=Get-DeckDefaults; $settings.WarmupEnabled=$true; $settings.WarmupPlanTypes='paid'
 $fresh=@{Account='account1';PlanType='plus';Status='available';Windows=@(@{DurationSeconds=18000;UsedPct=0},@{DurationSeconds=604800;UsedPct=100})}
 Assert (-not (Test-DeckWarmup $settings $fresh ($now-90) $null $now)) 'Exhausted weekly quota warmed'
@@ -304,6 +306,13 @@ $scheduleNow=[DateTimeOffset]'2026-09-09T20:00:00-03:00'; $scheduleReset=$schedu
 $scheduleCache=@{account1=[pscustomobject]@{PlanType='plus';Status='available';Error=$null;Windows=@([pscustomobject]@{DurationSeconds=18000;ResetsAtUnix=$scheduleReset})}}
 $nextWarm=Get-DeckNextWarmupRun $scheduleSettings @('account1') $scheduleCache @{} @{} $scheduleNow
 Assert ($nextWarm.ToUnixTimeSeconds() -eq $scheduleReset+60) 'Next reset wake was not scheduled precisely after grace'
+$scheduleCache.account1.Windows[0] | Add-Member NoteProperty UsedPct 0
+$scheduleCache.account1.Windows[0].ResetsAtUnix=$scheduleNow.ToUnixTimeSeconds()+17910
+$nextDiscovered=Get-DeckNextWarmupRun $scheduleSettings @('account1') $scheduleCache @{} @{} $scheduleNow
+Assert ($nextDiscovered -le $scheduleNow.AddSeconds(60)) 'A fresh empty window was scheduled at its end instead of its discovered start'
+$scheduleCache.account1.Windows[0].UsedPct=5; $scheduleCache.account1.Windows[0].ResetsAtUnix=$scheduleReset
+$nextObsolete=Get-DeckNextWarmupRun $scheduleSettings @('account1') $scheduleCache @{account1=($scheduleNow.ToUnixTimeSeconds()-7200)} @{} $scheduleNow
+Assert ($nextObsolete.ToUnixTimeSeconds() -eq $scheduleReset+60) 'An obsolete reset caused endless retries instead of scheduling the current boundary'
 $blockedReset=$scheduleReset+604800
 $scheduleCache.account1.Status='blocked'; $scheduleCache.account1.Windows+=@([pscustomobject]@{DurationSeconds=604800;UsedPct=100;Dead=$true;ResetsAtUnix=$blockedReset})
 $nextBlocked=Get-DeckNextWarmupRun $scheduleSettings @('account1') $scheduleCache @{} @{} $scheduleNow
@@ -330,6 +339,10 @@ Remove-Item -LiteralPath $queued
 Add-DeckTimedWarmups $queueSuite $ws @('account1') @{account1=@{PlanType='plus'}} $at
 Assert (-not (Test-Path $queued)) 'Daily slot repeated after queue consumption'
 Request-DeckWarmup $queueSuite 'account1' -NoStart
+Write-DeckJson $queued @{Account='account1';Mode='Timed';At=1}
+Request-DeckWarmup $queueSuite 'account1' -NoStart
+$manualRequest=Read-DeckJson $queued
+Assert ($manualRequest.Mode -eq 'Manual' -and $manualRequest.At -gt 1) 'An expired timed request swallowed a fresh manual warm-up'
 $ws.WarmupEnabled=$false; $workers=@{}; $warmHistory=@{}
 function Start-DeckTask($Code,$Kind,$Account){return @{Kind=$Kind;Account=$Account}}
 Invoke-DeckQueuedWarmups $queueSuite $ws $workers $warmHistory ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
@@ -360,8 +373,19 @@ Assert ($registeredTask.TaskName -eq 'CodexDeck Warmup Scheduling') 'Warm-up tas
 Assert ($registeredTask.Principal.LogonType -eq 'Interactive') 'Warm-up task uses an unexpected principal'
 Assert ($registeredTask.Action.Execute -match 'wscript\.exe$' -and $registeredTask.Action.Argument -match '//B' -and $registeredTask.Action.Argument -match 'Deck\.Background\.vbs') 'Scheduled worker bypasses the windowless launcher'
 Assert (@($registeredTask.Trigger | Where-Object { $_.RepetitionInterval.TotalMinutes -eq 15 }).Count -eq 1) 'Warm-up task has no persistent watchdog trigger'
+Assert (@($registeredTask.Trigger | Where-Object { $_.RepetitionInterval.TotalMinutes -eq 15 -and $_.RepetitionDuration.TotalDays -ge 1 }).Count -eq 0) 'Watchdog expires if the worker cannot reschedule for a day'
+$scheduleAt=[DateTimeOffset]::Now; $desktopReset=$scheduleAt.AddHours(5).ToUnixTimeSeconds(); $terminalReset=$scheduleAt.AddHours(2).ToUnixTimeSeconds()
+Write-DeckJson (Join-Path $scheduledSuite 'accounts/account1/auth.json') @{}
+$scheduledSettings.WarmupPlanTypes='all'
+Write-DeckJson (Join-Path $scheduledSuite 'deck/cache.json') @(@{Account='account1';PlanType='plus';Status='available';CheckedAt=$scheduleAt.AddMinutes(-1).ToString('o');Windows=@(@{DurationSeconds=18000;UsedPct=5;ResetsAtUnix=$desktopReset})})
+Write-DeckJson (Join-Path $scheduledSuite 'deck/terminal-cache.json') @(@{Account='account1';PlanType='plus';Status='available';CheckedAt=$scheduleAt.ToString('o');Windows=@(@{DurationSeconds=18000;UsedPct=10;ResetsAtUnix=$terminalReset})})
+Sync-DeckWarmupStartup $scheduledSuite $scheduledSettings
+$exactTrigger=@($registeredTask.Trigger | Where-Object { $_.Once -and $_.RepetitionInterval.TotalMinutes -ne 15 })
+Assert ($exactTrigger.Count -eq 1 -and ([DateTimeOffset]$exactTrigger[0].At).ToUnixTimeSeconds() -eq $terminalReset+60) 'Startup scheduling ignored newer terminal quota data'
 $script:healthTask=[pscustomobject]@{State='Ready';Actions=@($registeredTask.Action)}
 Assert (Test-DeckWarmupScheduleHealthy $scheduledSuite $scheduledSettings) 'Healthy warm-up task was rejected'
+$script:healthTask.State='Disabled'
+Assert (-not (Test-DeckWarmupScheduleHealthy $scheduledSuite $scheduledSettings)) 'Disabled warm-up task was accepted as healthy'
 $script:healthTask=$null; Assert (-not (Test-DeckWarmupScheduleHealthy $scheduledSuite $scheduledSettings)) 'Missing warm-up task was accepted'
 $script:registeredTask=$null; Assert ((Repair-DeckWarmupSchedule $scheduledSuite $scheduledSettings) -and $registeredTask) 'Missing warm-up task was not repaired'
 $script:registeredTask=$null; $script:removedTaskNames=@(); $scheduledSettings.WarmupSchedulingEnabled=$false
