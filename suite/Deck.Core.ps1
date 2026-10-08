@@ -14,6 +14,8 @@ if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Environments.ps1')) { 
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.BundledSkills.ps1')) { . (Join-Path $PSScriptRoot 'Deck.BundledSkills.ps1') }
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.SkillCatalog.ps1')) { . (Join-Path $PSScriptRoot 'Deck.SkillCatalog.ps1') }
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.PluginManagement.ps1')) { . (Join-Path $PSScriptRoot 'Deck.PluginManagement.ps1') }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Harnesses.ps1')) { . (Join-Path $PSScriptRoot 'Deck.Harnesses.ps1') }
+if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Router.ps1')){. (Join-Path $PSScriptRoot 'Deck.Router.ps1')}
 # Codex Deck - local state and scheduling. No credentials are written to Deck state.
 function Get-DeckDueAccounts($Automatic, $Manual, $NextCheck, [DateTimeOffset]$Now) {
     $manualDue=@($Manual.Keys | Where-Object { $Manual[$_] -le $Now } | Sort-Object { $Manual[$_] })
@@ -24,6 +26,7 @@ function Get-DeckDueAccounts($Automatic, $Manual, $NextCheck, [DateTimeOffset]$N
 }
 function Get-DeckDefaults {
     return [ordered]@{
+        HarnessCodexPath=''; HarnessAntigravityEnabled=$false; HarnessAntigravityPath=''; HarnessClaudeEnabled=$false; HarnessClaudePath=''; HarnessOpenCodeEnabled=$false; HarnessOpenCodePath=''
         DefaultFolder=$HOME; AlwaysAskFolder=$false
         AutoStart=$false; AutoCheck=$false; PollMinutes=10; MinimumGapSeconds=20
         AlwaysOnTop=$false; OpacityPercent=100; FontSize=12; Width=400; Height=0
@@ -50,6 +53,11 @@ function Get-DeckDefaults {
 function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
     if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){return}
     $folder=Join-Path $SuiteRoot "accounts/$Account"
+    $identity=Get-DeckAccountIdentity $SuiteRoot $Account
+    if($identity.Harness -ne 'Codex'){
+        $definition=Get-DeckHarness $identity.Harness
+        return @{Email=$null;PlanType=$identity.Provider;Model=$definition.Name+' default';Effort='default';Harness=$identity.Harness;Provider=$identity.Provider}
+    }
     $profile=@{Email=$null; PlanType=$null; Model='Codex default'; Effort='default'}
     $auth=Read-DeckJson (Join-Path $folder 'auth.json')
     foreach($token in @($auth.tokens.id_token,$auth.tokens.access_token)){
@@ -665,6 +673,7 @@ function Get-DeckTaskFailureMessage($Task) {
     return "Worker exited with code $($Task.Process.ExitCode)."
 }
 function Get-DeckModelsCode([string]$SuiteRoot, [string]$Account) {
+    if(-not (Test-DeckCodexAccount $SuiteRoot $Account)){throw 'Deck model discovery requires a Codex / ChatGPT account.'}
     if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') { throw 'Invalid account.' }
     $path=(Join-Path $SuiteRoot 'Run-CodexLoopUsage.cmd').Replace("'", "''")
     $accountPath=(Join-Path $SuiteRoot "accounts/$Account").Replace("'", "''")
@@ -678,12 +687,14 @@ ConvertTo-Json -InputObject `$models
 "@
 }
 function Get-DeckCheckCode([string]$SuiteRoot, [string]$Account) {
+    if(-not (Test-DeckCodexAccount $SuiteRoot $Account)){throw 'Deck usage checks currently support ChatGPT / Codex accounts. Use the harness native usage command.'}
     if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') { throw 'Invalid account.' }
     $path = (Join-Path $SuiteRoot 'Run-CodexLoopUsage.cmd').Replace("'", "''")
     $accounts = (Join-Path $SuiteRoot 'accounts').Replace("'", "''")
     return "`$ErrorActionPreference='Stop'; `$text=[IO.File]::ReadAllText('$path'); `$body=(`$text -split '(?m)^__POWERSHELL__\r?`$')[1]; & ([scriptblock]::Create(`$body)) -AccountsRoot '$accounts' -Account '$Account' -Json"
 }
 function Get-DeckWarmupCode([string]$SuiteRoot, [string]$Account, [string]$Model) {
+    if(-not (Test-DeckCodexAccount $SuiteRoot $Account)){throw 'Deck warm-up requires a Codex / ChatGPT account.'}
     if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or ($Model -and $Model -notmatch '^gpt-[a-zA-Z0-9.-]+$')) { throw 'Invalid warm-up account or model.' }
     $accountPath = (Join-Path $SuiteRoot "accounts/$Account").Replace("'", "''")
     $workPath = (Join-Path $SuiteRoot 'deck/empty-workspace').Replace("'", "''")
@@ -780,6 +791,7 @@ function Test-DeckWarmupPlanSelected($Settings, [string]$PlanType) {
     return $types -contains 'all' -or $types -contains $plan -or ($types -contains 'paid' -and $plan -in @('plus','pro','team','business','enterprise','edu'))
 }
 function Test-DeckWarmupSelected($Settings, [string]$Account, [string]$PlanType = '') {
+    if($PlanType -in @('Claude','Gemini','ChatGPT','Custom')){return $false}
     $accountSelected=$Account -in @($Settings.WarmupAccounts -split '[,;\s]+' | Where-Object {$_})
     return $accountSelected -or (Test-DeckWarmupPlanSelected $Settings $PlanType)
 }
@@ -870,6 +882,7 @@ function Get-DeckWarmupReply([string]$Output) {
     if($completed -and -not $failed -and -not [string]::IsNullOrWhiteSpace($reply)){return $reply.Substring(0,[Math]::Min(500,$reply.Length))}
 }
 function Request-DeckWarmup([string]$SuiteRoot, [string]$Account, [switch]$NoStart) {
+    if(-not (Test-DeckCodexAccount $SuiteRoot $Account)){throw 'Deck warm-up requires a Codex / ChatGPT account.'}
     if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or -not (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$Account/auth.json"))){throw 'Select a signed-in account.'}
     $path=Join-Path $SuiteRoot "deck/warmup-requests/$Account.json"
     Write-DeckJson $path @{Account=$Account;Mode='Manual';At=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()}
@@ -888,7 +901,7 @@ function Set-DeckWarmupTimes([string]$SuiteRoot, [string]$Times) {
 }
 function Get-DeckSignedInAccounts([string]$SuiteRoot) {
     @(Get-ChildItem -LiteralPath (Join-Path $SuiteRoot 'accounts') -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'auth.json') -PathType Leaf) } |
+        Where-Object { $_.Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'auth.json') -PathType Leaf) -and (Test-DeckCodexAccount $SuiteRoot $_.Name) } |
         Sort-Object Name | ForEach-Object Name)
 }
 function Get-DeckWarmupAccounts([string]$SuiteRoot, $Settings, $Cache = @{}) {

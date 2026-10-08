@@ -16,6 +16,7 @@ jobs:
         run: ./Test-Repository.ps1
       - name: Core and account regression tests
         run: |
+          ./suite/Test-DeckHarnesses.ps1
           ./suite/Test-Deck.ps1
           ./suite/Test-DeckCommands.ps1
           ./suite/Test-DeckScheduler.ps1
@@ -34,6 +35,8 @@ jobs:
           ./suite/Test-CodexAuth.ps1
           ./suite/Test-DeckTerminal.ps1
           ./suite/Test-CodexLoopUsage.ps1
+      - name: Managed AI Router installation, pairing and recovery
+        run: ./suite/Test-DeckRouter.ps1
       - name: Failover proxy regression tests
         run: node ./suite/Test-DeckFailover.cjs
       - name: Trajectory and efficiency inspector regression tests
@@ -50,6 +53,12 @@ jobs:
           $destination = Join-Path $env:RUNNER_TEMP 'deck-install'
           ./Install-CodexDeck.ps1 -InstallHome $destination -SkipPath
           if (!(Test-Path "$destination/.codex-loop/deck/assets/codex-deck.ico")) { throw 'Missing installed icon' }
+          foreach ($module in 'Deck.Harnesses.ps1','Deck.HarnessSettings.ps1','Deck.AntigravityRunner.ps1','Deck.Antigravity.Isolation.cs','Deck.Router.ps1','Deck.RouterSettings.ps1','Deck.RouterSupervisor.ps1','Test-DeckRouter.ps1') {
+            if (!(Test-Path "$destination/.codex-loop/$module")) { throw "Missing installed harness module: $module" }
+          }
+          foreach ($file in 'package.json','package-lock.json','server/index.mjs','server/pairing.mjs','ui/app.js','scripts/desktop.mjs','scripts/protect-key.ps1','scripts/launch-deck.ps1') {
+            if (!(Test-Path "$destination/.codex-loop/router-source/$file")) { throw "Missing installed router payload: $file" }
+          }
           if (!(Test-Path "$destination/.codex-loop/Deck.AccountResources.ps1")) { throw 'Missing installed account resource shortcuts' }
           if (!(Test-Path "$destination/.codex-loop/Deck.Storage.ps1")) { throw 'Missing installed storage maintenance' }
           if (!(Test-Path "$destination/.codex-loop/Deck.AutoCompact.cjs")) { throw 'Missing installed auto-compact client' }

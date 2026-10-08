@@ -166,7 +166,7 @@ class ThreadObserver {
       // status notification (or retry below) clears it.
       const page=await this.rpc('thread/turns/list',{threadId,limit:1,sortDirection:'desc',itemsView:'summary'});
       const latest=page?.data?.[0];
-      controller.activeTurnId=latest?.status==='inProgress' ? latest.id : (controller.activeTurnId || latest?.id || 'deck-active-turn');
+      controller.activeTurnId=latest?.status==='inProgress' ? latest.id : 'deck-active-turn';
     }
   }
   async refreshPendingManualCompact() {

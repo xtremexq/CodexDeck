@@ -1,0 +1,20 @@
+{
+  "name": "aideck-router",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone Chrome AI router with an optional Deck HTTP server",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server/index.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:ui": "node scripts/verify-ui.mjs && node scripts/verify-standalone-ui.mjs",
+    "test:standalone-ui": "node scripts/verify-standalone-ui.mjs",
+    "test:startup": "node scripts/verify-startup.mjs",
+    "package:deck": "node scripts/package-deck.mjs",
+    "check": "node scripts/check.mjs"
+  },
+  "dependencies": { "undici": "^7.16.0" },
+  "devDependencies": { "@playwright/test": "^1.55.0" }
+}

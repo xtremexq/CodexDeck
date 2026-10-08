@@ -58,16 +58,10 @@ class AutoCompactController {
     } else {
       this.armed=false;
       this.report('Manual compaction requested: requesting task-state handoff.');
-      // An explicit request must also work during a long-running turn or just
-      // after Esc. Stop that turn and request the checkpoint once it is idle;
-      // steering a cancelling turn can display input without consuming it.
-      const interruptedTurnId=this.activeTurnId;
-      await this.startCustomCompact(null);
-      if(interruptedTurnId) {
-        this.report('Stopping the active turn so the manual handoff can start.');
-        try { await this.rpc('turn/interrupt',{threadId:this.threadId,turnId:interruptedTurnId}); }
-        catch(error) { this.report(`Waiting for the active turn to become idle: ${error.message}`); }
-      }
+      // Steering queues input at the next model boundary without killing a
+      // running tool (including the !autocompact shell command itself). A
+      // cancelling turn has no steerable id: wait for idle in that case.
+      await this.startCustomCompact(this.activeTurnId==='deck-active-turn'?null:this.activeTurnId);
     }
     return this.phase!=='normal';
   }

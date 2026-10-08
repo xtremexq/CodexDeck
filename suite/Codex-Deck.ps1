@@ -1,4 +1,4 @@
-﻿param([switch]$SmokeTest, [switch]$Demo, [switch]$Attach, [switch]$Background, [switch]$OpenSettings, [string]$ScreenshotPath, [int]$PreviewWidth=0, [switch]$LifecycleTest, [switch]$PreviewExpanded, [ValidateSet('Panel','Widget')][string]$PreviewMode='Widget')
+﻿param([switch]$SmokeTest, [switch]$Demo, [switch]$Attach, [switch]$Background, [switch]$OpenSettings, [string]$ScreenshotPath, [string]$HarnessScreenshotPath, [string]$RouterScreenshotPath, [int]$PreviewWidth=0, [switch]$LifecycleTest, [switch]$PreviewExpanded, [ValidateSet('Panel','Widget')][string]$PreviewMode='Widget')
 if($LifecycleTest){$Demo=$true}
 $ErrorActionPreference = 'Stop'
 $script:suite = $PSScriptRoot
@@ -250,7 +250,7 @@ function Show-DeckDelete([string]$Name, [switch]$TestUI) {
 function New-DeckEntryMenu([string]$Name) {
     if($script:sharedEntryMenu){return $script:sharedEntryMenu}
     $menu=[Windows.Controls.ContextMenu]::new(); $menu.Resources=$window.Resources
-    foreach($action in @('Open terminal','Check account','Account config','Warm up now','Toggle automatic warm-up','Pause / resume warm-up','Expand / collapse','Pin / unpin','Delete account')){
+    foreach($action in @('Open terminal','Log in','Check account','Account config','Warm up now','Toggle automatic warm-up','Pause / resume warm-up','Expand / collapse','Pin / unpin','Delete account')){
         $item=[Windows.Controls.MenuItem]::new(); $item.Header=$action; $item.Tag=@{Account=$Name;Action=$action}
         if($action -eq 'Delete account'){
             $separator=[Windows.Controls.Separator]::new(); $separator.Background='#363A41'; $separator.Margin='8,4'; [void]$menu.Items.Add($separator)
@@ -260,7 +260,9 @@ function New-DeckEntryMenu([string]$Name) {
             $account=$sender.Tag.Account
             switch($sender.Tag.Action){
                 'Open terminal' {if(-not $SmokeTest -and -not $Demo){Open-DeckTerminal $account}}
+                'Log in' {if(-not $SmokeTest -and -not $Demo){Open-DeckTerminal $account -Login}}
                 'Check account' {
+                    if(-not (Test-DeckCodexAccount $suite $account)){$script:notice='Use the native usage command for this harness.'; Render-Deck;return}
                     if($tasks.ContainsKey($account)){return}
                     $now=[DateTimeOffset]::UtcNow; $at=$cache[$account].CheckedAt
                     $manualChecks[$account]=$now
@@ -275,7 +277,7 @@ function New-DeckEntryMenu([string]$Name) {
                 'Pause / resume warm-up' {
                     if(-not $SmokeTest -and -not $Demo){$script:settings=Set-DeckWarmupControl $root -Pause; $script:nextCheck=@{}; $script:lastRender=''; Render-Deck}
                 }
-                'Account config' {if(-not $SmokeTest -and -not $Demo){Edit-DeckConfig (Join-Path $suite ('accounts/'+$account+'/config.toml')) $account}}
+                'Account config' {if(-not $SmokeTest -and -not $Demo){try{Edit-DeckConfig (Get-DeckHarnessConfigPath $suite $account) $account}catch{$script:notice=$_.Exception.Message}}}
                 'Expand / collapse' {
                     foreach($card in $Cards.Children){if($card -is [Windows.Controls.Border] -and $card.Child.Tag -eq $account){$card.Child.IsExpanded=-not $card.Child.IsExpanded}}
                 }
@@ -293,12 +295,14 @@ function New-DeckEntryMenu([string]$Name) {
         $account=[string]$sender.PlacementTarget.Child.Tag
         foreach($item in $sender.Items){if($item -is [Windows.Controls.MenuItem]){
             $item.Tag.Account=$account
+            if($item.Tag.Action -eq 'Log in'){$item.IsEnabled=-not (Get-DeckPoolEntry $suite $account)}
+            if($item.Tag.Action -in @('Check account','Warm up now','Toggle automatic warm-up')){$item.IsEnabled=Test-DeckCodexAccount $suite $account}
             if($item.Tag.Action -eq 'Toggle automatic warm-up'){
                 $plan=[string]$(if($cache[$account].PlanType){$cache[$account].PlanType}else{$profiles[$account].PlanType})
                 $managed=Test-DeckWarmupPlanSelected $settings $plan
                 $selected=Test-DeckWarmupSelected $settings $account $plan
                 $item.Header=if($selected){'Disable automatic warm-up'}else{'Enable automatic warm-up (uses quota)'}
-                $item.IsCheckable=$true; $item.IsChecked=$selected; $item.IsEnabled=-not $managed
+                $item.IsCheckable=$true; $item.IsChecked=$selected; $item.IsEnabled=-not $managed -and (Test-DeckCodexAccount $suite $account)
                 $item.ToolTip=if($managed){'Managed by the account-type selection in Settings'}else{'Runs through Windows Task Scheduler, even with Deck closed'}
             }
             if($item.Tag.Action -eq 'Pause / resume warm-up'){$item.Header=if($settings.WarmupEnabled){'Pause all automatic warm-ups'}else{'Resume automatic warm-ups'}}
@@ -311,7 +315,7 @@ function New-DeckHealthSummary([string]$Name,$Record,[int]$Size=10,$Existing=$nu
     $text=if($Existing){$Existing}else{New-DeckText '' '#929CA4' $Size}
     $text.Inlines.Clear()
     $text.TextWrapping='NoWrap'; $text.VerticalAlignment='Center'
-    $health=Get-DeckHealth $Record
+    $health=if($profiles[$Name].Harness -and $profiles[$Name].Harness -ne 'Codex'){(Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage'}else{Get-DeckHealth $Record}
     $text.ToolTip=$health
     $color=switch($health){'Ready'{'#69DEC0'} 'Low'{'#DCB675'} 'Exhausted'{'#F17D8D'} 'Limit reached'{'#F17D8D'} default{'#929CA4'}}
     $quotas=@(if($settings.ShowQuota){$Record.Windows | Where-Object {$null -ne $_}})
@@ -331,6 +335,7 @@ function New-DeckHealthSummary([string]$Name,$Record,[int]$Size=10,$Existing=$nu
 function New-DeckPanelUsage([string]$Name,$Record) {
     $usage=[Windows.Controls.Grid]::new(); $usage.VerticalAlignment='Center'; $usage.HorizontalAlignment='Left'
     $usage.ToolTip=(Get-DeckHealth $Record)+$(if($tasks.ContainsKey($Name) -or $manualChecks.ContainsKey($Name)){' · checking'}elseif($Record.Error){' · check failed'}else{''})
+    if($profiles[$Name].Harness -and $profiles[$Name].Harness -ne 'Codex'){[void]$usage.Children.Add((New-DeckText ((Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage') '#929CA4' 10));return $usage}
     $windows=@(if($settings.ShowQuota){$Record.Windows | Where-Object { $null -ne $_ }})
     for($i=0;$i -lt $windows.Count;$i++){
         $column=[Windows.Controls.ColumnDefinition]::new(); $column.Width=[Windows.GridLength]::Auto; [void]$usage.ColumnDefinitions.Add($column)
@@ -350,7 +355,7 @@ function New-DeckPanelUsage([string]$Name,$Record) {
         [void]$usage.Children.Add($cell)
     }
     if(-not $windows.Count){
-        $health=Get-DeckHealth $Record
+        $health=if($profiles[$Name].Harness -and $profiles[$Name].Harness -ne 'Codex'){(Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage'}else{Get-DeckHealth $Record}
         $healthText=New-DeckText $health $(switch($health){'Ready'{'#69DEC0'} 'Low'{'#DCB675'} 'Exhausted'{'#F17D8D'} default{'#929CA4'}}) 11
         $healthText.TextWrapping='NoWrap'; [void]$usage.Children.Add($healthText)
     }
@@ -578,7 +583,7 @@ function Update-DeckPicker([switch]$Force) {
     foreach($name in $names){
         if($SmokeTest -or $Demo){continue}
         $folder=Join-Path $suite "accounts/$name"
-        $stamp=([IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'auth.json')).Ticks.ToString())+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'config.toml')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-entry.json')).Ticks.ToString()
+        $stamp=([IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'auth.json')).Ticks.ToString())+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'config.toml')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-entry.json')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-account.json')).Ticks.ToString()
         if($profileStamps[$name] -ne $stamp){$profiles[$name]=Get-DeckProfile $suite $name; $profileStamps[$name]=$stamp; $script:lastRender=''}
     }
     Set-DeckPickerNames $names
@@ -675,7 +680,7 @@ function Select-DeckFolder([string]$InitialFolder, [switch]$TestUI) {
     [void]$picker.ShowDialog()
     return $state.Path
 }
-function Open-DeckTerminal([string]$Account,[switch]$NewAccount) {
+function Open-DeckTerminal([string]$Account,[switch]$NewAccount,[string]$Harness,[string]$Provider,[switch]$ConfigureRunner,[switch]$Login) {
     if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') { return }
     $folder=$settings.DefaultFolder
     if($settings.AlwaysAskFolder -or -not (Test-Path -LiteralPath $folder -PathType Container)){$folder=Select-DeckFolder $folder}
@@ -683,6 +688,10 @@ function Open-DeckTerminal([string]$Account,[switch]$NewAccount) {
     $auth = (Join-Path $HOME '.local/bin/codex-auth.cmd').Replace("'", "''")
     $code = "Set-Location -LiteralPath '" + $folder.Replace("'", "''") + "'; & '$auth' '$Account'"
     if($NewAccount){$code+=' -NewAccount'}
+    if($Harness){[void](Get-DeckHarness $Harness); $code+=" -Harness '"+$Harness.Replace("'","''")+"'"}
+    if($Provider){$code+=" -Provider '"+$Provider.Replace("'","''")+"'"}
+    if($ConfigureRunner){$code+=' -ConfigureRunner'}
+    if($Login){$code+=' login'}
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
     $shell=Get-Command pwsh.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if(-not $shell){$shell=Get-Command powershell.exe -ErrorAction Stop | Select-Object -First 1}
@@ -703,10 +712,11 @@ function Edit-DeckConfig([string]$Path, [string]$Label) {
     $dialog.Icon=$appIcon; $dialog.Resources.MergedDictionaries.Add($window.Resources)
     $dock=[Windows.Controls.DockPanel]::new(); $dock.Margin='16'; $dialog.Content=$dock
     $note=New-DeckText "TOML editor. Changes apply on next launch. Global defaults seed new profiles; existing model choices are preserved. Save creates a backup. Invalid TOML can prevent Codex from starting." '#9BB5D9'
+    if([IO.Path]::GetExtension($Path) -eq '.json'){$note.Text='Native JSON settings. Changes apply to the next launch. Save validates JSON and creates a backup. Do not put credentials in settings.'}
     [Windows.Controls.DockPanel]::SetDock($note,'Top'); [void]$dock.Children.Add($note)
     $save=[Windows.Controls.Button]::new(); $save.Content='Save with backup'; $save.Margin='0,10,0,0'; $save.Padding='10,6'
     [Windows.Controls.DockPanel]::SetDock($save,'Bottom'); [void]$dock.Children.Add($save)
-    $editor=[Windows.Controls.TextBox]::new(); $editor.Text=$original; $editor.AcceptsReturn=$true; $editor.AcceptsTab=$true
+    $editor=[Windows.Controls.TextBox]::new(); $editor.Text=if(-not $original -and [IO.Path]::GetExtension($Path) -eq '.json'){'{}'}else{$original}; $editor.AcceptsReturn=$true; $editor.AcceptsTab=$true
     $editor.VerticalScrollBarVisibility='Auto'; $editor.HorizontalScrollBarVisibility='Auto'; $editor.FontFamily='Consolas'
     $editor.Background='#192232'; $editor.Foreground='#EAF0FA'; $editor.Margin='0,12,0,0'; [void]$dock.Children.Add($editor)
     $settingsError=New-DeckText '' '#F17D8D'; [Windows.Controls.DockPanel]::SetDock($settingsError,'Bottom'); $dock.Children.Insert(0,$settingsError)
@@ -714,6 +724,7 @@ function Edit-DeckConfig([string]$Path, [string]$Label) {
         try {
             $current=if(Test-Path -LiteralPath $Path){[IO.File]::ReadAllText($Path)}else{''}
             if ($current -cne $original) { throw 'This file changed outside the editor. Close and reopen it before saving.' }
+            if([IO.Path]::GetExtension($Path) -eq '.json'){$parsed=$editor.Text | ConvertFrom-Json -ErrorAction Stop;if($parsed -isnot [System.Management.Automation.PSCustomObject]){throw 'Native settings must be a JSON object.'}}
             if ($editor.Text -ceq $original) { $dialog.Close(); return }
             [void][IO.Directory]::CreateDirectory((Split-Path -Parent $Path))
             if (Test-Path -LiteralPath $Path) { Copy-Item -LiteralPath $Path -Destination ($Path+'.bak-deck-'+[guid]::NewGuid().ToString('N')) }
@@ -874,7 +885,7 @@ function Show-DeckSettings {
                 $membership=[Windows.Controls.ComboBox]::new()
                 foreach($option in @('Use all signed-in accounts (including future accounts)','Use all free accounts','Use all Plus or higher accounts','Use selected accounts')){[void]$membership.Items.Add($option)}
                 $members=[Windows.Controls.ListBox]::new(); $members.SelectionMode='Multiple'; $members.MaxHeight=150; $members.Margin='0,8,0,0'
-                $accountNames=if($SmokeTest){@('account1','account2')}else{@(Get-DeckAccounts | Where-Object {Test-Path -LiteralPath (Join-Path $suite "accounts/$_/auth.json") -PathType Leaf})}
+                $accountNames=if($SmokeTest){@('account1','account2')}else{@(Get-DeckAccounts | Where-Object {(Test-DeckCodexAccount $suite $_) -and (Test-Path -LiteralPath (Join-Path $suite "accounts/$_/auth.json") -PathType Leaf)})}
                 foreach($account in $accountNames){[void]$members.Items.Add($account)}
                 $savedMembers=@($settings[$key] -split ',' | ForEach-Object {$_.Trim()} | Where-Object {$_})
                 $membership.SelectedIndex=if(($savedMembers -join ',') -eq '*'){0}elseif(($savedMembers -join ',') -eq '*free'){1}elseif(($savedMembers -join ',') -eq '*paid'){2}else{3}
@@ -1091,7 +1102,7 @@ function Show-DeckSettings {
     $settingsTabRefs.BrowserSkillCard=$browserSkillCard
     $settingsTabRefs.Skills=$deckSkillTab
     & $integrationVisibility
-    $orderedTabs=@('Appearance','General','Checks & Warmup','Environments','Skills','Advanced','Integrations','Backup','About')
+    $orderedTabs=@('Appearance','Harnesses','AI Router','General','Checks & Warmup','Environments','Skills','Advanced','Integrations','Backup','About')
     $tabsByName=@{}; foreach($tab in @($tabs.Items)){$tabsByName[[string]$tab.Header]=$tab}
     $selectedSettingsTab=$tabs.SelectedItem
     $tabs.Items.Clear(); foreach($header in $orderedTabs){[void]$tabs.Items.Add($tabsByName[$header])}
@@ -1204,7 +1215,7 @@ function Show-DeckSettings {
         } catch { $settingsError.Text='Settings were not saved: '+$_.Exception.Message; $settingsError.BringIntoView(); $save.Content='Save settings' }
         finally {if(-not $worker){$save.IsEnabled=$true}}
     }.GetNewClosure())
-    if($TestUI){return @{Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;TargetPicker=$skillTargetPicker;Membership=$skillMembership;Members=$skillMembers;AccountPanel=$skillAccountPanel;AccountItems=$skillAccountItems;AccountChecks=$skillAccountChecks;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;Workspace=$skillWorkspace;DebugHost=$debugSkillHost;BrowserCard=$browserSkillCard;BrowserTitle=$browserSkillTitle;BrowserNote=$browserSkillNote;Scroll=$deckSkillScroll;State=$deckSkillState;Previous=$deckSkillPrevious;Next=$deckSkillNext;PageLabel=$deckSkillPageLabel;Plugin=@{Marketplace=$pluginMarketplaceSource;AddMarketplace=$pluginMarketplaceAdd;Selector=$pluginSelector;Install=$pluginInstall;Status=$pluginStatus};Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus;Previous=$catalogPrevious;Next=$catalogNext;PageInput=$catalogPageInput;PageGo=$catalogPageGo;PageLabel=$catalogPageLabel}}}}
+    if($TestUI){return @{Harnesses=$harnessUI;Dialog=$dialog;Controls=$controls;Panel=$panel;Tabs=$tabs;Save=$save;Error=$settingsError;SupportPrompt=$supportOverlay;SupportDismiss=$supportDismiss;Integrations=$integrationUI;Environment=@{Name=$poolNameBox;Membership=$poolMembership;Members=$poolMemberList;Mode=$poolModeBox;Owner=$shareSourceBox;Resources=$shareResourceList;Recipients=$shareRecipients;State=$environmentState};Skills=@{Target=$deckSkillTarget;TargetPicker=$skillTargetPicker;Membership=$skillMembership;Members=$skillMembers;AccountPanel=$skillAccountPanel;AccountItems=$skillAccountItems;AccountChecks=$skillAccountChecks;Controls=$deckSkillState.Controls;Rows=$deckSkillRows;Workspace=$skillWorkspace;DebugHost=$debugSkillHost;BrowserCard=$browserSkillCard;BrowserTitle=$browserSkillTitle;BrowserNote=$browserSkillNote;Scroll=$deckSkillScroll;State=$deckSkillState;Previous=$deckSkillPrevious;Next=$deckSkillNext;PageLabel=$deckSkillPageLabel;Plugin=@{Marketplace=$pluginMarketplaceSource;AddMarketplace=$pluginMarketplaceAdd;Selector=$pluginSelector;Install=$pluginInstall;Status=$pluginStatus};Catalog=@{Search=$catalogSearch;Results=$catalogResults;Install=$catalogInstall;Refresh=$catalogRefresh;Status=$catalogStatus;Previous=$catalogPrevious;Next=$catalogNext;PageInput=$catalogPageInput;PageGo=$catalogPageGo;PageLabel=$catalogPageLabel}}}}
     $modelState=@{Task=$null}
     $modelTimer=[Windows.Threading.DispatcherTimer]::new(); $modelTimer.Interval=[TimeSpan]::FromMilliseconds(250)
     $modelTimer.Add_Tick({
@@ -1231,7 +1242,7 @@ function Show-DeckSettings {
         if($modelState.Task){return}
         try{
         $modelAccount=[string]$AccountPicker.SelectedValue
-        if(-not $modelAccount -or (Get-DeckPoolEntry $suite $modelAccount)){$modelAccount=@(Get-DeckAccounts | Where-Object { -not (Get-DeckPoolEntry $suite $_) -and (Test-Path -LiteralPath (Join-Path $suite "accounts/$_/auth.json")) })[0]}
+        if(-not $modelAccount -or (Get-DeckPoolEntry $suite $modelAccount) -or -not (Test-DeckCodexAccount $suite $modelAccount)){$modelAccount=@(Get-DeckAccounts | Where-Object { -not (Get-DeckPoolEntry $suite $_) -and (Test-DeckCodexAccount $suite $_) -and (Test-Path -LiteralPath (Join-Path $suite "accounts/$_/auth.json")) })[0]}
         if($modelAccount){$modelState.Task=Start-DeckTask (Get-DeckModelsCode $suite $modelAccount) 'Models' $modelAccount; $modelTimer.Start()}
         }catch{$controls.WarmupModel.ToolTip='Model list unavailable; showing saved choices.'}
     }.GetNewClosure()
@@ -1252,7 +1263,8 @@ function New-DeckPanelDetails([string]$Name) {
         $divider=[Windows.Controls.Border]::new(); $divider.Height=1; $divider.Background='#30343A'; $divider.Margin='0,0,0,10'; [void]$detailPanel.Children.Add($divider)
         if($settings.ShowQuota){foreach($w in $row.Windows){[void]$detailPanel.Children.Add((New-DeckQuotaTrack $w $quotaColor ([bool]$settings.ShowResets)))}}
         $fields=[ordered]@{}
-        $fields['Status']=$status+' · percentages remaining; * reset passed, check again'
+        $fields['Status']=if($profile.Harness -and $profile.Harness -ne 'Codex'){'Use '+(Get-DeckHarness $profile.Harness).Name+' for usage and login status.'}else{$status+' · percentages remaining; * reset passed, check again'}
+        if($profile.Harness){$fields['Harness']=(Get-DeckHarness $profile.Harness).Name}
         if($settings.ShowEmail){$fields['Email']=if($displayEmail){if($settings.MaskEmail){$displayEmail -replace '^(.).*(@.*)$','$1***$2'}else{$displayEmail}}else{'Unavailable'}}
         if($settings.ShowPlan){$fields['Plan']=if($plan){$plan}else{'Unavailable'}}
         if($settings.ShowResetCredits){$fields['Reset credits']=Format-DeckResetCredits $row}
@@ -1465,6 +1477,10 @@ function Complete-DeckScheduleRepair {
 }
 function Invoke-DeckTick {
     if($SmokeTest -or $Demo){Render-Deck; return}
+    if(-not $script:routerCheckAt -or ([DateTimeOffset]::UtcNow-$script:routerCheckAt).TotalSeconds -ge 15){
+        $script:routerCheckAt=[DateTimeOffset]::UtcNow
+        if((Read-DeckJson (Get-DeckRouterPaths $suite).Service).Enabled){try{Start-DeckRouter $suite}catch{$script:notice='AI Router: '+$_.Exception.Message}}
+    }
     Complete-DeckDesktopUsageCache
     $settingsItem=Get-Item -LiteralPath (Join-Path $root 'settings.json') -ErrorAction SilentlyContinue
     $freshStamp=if($settingsItem){$settingsItem.LastWriteTimeUtc.Ticks}else{0}
@@ -1542,7 +1558,7 @@ function Invoke-DeckTick {
     }
     if($tasks.Count -lt 8 -and ($settings.AutoCheck -or $manualChecks.Count)){
         if($tasks.Count -lt 8){
-            $automatic=@(); if($settings.AutoCheck -and $now -ge $autoCheckReadyAt){$automatic=@(Get-DeckVisibleAccounts)}
+            $automatic=@(); if($settings.AutoCheck -and $now -ge $autoCheckReadyAt){$automatic=@(Get-DeckVisibleAccounts | Where-Object {Test-DeckCodexAccount $suite $_})}
             $due=@(Get-DeckDueAccounts $automatic $manualChecks $nextCheck $now)
             foreach($account in $due){
                 if (Get-DeckPoolEntry $suite $account) { $manualChecks.Remove($account); continue }
@@ -1637,7 +1653,7 @@ $ConfigButton.Add_Click({
     $accountConfigItem.ToolTip='Configuration for '+[string]$AccountPicker.SelectedValue
     $configMenu.PlacementTarget=$ConfigButton; $configMenu.Placement='Bottom'; $configMenu.IsOpen=$true
 })
-$accountConfigItem.Add_Click({if($AccountPicker.SelectedValue){Edit-DeckConfig (Join-Path $suite ('accounts/'+$AccountPicker.SelectedValue+'/config.toml')) ([string]$AccountPicker.SelectedValue)}})
+$accountConfigItem.Add_Click({if($AccountPicker.SelectedValue){try{Edit-DeckConfig (Get-DeckHarnessConfigPath $suite ([string]$AccountPicker.SelectedValue)) ([string]$AccountPicker.SelectedValue)}catch{$script:notice=$_.Exception.Message}}})
 $defaultsItem.Add_Click({Edit-DeckConfig (Join-Path $HOME '.codex/config.toml') 'Global defaults'})
 $SettingsButton.Add_Click({Show-DeckSettings})
 $SummaryButton.IsHitTestVisible=$true
@@ -1655,7 +1671,7 @@ $FilterButton.ToolTip='Filter visible accounts by plan. Accounts with an unknown
 $StatusButton.ToolTip='Check every account visible under the current plan filter. Up to eight checks run together. A list cooldown starts when they finish.'
 $checkVisible={
     if($batchAccounts.Count -or [DateTimeOffset]::UtcNow -lt $batchUntil){return}
-    $names=@(Get-DeckVisibleAccounts)
+    $names=@(Get-DeckVisibleAccounts | Where-Object {($SmokeTest -or $Demo) -or (Test-DeckCodexAccount $suite $_)})
     $now=[DateTimeOffset]::UtcNow
     foreach($name in $names){
         if($tasks.ContainsKey($name)){continue}
@@ -1675,6 +1691,13 @@ $NewButton.Add_Click({
     $heading=[Windows.Controls.StackPanel]::new(); $heading.Orientation='Horizontal'; $logo=[Windows.Controls.Image]::new(); $logo.Source=$appIcon; $logo.Width=24; $logo.Height=24; $logo.Margin='0,0,10,0'; [void]$heading.Children.Add($logo); [void]$heading.Children.Add((New-DeckText 'New account' '#E4E7EC' 17)); [void]$panel.Children.Add($heading)
     $label=New-DeckText 'Choose a name for this account.' '#919BA8' 12; $label.Margin='0,10,0,10'; [void]$panel.Children.Add($label)
     $input=[Windows.Controls.TextBox]::new(); $input.Text="account$number"; [void]$panel.Children.Add($input)
+    [void]$panel.Children.Add((New-DeckText 'Harness / login provider' '#919BA8'))
+    $harnessPicker=[Windows.Controls.ComboBox]::new(); $harnessPicker.DisplayMemberPath='Name'
+    foreach($entry in @(Get-DeckHarnessCatalog | Where-Object {Test-DeckHarnessEnabled $settings $_.Id})){[void]$harnessPicker.Items.Add($entry)}
+    $harnessPicker.SelectedIndex=0; $harnessPicker.Margin='0,6,0,6'; [void]$panel.Children.Add($harnessPicker)
+    $providerPicker=[Windows.Controls.ComboBox]::new(); $providerPicker.Margin='0,0,0,6'; [void]$panel.Children.Add($providerPicker)
+    $updateProviders={ $providerPicker.Items.Clear(); foreach($providerName in $harnessPicker.SelectedItem.Providers){[void]$providerPicker.Items.Add($providerName)}; $providerPicker.SelectedIndex=0 }.GetNewClosure()
+    $harnessPicker.Add_SelectionChanged($updateProviders); & $updateProviders
     $errorText=New-DeckText '' '#F17D8D' 11; $errorText.Margin='0,8,0,8'; [void]$panel.Children.Add($errorText)
     $buttons=[Windows.Controls.StackPanel]::new(); $buttons.Orientation='Horizontal'; $buttons.HorizontalAlignment='Right'; [void]$panel.Children.Add($buttons)
     $cancel=[Windows.Controls.Button]::new(); $cancel.Content='Cancel'; $cancel.IsCancel=$true; [void]$buttons.Children.Add($cancel)
@@ -1684,7 +1707,7 @@ $NewButton.Add_Click({
         $name=$input.Text.Trim()
         if($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -match '^(con|prn|aux|nul|com[0-9]|lpt[0-9]|list)$'){$errorText.Text='Use 1–40 letters, numbers, underscores or hyphens; start with a letter.'; return}
         if(Test-Path -LiteralPath (Join-Path $suite "accounts/$name")){$errorText.Text='That account already exists. Choose another name.'; return}
-        Open-DeckTerminal $name -NewAccount; $dialog.Close()
+        Open-DeckTerminal $name -NewAccount -Harness $harnessPicker.SelectedItem.Id -Provider ([string]$providerPicker.SelectedItem); $dialog.Close()
     })
     $dialog.Add_ContentRendered({[void]$input.Focus(); $input.SelectAll()})
     [void]$dialog.ShowDialog()
@@ -1744,6 +1767,18 @@ try{
         $script:supportTestPath=Join-Path ([IO.Path]::GetTempPath()) ('deck-support-test-'+[guid]::NewGuid().ToString('N')+'.json')
         $settingsTest=Show-DeckSettings -TestUI
         if($settingsTest.Controls.DashboardTheme.Items.Count -ne 5 -or $settingsTest.Controls.DashboardTheme.SelectedItem -ne 'Default'){throw 'Dashboard theme choices or default missing from Appearance.'}
+        $codexHarness=$settingsTest.Harnesses.Codex
+        if(-not $codexHarness.Enabled.IsChecked -or $codexHarness.Enabled.IsEnabled -or -not $codexHarness.Install.IsEnabled){throw 'Codex must be required, checked and installable.'}
+        foreach($id in @('Antigravity','Claude','OpenCode')){
+            $card=$settingsTest.Harnesses[$id]
+            if($card.Enabled.IsChecked -or $card.Details.Visibility -ne 'Collapsed'){throw 'Optional harnesses must start disabled.'}
+            $card.Enabled.IsChecked=$true; $card.Enabled.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            if($card.Details.Visibility -ne 'Visible' -or -not $card.Install.IsEnabled -or -not $card.Info.IsEnabled){throw 'Enabled harness settings/actions are unavailable.'}
+            $card.Install.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            if($card.Status.Text -ne 'Installation is disabled in preview mode.'){throw 'Harness install callback failed.'}
+            $card.Enabled.IsChecked=$false; $card.Enabled.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        }
+        'PASS: required Codex and optional harness toggles, settings visibility and install callbacks.'
         $integrationTest=$settingsTest.Integrations.rtk
         $integrationTest.Install.IsEnabled=$false; $integrationTest.Install.Content='Working…'
         $integrationTest.Operation.Mode='Install'
@@ -1766,7 +1801,7 @@ try{
         $failoverMembership.SelectedIndex=3
         $headers=@($settingsTest.Tabs.Items | ForEach-Object Header)
         if ($headers -notcontains 'Environments') { throw 'Environment sharing Settings tab missing.' }
-        $expectedHeaders='Appearance|General|Checks & Warmup|Environments|Skills|Advanced|Integrations|Backup|About'
+        $expectedHeaders='Appearance|Harnesses|AI Router|General|Checks & Warmup|Environments|Skills|Advanced|Integrations|Backup|About'
         if (($headers -join '|') -ne $expectedHeaders) { throw 'Settings tabs are missing or out of order.' }
         if ($settingsTest.Controls.TrajectoryEnabled.IsChecked -or $settingsTest.Controls.ContextManagerEnabled.IsChecked -or $settingsTest.Controls.ContextManagerAutoOpen.IsChecked -or -not $settingsTest.Controls.EfficiencyAnalyticsEnabled.IsChecked) { throw 'Trajectory/context defaults or enabled-by-default efficiency analytics are incorrect.' }
         if ($settingsTest.Controls.EfficiencySessionLimit.Text -ne '600') { throw 'Efficiency analytics session limit default failed.' }
@@ -1927,7 +1962,7 @@ try{
         if($settingsUI.Controls.WarmupModel -isnot [Windows.Controls.ComboBox] -or $settingsUI.Controls.WarmupModel.SelectedItem -ne $settings.WarmupModel){throw 'Model selector failed.'}
         foreach($control in $settingsUI.Controls.Values){if($control -ne $settingsUI.Controls.BrowserHarnessEnabled -and $control.Margin.Bottom -lt 14){throw 'Settings spacing failed.'}}
         if(@($settingsUI.Tabs.Items | ForEach-Object Header) -notcontains 'Backup' -or @($settingsUI.Tabs.Items | ForEach-Object Header) -notcontains 'About'){throw 'Backup/About tabs missing'}
-        foreach($header in @('General','Checks & Warmup','Environments','Skills','Advanced','Integrations','Backup','About')){
+        foreach($header in @('Harnesses','AI Router','General','Checks & Warmup','Environments','Skills','Advanced','Integrations','Backup','About')){
             $settingsUI.Tabs.SelectedItem=@($settingsUI.Tabs.Items | Where-Object Header -eq $header)[0]
             $expected=if($header -in @('Backup','About')){'Collapsed'}else{'Visible'}
             if($settingsUI.Save.Visibility -ne $expected){throw "Unexpected Save visibility on $header"}
@@ -1949,6 +1984,23 @@ try{
             $returnVisit.Dialog.Close()
         }
         Remove-Item -LiteralPath $script:supportTestPath -ErrorAction SilentlyContinue
+        if($HarnessScreenshotPath){
+            foreach($card in $settingsUI.Harnesses.Values){$card.Enabled.IsChecked=$true;$card.Enabled.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))}
+            $settingsUI.Tabs.SelectedItem=@($settingsUI.Tabs.Items | Where-Object Header -eq 'Harnesses')[0]
+            $settingsUI.Dialog.Show();$settingsUI.Dialog.UpdateLayout()
+            $visual=$settingsUI.Dialog.Content
+            $bitmap=[Windows.Media.Imaging.RenderTargetBitmap]::new([int]$visual.ActualWidth,[int]$visual.ActualHeight,96,96,[Windows.Media.PixelFormats]::Pbgra32)
+            $bitmap.Render($visual);$encoder=[Windows.Media.Imaging.PngBitmapEncoder]::new();$encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
+            $stream=[IO.File]::Create($HarnessScreenshotPath);try{$encoder.Save($stream)}finally{$stream.Dispose()}
+        }
+        if($RouterScreenshotPath){
+            $settingsUI.Tabs.SelectedItem=@($settingsUI.Tabs.Items | Where-Object Header -eq 'AI Router')[0]
+            $settingsUI.Dialog.Show();$settingsUI.Dialog.UpdateLayout()
+            $visual=$settingsUI.Dialog.Content
+            $bitmap=[Windows.Media.Imaging.RenderTargetBitmap]::new([int]$visual.ActualWidth,[int]$visual.ActualHeight,96,96,[Windows.Media.PixelFormats]::Pbgra32)
+            $bitmap.Render($visual);$encoder=[Windows.Media.Imaging.PngBitmapEncoder]::new();$encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
+            $stream=[IO.File]::Create($RouterScreenshotPath);try{$encoder.Save($stream)}finally{$stream.Dispose()}
+        }
         $settingsUI.Dialog.Close()
         $window.Content.Measure([Windows.Size]::new($window.Width,$window.Height)); $window.Content.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $window.Content.UpdateLayout()
         if($Cards.Children.Count -ne 2){throw 'Smoke test all-account card rendering failed.'}
@@ -2013,8 +2065,8 @@ try{
             if($window.Height -lt $before -or $CardScroll.ViewportHeight+1 -lt $Cards.Children[0].DesiredSize.Height){throw "$testMode expansion shrinks or clips the entry"}
             if($Cards.Children[0].ToolTip){throw 'Entry hover overlay remains'}
             $entryMenu=$Cards.Children[0].ContextMenu
-            if($entryMenu.Items.Count -ne 10 -or $entryMenu.Items[9].Foreground.ToString() -ne '#FFF17D8D'){throw 'Entry actions or red Delete missing'}
-            $entryMenu.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+            if($entryMenu.Items.Count -ne 11 -or $entryMenu.Items[1].Header -ne 'Log in' -or $entryMenu.Items[10].Foreground.ToString() -ne '#FFF17D8D'){throw 'Entry actions or red Delete missing'}
+            $entryMenu.Items[2].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
             if(-not $manualChecks.ContainsKey('account1')){throw 'Entry check did not queue its account'}
             $rememberWidth=[Math]::Min([Windows.SystemParameters]::WorkArea.Width,$window.Width+25); $rememberHeight=[Math]::Min([Windows.SystemParameters]::WorkArea.Height,$window.Height+35)
             $window.Width=$rememberWidth; $window.Height=$rememberHeight
@@ -2108,7 +2160,7 @@ try{
         Write-DeckJson (Join-Path $settingsFixture 'accounts/account1/auth.json') @{}
         Write-DeckJson (Join-Path $settingsFixture 'accounts/account2/auth.json') @{}
         Set-DeckPoolEntry $settingsFixture pool @('*') Ordered | Out-Null
-        foreach($file in @('Deck.EnvironmentSettings.ps1','Deck.SkillSettings.ps1','Deck.BundledSkills.ps1','Deck.PluginManagement.ps1','Deck.SettingsExtras.ps1','Deck.Terminal.ps1','Deck.Failover.ps1','Deck.Integrations.json','Deck.DefaultGlobalRules.md')){Copy-Item -LiteralPath (Join-Path $suite $file) -Destination $settingsFixture}
+        foreach($file in @('Deck.RouterSettings.ps1','Deck.HarnessSettings.ps1','Deck.EnvironmentSettings.ps1','Deck.SkillSettings.ps1','Deck.BundledSkills.ps1','Deck.PluginManagement.ps1','Deck.SettingsExtras.ps1','Deck.Terminal.ps1','Deck.Failover.ps1','Deck.Integrations.json','Deck.DefaultGlobalRules.md')){Copy-Item -LiteralPath (Join-Path $suite $file) -Destination $settingsFixture}
         Copy-Item -LiteralPath (Join-Path $suite 'skills') -Destination (Join-Path $settingsFixture 'skills') -Recurse
         try{
             $script:suite=$settingsFixture;$script:root=Join-Path $settingsFixture 'deck'
@@ -2117,6 +2169,8 @@ try{
             $draftUI.Environment.Resources.SelectedItem=@($draftUI.Environment.Resources.Items | Where-Object Resource -eq 'skills')[0]
             $shareCheck=$draftUI.Environment.Recipients.Children[0];$shareCheck.IsChecked=$true
             $shareCheck.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            $draftUI.Controls.HarnessClaudeEnabled.IsChecked=$true
+            $draftUI.Controls.HarnessClaudePath.Text='C:\Synthetic\claude.exe'
             $draftUI.Controls.MaskEmail.IsChecked=$true
             $draftUI.Controls.TerminalScrollbackEnabled.IsChecked=$false
             $draftUI.Controls.FailoverEnabled.IsChecked=$true
@@ -2148,6 +2202,7 @@ try{
             if($draftUI.Error.Text){throw $draftUI.Error.Text}
             $savedSettings=Read-DeckJson (Join-Path $root 'settings.json')
             if((Get-DeckPoolEntry $settingsFixture pool).Accounts[0] -ne '*free' -or -not $savedSettings.MaskEmail){throw 'Save settings did not persist environment and another tab together.'}
+            if(-not $savedSettings.HarnessClaudeEnabled -or $savedSettings.HarnessClaudePath -ne 'C:\Synthetic\claude.exe'){throw 'Harness settings did not survive Save.'}
             if(-not $savedSettings.FailoverEnabled -or $savedSettings.FailoverMode -ne 'Best' -or $savedSettings.FailoverAccounts -ne 'account2' -or -not $savedSettings.AutoCheck){throw 'Save settings did not persist failover and general controls.'}
             if($savedSettings.AutoCompactMode -ne 'Custom' -or $savedSettings.AutoCompactThresholdPercent -ne 72){throw 'Save settings did not persist the auto-compact implementation and threshold.'}
             if($savedSettings.TerminalScrollbackEnabled){throw 'Save settings did not persist the terminal scrollback preference.'}

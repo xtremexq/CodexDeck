@@ -58,7 +58,7 @@ function Resolve-DeckEntryPool([string]$SuiteRoot, $Entry) {
         if ($names.Count -ne 1) { throw 'Use either * or an explicit pool membership.' }
         $filter=$names[0]
         $names = @(Get-DeckEntryNames $SuiteRoot | Where-Object {
-            -not (Get-DeckPoolEntry $SuiteRoot $_) -and (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$_/auth.json"))
+            -not (Get-DeckPoolEntry $SuiteRoot $_) -and (-not (Get-Command Test-DeckCodexAccount -ErrorAction SilentlyContinue) -or (Test-DeckCodexAccount $SuiteRoot $_)) -and (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$_/auth.json"))
         } | Where-Object {
             $filter -eq '*' -or ($filter -eq '*free' -and (Get-DeckPoolAccountPlan $SuiteRoot $_) -eq 'free') -or
             ($filter -eq '*paid' -and (Get-DeckPoolAccountPlan $SuiteRoot $_) -in @('plus','pro','team','business','enterprise','edu'))
@@ -67,7 +67,7 @@ function Resolve-DeckEntryPool([string]$SuiteRoot, $Entry) {
     if (-not $names.Count -or $names.Count -gt 200 -or @($names | Sort-Object -Unique).Count -ne $names.Count) { throw 'A pool needs 1-200 distinct signed-in accounts.' }
     foreach ($name in $names) {
         $dir = Get-DeckEntryDirectory $SuiteRoot $name
-        if ((Get-DeckPoolEntry $SuiteRoot $name) -or -not (Test-Path -LiteralPath (Join-Path $dir 'auth.json') -PathType Leaf)) { throw 'Pool members must be signed-in accounts, not pooled entries.' }
+        if (((Get-Command Test-DeckCodexAccount -ErrorAction SilentlyContinue) -and -not (Test-DeckCodexAccount $SuiteRoot $name)) -or (Get-DeckPoolEntry $SuiteRoot $name) -or -not (Test-Path -LiteralPath (Join-Path $dir 'auth.json') -PathType Leaf)) { throw 'Pool members must be signed-in accounts, not pooled entries.' }
     }
     return $names
 }

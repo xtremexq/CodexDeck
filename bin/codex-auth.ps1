@@ -4,6 +4,9 @@ param(
     [string]$Account,
 
     [switch]$NewAccount,
+    [ValidateSet('Codex','Antigravity','Claude','OpenCode')][string]$Harness,
+    [ValidateSet('ChatGPT','Claude','Gemini','Custom')][string]$Provider,
+    [switch]$ConfigureRunner,
     [string]$InheritFrom,
     [switch]$Pool,
     [string[]]$PoolAccounts,
@@ -672,6 +675,10 @@ function Show-Usage {
     Write-Host "  !autocompact (inside a conversation)   Compact now using the selected Native/Custom mode"
     Write-Host ""
     Write-Host "Examples:"
+    Write-Host '  codex-auth work -NewAccount -Harness Claude -Provider Claude'
+    Write-Host '  codex-auth google -NewAccount -Harness Antigravity -Provider Gemini'
+    Write-Host '  codex-auth open -NewAccount -Harness OpenCode -Provider Custom'
+    Write-Host '  codex-auth google -ConfigureRunner  Configure an isolated Windows runner'
     Write-Host "  codex-auth account1"
     Write-Host "  codex-auth 2 login status"
     Write-Host "  codex-auth account3 --help"
@@ -746,7 +753,8 @@ function ConvertTo-DeckWindowsArgument([AllowEmptyString()][string]$Value) {
 }
 
 function Invoke-DeckCodex([string[]]$Arguments) {
-    $resolved = Get-Command codex -ErrorAction Stop | Select-Object -First 1
+    $codexPreferences=if((Get-Command Get-DeckSettings -ErrorAction SilentlyContinue) -and $runtimeRoot){Get-DeckSettings (Join-Path $runtimeRoot 'deck')}else{@{}}
+    $resolved = if($codexPreferences.HarnessCodexPath){Get-Command (Resolve-DeckHarnessExecutable $codexPreferences 'Codex') -ErrorAction Stop | Select-Object -First 1}else{Get-Command codex -ErrorAction Stop | Select-Object -First 1}
     $nativeExecutable = $resolved.CommandType -eq 'Application' -and [IO.Path]::GetExtension($resolved.Source) -eq '.exe'
     if (($resolved.CommandType -ne 'ExternalScript' -and -not $nativeExecutable) -or -not (Test-Path -LiteralPath $resolved.Source -PathType Leaf)) {
         # Nonstandard installations retain the ordinary PowerShell resolution
@@ -991,6 +999,38 @@ if (Test-Path -LiteralPath $bundledSkillsModule) { . $bundledSkillsModule }
 $pluginModule = Join-Path $runtimeRoot 'Deck.PluginManagement.ps1'
 if (-not (Test-Path -LiteralPath $pluginModule)) { $pluginModule = Join-Path $PSScriptRoot '../suite/Deck.PluginManagement.ps1' }
 if (Test-Path -LiteralPath $pluginModule) { . $pluginModule }
+# Route managed accounts before any Codex-only launch preparation.
+$coreModule=Join-Path $runtimeRoot 'Deck.Core.ps1'
+if(-not (Test-Path -LiteralPath $coreModule)){$coreModule=Join-Path $PSScriptRoot '../suite/Deck.Core.ps1'}
+if(Test-Path -LiteralPath $coreModule){. $coreModule}
+if(-not (Get-Command Get-DeckAccountIdentity -ErrorAction SilentlyContinue)){. (Join-Path $PSScriptRoot '../suite/Deck.Harnesses.ps1')}
+if($Harness -or $Provider -or $ConfigureRunner){
+    if(-not $Account -or $Account -in @('dashboard','status','list','--list','-l','help','plugin','resume','share','unshare','sharing') -or $Pool -or $Best -or $CheckAll){throw 'Harness options require one named account.'}
+}
+if($Account -and $Account -notin @('dashboard','status','list','--list','-l','help','--help','-h','plugin','resume','share','unshare','sharing')){
+    $harnessAccount=Normalize-AccountName $Account
+    Assert-DeckEntryName $harnessAccount
+    $identity=Get-DeckAccountIdentity $runtimeRoot $harnessAccount
+    $exists=Test-Path -LiteralPath (Join-Path $accountsRoot $harnessAccount) -PathType Container
+    $selectedHarness=if($Harness){$Harness}else{$identity.Harness}
+    $definition=Get-DeckHarness $selectedHarness
+    $selectedProvider=if($Provider){$Provider}elseif($exists){$identity.Provider}else{$definition.Providers[0]}
+    if($selectedProvider -notin $definition.Providers){throw "$($definition.Name) only accepts: $($definition.Providers -join ', ')."}
+    if($exists -and ($identity.Harness -ne $selectedHarness -or $identity.Provider -ne $selectedProvider)){throw 'An existing account cannot change harness or login provider. Create a separate account.'}
+    if($selectedHarness -ne 'Codex'){
+        if($Pool -or $InheritFrom -or $UseAccount -or $Source -or $Targets -or $Resources -or $Direct -or $AutoCompact -or $Best -or $History -or $Resume -or $ResumePrompt -or $ResumePromptEnvironment -or $FailoverAccounts -or $PSBoundParameters.ContainsKey('Failover')){throw 'Codex pools, inheritance, history, compaction and failover options apply to ChatGPT accounts. Use native harness commands for this account.'}
+        if(-not $Del -and -not $RenameTo){
+            if(-not $exists){
+                if(-not $NewAccount){throw 'Create this harness account explicitly with -NewAccount -Harness.'}
+                [void](New-DeckHarnessAccount $runtimeRoot $harnessAccount $selectedHarness $selectedProvider)
+            }elseif($NewAccount){throw 'That account already exists.'}
+            $nativeArgs=@($CodexArgs)
+            if($NewAccount -and -not $nativeArgs){$nativeArgs=@('login')}
+            Invoke-DeckHarnessAccount $runtimeRoot $harnessAccount $nativeArgs -ConfigureRunner:$ConfigureRunner
+            exit $LASTEXITCODE
+        }
+    }elseif($ConfigureRunner){throw 'Runner configuration is only for Antigravity accounts.'}
+}
 if ($Account -eq 'plugin') {
     if ($Best -or $History -or $Resume -or $RenameTo -or $Del -or $NewAccount -or $Pool -or $InheritFrom -or $UseAccount -or $Source -or $Targets -or $Resources -or $GlobalRules -or $Direct -or $AutoCompact -or $CheckAll) {
         throw 'Do not combine plugin management with account or launch options.'
@@ -1160,6 +1200,11 @@ if ($bootstrapResult.Created) {
     }
 }
 
+$configPath=Join-Path $accountDir 'config.toml'
+$loginConfig=Read-TextFile $configPath
+$loginConfig=Upsert-TopLevelSetting $loginConfig 'forced_login_method' 'forced_login_method = "chatgpt"'
+Write-TextFile $configPath $loginConfig
+if($CodexArgs -and $CodexArgs[0] -eq 'login' -and @($CodexArgs | Where-Object {$_ -in @('--with-api-key','--api-key')}).Count){throw 'Codex Deck accounts require ChatGPT sign-in.'}
 Ensure-AccountInstructions -AccountDir $accountDir
 Ensure-FreeAccountDefaults -AccountDir $accountDir
 if(Get-Command Sync-DeckBundledSkills -ErrorAction SilentlyContinue){
@@ -1292,7 +1337,8 @@ try {
     if ($deckInteractiveConversation -or $deckCustomAutoCompact) {
         $clientPath = Join-Path $runtimeRoot 'Deck.AutoCompact.cjs'
         if (-not (Test-Path -LiteralPath $clientPath -PathType Leaf)) { throw 'Deck.AutoCompact.cjs is missing. Reinstall Codex Deck.' }
-        $codexCommand = Get-Command codex -ErrorAction Stop | Select-Object -First 1
+        $codexPreferences=Get-DeckSettings (Join-Path $runtimeRoot 'deck')
+        $codexCommand = if($codexPreferences.HarnessCodexPath){Get-Command (Resolve-DeckHarnessExecutable $codexPreferences 'Codex') -ErrorAction Stop | Select-Object -First 1}else{Get-Command codex -ErrorAction Stop | Select-Object -First 1}
         $codexExecutable = $codexCommand.Source
         $codexEntry = ''
         if ([IO.Path]::GetExtension($codexExecutable) -ne '.exe') {

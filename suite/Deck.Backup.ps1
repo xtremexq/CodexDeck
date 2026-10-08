@@ -16,7 +16,7 @@ function Get-DeckPasswordKey([Security.SecureString]$Password,[byte[]]$Salt) {
     }
 }
 function Test-DeckBackupPath([string]$Path) {
-    return $Path -cmatch '^(accounts/[a-zA-Z][a-zA-Z0-9_-]{0,39}/(auth\.json|config\.toml|AGENTS\.md|deck-entry\.json|\.codexdeck-skills\.json)|deck/(settings|views|pins|warmup|skill-defaults)\.json|accounts/AGENTS\.shared\.md|defaults/config\.toml)$'
+    return $Path -cmatch '^(accounts/[a-zA-Z][a-zA-Z0-9_-]{0,39}/(auth\.json|config\.toml|AGENTS\.md|deck-entry\.json|deck-account\.json|claude/(settings\.json|\.credentials\.json|\.claude\.json)|opencode/(config/opencode/opencode\.json|data/opencode/auth\.json)|antigravity/profile/\.gemini/(antigravity-cli/(settings\.json|antigravity-oauth-token)|config/(settings\.json|mcp_config\.json))|\.codexdeck-skills\.json)|deck/(settings|views|pins|warmup|skill-defaults)\.json|accounts/AGENTS\.shared\.md|defaults/config\.toml)$'
 }
 function Export-DeckBackup([string]$SuiteRoot,[string]$DefaultsPath,[string]$Path,[Security.SecureString]$Password) {
     if($Password.Length -lt 12){throw 'Use a password with at least 12 characters.'}
@@ -27,13 +27,22 @@ function Export-DeckBackup([string]$SuiteRoot,[string]$DefaultsPath,[string]$Pat
         if($dir.Name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){continue}
         if($dir.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked account folders cannot be exported.'}
         $accounts+= $dir.Name
-        foreach($name in @('auth.json','config.toml','AGENTS.md','deck-entry.json','.codexdeck-skills.json')){if(Test-Path -LiteralPath (Join-Path $dir.FullName $name)){$files+= "accounts/$($dir.Name)/$name"}}
+        foreach($name in @('auth.json','config.toml','AGENTS.md','deck-entry.json','deck-account.json','claude/settings.json','claude/.credentials.json','claude/.claude.json','opencode/config/opencode/opencode.json','opencode/data/opencode/auth.json','antigravity/profile/.gemini/antigravity-cli/settings.json','antigravity/profile/.gemini/antigravity-cli/antigravity-oauth-token','antigravity/profile/.gemini/config/settings.json','antigravity/profile/.gemini/config/mcp_config.json','.codexdeck-skills.json')){if(Test-Path -LiteralPath (Join-Path $dir.FullName $name)){$files+= "accounts/$($dir.Name)/$name"}}
     }
     if(Test-Path -LiteralPath (Join-Path $SuiteRoot 'accounts/AGENTS.shared.md')){$files+='accounts/AGENTS.shared.md'}
     foreach($name in @('settings','views','pins','warmup','skill-defaults')){if(Test-Path -LiteralPath (Join-Path $SuiteRoot "deck/$name.json")){$files+="deck/$name.json"}}
     if(Test-Path -LiteralPath $DefaultsPath){$files+='defaults/config.toml'}
     $entries=foreach($name in $files){
         $source=if($name -eq 'defaults/config.toml'){$DefaultsPath}else{Join-Path $SuiteRoot $name}
+        # Native harness files add nested directories; reject linked ancestors too.
+        if($name -match '^accounts/[^/]+/(claude|opencode|antigravity)/'){
+            $ancestor=Split-Path -Parent $source
+            $boundary=[IO.Path]::GetFullPath($SuiteRoot).TrimEnd('\')
+            while($ancestor -and $ancestor -ne $boundary){
+                if((Get-Item -Force -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked native configuration directories cannot be exported.'}
+                $ancestor=Split-Path -Parent $ancestor
+            }
+        }
         $info=Get-Item -LiteralPath $source
         if(($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $name -notmatch '/AGENTS\.md$'){throw 'Linked configuration files cannot be exported.'}
         $total+=$info.Length; if($total -gt 16777216){throw 'Configuration backup exceeds the 16 MB limit.'}

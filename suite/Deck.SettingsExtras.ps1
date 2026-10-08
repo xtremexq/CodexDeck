@@ -1,4 +1,6 @@
 ﻿# Dot-sourced inside Show-DeckSettings so modal handlers share its lifetime.
+. (Join-Path $suite 'Deck.HarnessSettings.ps1')
+. (Join-Path $suite 'Deck.RouterSettings.ps1')
 . (Join-Path $suite 'Deck.EnvironmentSettings.ps1')
 . (Join-Path $suite 'Deck.SkillSettings.ps1')
 $backupTab=[Windows.Controls.TabItem]::new(); $backupTab.Header='Backup'

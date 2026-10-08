@@ -1,0 +1,21 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Store } from './store.mjs';
+import { createApp } from './app.mjs';
+import {Pairing} from './pairing.mjs';
+import fs from 'node:fs';
+
+const root = fileURLToPath(new URL('../',import.meta.url));
+const store = new Store(process.env.AIDECK_DATA_DIR || path.join(root,'.data'));
+if(process.env.AIDECK_DECK_ROOT)store.config.settings.deckRoot=process.env.AIDECK_DECK_ROOT;
+if(process.env.AIDECK_DECK_SCRIPT)store.config.settings.deckScript=process.env.AIDECK_DECK_SCRIPT;
+store.save();
+const app = createApp(store,{pairing:new Pairing(store)});
+app.server.on('error',error => { console.error(error.code === 'EADDRINUSE' ? 'AIDeck port is in use. Open the running dashboard or set AIDECK_PORT.' : error.message); process.exitCode = 1; });
+const port = await app.listen(Number(process.env.AIDECK_PORT || 5147));
+console.log(`AIDeck Router · http://127.0.0.1:${port}/v1`);
+if(!process.env.AIDECK_MANAGED)console.log(`Owner dashboard (keep this URL private): http://127.0.0.1:${port}/#token=${store.secrets.adminToken}`);
+fs.writeFileSync(path.join(store.directory,'runtime.json'),JSON.stringify({pid:process.pid,port,started:new Date().toISOString()}));
+console.log('Ctrl+C stops the gateway. Provider credentials stay in the local encrypted vault.');
+let stopping = false;
+for (const signal of ['SIGINT','SIGTERM']) process.on(signal,async () => { if (stopping) return; stopping = true; await app.close();fs.rmSync(path.join(store.directory,'runtime.json'),{force:true});process.exit(0); });

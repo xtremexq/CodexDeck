@@ -12,7 +12,7 @@ function Resolve-DeckFailoverPool([string]$SuiteRoot, [string]$Pool, [string]$Mo
         if (-not (Get-Command Get-DeckEntryNames -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'Deck.Environments.ps1') }
         $filter=$selector[0]
         $names=@(Get-DeckEntryNames $SuiteRoot | Where-Object {
-            -not (Get-DeckPoolEntry $SuiteRoot $_) -and (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$_/auth.json") -PathType Leaf)
+            -not (Get-DeckPoolEntry $SuiteRoot $_) -and (-not (Get-Command Test-DeckCodexAccount -ErrorAction SilentlyContinue) -or (Test-DeckCodexAccount $SuiteRoot $_)) -and (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$_/auth.json") -PathType Leaf)
         } | Where-Object {
             $filter -eq '*' -or ($filter -eq '*free' -and (Get-DeckPoolAccountPlan $SuiteRoot $_) -eq 'free') -or
             ($filter -eq '*paid' -and (Get-DeckPoolAccountPlan $SuiteRoot $_) -in @('plus','pro','team','business','enterprise','edu'))
@@ -27,6 +27,7 @@ function Resolve-DeckFailoverPool([string]$SuiteRoot, [string]$Pool, [string]$Mo
     if (-not $names.Count -and $selector.Count) { return @{ Pool=@(); Account=$null } }
     if (-not $names.Count) { throw 'Failover needs at least one signed-in account.' }
     foreach ($name in $names) {
+        if ((Get-Command Test-DeckCodexAccount -ErrorAction SilentlyContinue) -and -not (Test-DeckCodexAccount $SuiteRoot $name)) { throw 'Failover only accepts ChatGPT / Codex accounts.' }
         if ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -match '^(con|prn|aux|nul|com[0-9]|lpt[0-9])$' -or
             -not (Test-Path -LiteralPath (Join-Path $SuiteRoot ('accounts/'+$name+'/auth.json')) -PathType Leaf)) { throw 'Every failover account must already exist and be logged in.' }
     }

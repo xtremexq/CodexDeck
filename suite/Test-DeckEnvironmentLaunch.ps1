@@ -2,7 +2,7 @@
 $ErrorActionPreference='Stop'
 $fixture=Join-Path ([IO.Path]::GetTempPath()) ('deck-env-launch-'+[guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($fixture)
-foreach ($file in @('Deck.Core.ps1','Deck.AccountTools.ps1','Deck.Environments.ps1','Deck.BundledSkills.ps1','Deck.Terminal.ps1','Deck.Failover.ps1','Deck.Failover.cjs')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $fixture }
+foreach ($file in @('Deck.Core.ps1','Deck.Harnesses.ps1','Deck.Environments.ps1','Deck.AccountTools.ps1','Deck.BundledSkills.ps1','Deck.Terminal.ps1','Deck.Failover.ps1','Deck.Failover.cjs')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $fixture }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'skills') -Destination (Join-Path $fixture 'skills') -Recurse
 . (Join-Path $fixture 'Deck.Environments.ps1')
 foreach ($name in @('account1','account2')) {
@@ -85,7 +85,8 @@ $ErrorActionPreference='Stop'
 if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath (Join-Path $fixture 'accounts/missing'))) { throw 'Resume created or accepted a missing account.' }
 $output=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $harnessPath -Name newaccount -Action login
 if ($LASTEXITCODE -ne 0) { throw 'New isolated account failed.' }
-foreach ($file in @('config.toml','AGENTS.md','auth.json')) { if (Test-Path -LiteralPath (Join-Path $fixture "accounts/newaccount/$file")) { throw 'New account inherited private resources or credentials.' } }
+foreach ($file in @('AGENTS.md','auth.json')) { if (Test-Path -LiteralPath (Join-Path $fixture "accounts/newaccount/$file")) { throw 'New account inherited private resources or credentials.' } }
+if ([IO.File]::ReadAllText((Join-Path $fixture 'accounts/newaccount/config.toml')) -notmatch 'forced_login_method = "chatgpt"') { throw 'New account did not require ChatGPT sign-in.' }
 if (-not (Test-Path -LiteralPath (Join-Path $fixture 'accounts/newaccount/skills/debug-swarm/SKILL.md') -PathType Leaf)) { throw 'New account did not receive the globally enabled Deck skill.' }
 if (-not (Test-Path -LiteralPath (Join-Path $fixture 'accounts/newaccount') -PathType Container)) { throw 'New account was not created.' }
 $instructions=Join-Path $fixture 'accounts/AGENTS.shared.md'

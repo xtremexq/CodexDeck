@@ -68,7 +68,7 @@ foreach($unsafeMemory in @('../outside.md','C:\outside.md','notes.exe','con.md')
     $rejected=$false;try{[void](Get-DeckMemoryPath $memoryRoot $unsafeMemory)}catch{$rejected=$true}
     Assert $rejected "Unsafe memory path accepted: $unsafeMemory"
 }
-foreach($file in 'Deck.Core.ps1','Deck.AccountTools.ps1'){Copy-Item (Join-Path $PSScriptRoot $file) (Join-Path $fixture $file)}
+foreach($file in 'Deck.Core.ps1','Deck.Harnesses.ps1','Deck.Environments.ps1','Deck.AccountTools.ps1'){Copy-Item (Join-Path $PSScriptRoot $file) (Join-Path $fixture $file)}
 Write-DeckJson (Join-Path $fixture 'deck/cache.json') @(@{Account='account1';CheckedAt='2026-01-01T00:00:00Z';Status='available'})
 Write-DeckJson (Join-Path $fixture 'deck/terminal-cache.json') @(@{Account='account1';CheckedAt='2026-01-02T00:00:00Z';Status='blocked'})
 Assert ((Get-DeckTerminalCache (Join-Path $fixture 'deck')).account1.Status -eq 'blocked') 'Newest cache not selected'

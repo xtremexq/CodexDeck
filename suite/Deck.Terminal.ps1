@@ -76,6 +76,7 @@ function Get-DeckTerminalThemeEntry([string]$Name,$Cache,$Profiles,$Sessions,$Ta
     $weekly=$row.Windows | Where-Object DurationSeconds -eq 604800 | Select-Object -First 1
     $state=Get-DeckTerminalHealth $row
     if($profile.PlanType -eq 'pool'){$state='Pooled session'}
+    if($profile.Harness -and $profile.Harness -ne 'Codex'){$state=$profile.Harness+' / native usage'}
     if($Tasks.ContainsKey($Name)){$state='Checking...'}
     $email=[string]$profile.Email
     if($Mask -and $email){$email=$email -replace '^(.).*?(@.*)$','$1***$2'}
@@ -198,6 +199,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
         $week = $row.Windows | Where-Object DurationSeconds -eq 604800 | Select-Object -First 1
         $state = Get-DeckTerminalHealth $row
         if ($profile.PlanType -eq 'pool') { $state = 'Pooled session' }
+        if($profile.Harness -and $profile.Harness -ne 'Codex'){$state=$profile.Harness}
         if ($Tasks.ContainsKey($name)) { $state = 'Checking...' }
         $marker = if ($i -eq $Selected) { '>' } else { ' ' }
         $color = if ($state -eq 'Ready') { 'Green' } elseif ($state -in @('Check failed','Exhausted')) { 'Yellow' } else { 'Gray' }
@@ -276,6 +278,7 @@ public static class CodexDeckNativeKeyboard {
 function Add-DeckTerminalCheckQueue([string[]]$Names,$Profiles,$Tasks,[Collections.Generic.Queue[string]]$Pending,[string]$AccountRoot) {
     $queued=0
     foreach($item in $Names){
+        if($Profiles[$item].Harness -and $Profiles[$item].Harness -ne 'Codex'){continue}
         if($Profiles[$item].PlanType -eq 'pool' -or -not (Test-Path -LiteralPath (Join-Path $AccountRoot "$item/auth.json"))){continue}
         if(-not $Tasks.ContainsKey($item) -and -not $Pending.Contains($item)){$Pending.Enqueue($item);$queued++}
     }
@@ -441,7 +444,7 @@ function Show-DeckTerminal {
                     }
                 }
                 'R' {
-                    if($name -and $profiles[$name].PlanType -ne 'pool' -and (Test-Path -LiteralPath (Join-Path $accountRoot "$name/auth.json")) -and -not $tasks.ContainsKey($name) -and -not $pending.Contains($name)){$pending.Enqueue($name); $notice="Queued $name."}
+                    if($name -and (Test-DeckCodexAccount $SuiteRoot $name) -and $profiles[$name].PlanType -ne 'pool' -and (Test-Path -LiteralPath (Join-Path $accountRoot "$name/auth.json")) -and -not $tasks.ContainsKey($name) -and -not $pending.Contains($name)){$pending.Enqueue($name); $notice="Queued $name."}
                     elseif($name){$notice="$name is not signed in or cannot be checked."}
                 }
                 'A' {
@@ -486,15 +489,27 @@ function Show-DeckTerminal {
                         [Console]::CursorVisible = $true; Clear-Host
                         try {
                             if ($action -eq 'N') {
+                                $chosenHarness='Codex'; $chosenProvider='ChatGPT'
                                 $name = Read-DeckTerminalInput 'New account name or number (empty cancels)'
                                 if ($name -match '^\d+$') { $name = "account$name" }
                                 if ($name -and ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or $name -match '^(con|prn|aux|nul|com[0-9]|lpt[0-9])$')) { throw 'Invalid account name.' }
                                 if ($name -and (Test-Path -LiteralPath (Join-Path $accountRoot $name))) { throw 'That account already exists.' }
                             }
                             if ($name) {
+                                if($action -eq 'N'){
+                                    $enabledHarnesses=@(Get-DeckHarnessCatalog | Where-Object {Test-DeckHarnessEnabled $warmSettings $_.Id})
+                                    Write-Host ('Enabled harnesses: '+($enabledHarnesses.Id -join ', '))
+                                    $choice=Read-DeckTerminalInput 'Harness (empty = Codex)'
+                                    if($choice){$chosenHarness=(Get-DeckHarness $choice).Id}
+                                    if(-not (Test-DeckHarnessEnabled $warmSettings $chosenHarness)){throw 'Enable this harness in desktop Settings first.'}
+                                    $providerChoices=(Get-DeckHarness $chosenHarness).Providers
+                                    $chosenProvider=$providerChoices[0]
+                                    if($providerChoices.Count -gt 1){Write-Host ('Login providers: '+($providerChoices -join ', '));$choice=Read-DeckTerminalInput ('Provider (empty = '+$chosenProvider+')');if($choice){$chosenProvider=$choice}}
+                                }
                                 [void][IO.Directory]::CreateDirectory($accountRoot)
                                 $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$AuthScript,$name)
-                                if ($action -eq 'Enter' -and $autoCompact) { $arguments += @('-AutoCompact',(([int]$warmSettings.AutoCompactThresholdPercent).ToString()+'%')) }
+                                if ($action -eq 'Enter' -and $autoCompact -and (Test-DeckCodexAccount $SuiteRoot $name)) { $arguments += @('-AutoCompact',(([int]$warmSettings.AutoCompactThresholdPercent).ToString()+'%')) }
+                                if($action -eq 'N'){$arguments+=@('-NewAccount','-Harness',$chosenHarness,'-Provider',$chosenProvider)}
                                 if ($action -in @('L','N')) { $arguments += 'login' }
                                 $launchedAt=[DateTimeOffset]::UtcNow
                                 if($action -eq 'Enter'){$dashboardState.LastConversation=$null}
