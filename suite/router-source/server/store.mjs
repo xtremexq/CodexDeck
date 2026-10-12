@@ -17,6 +17,7 @@ export function defaultConfig() {
 export class Store {
   constructor(directory, { masterKey } = {}) {
     this.directory = directory;
+    this.allowWebProviders = true;
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     const keyFile = path.join(directory, process.platform === 'win32' ? 'key.dpapi' : 'key.bin');
     if (masterKey) this.key = masterKey;
@@ -51,5 +52,5 @@ export class Store {
     fs.writeFileSync(temporary, JSON.stringify({ config: this.config, vault }, null, 2), { mode: 0o600 });
     fs.renameSync(temporary, this.file);
   }
-  publicConfig() { return { ...structuredClone(this.config), clients: this.config.clients.map(({hash,...client}) => client), accounts: this.config.accounts.map(a => ({ ...a, hasKey: !!this.secrets.accounts[a.id] })) }; }
+  publicConfig() { return { ...structuredClone(this.config), clients: this.config.clients.map(({hash,pairingExtension,...client}) => client), accounts: this.config.accounts.map(a => ({ ...a, hasKey: !!this.secrets.accounts[a.id] })) }; }
 }

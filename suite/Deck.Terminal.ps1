@@ -440,7 +440,7 @@ function Show-DeckTerminal {
                     }else{
                         $warmSettings=Set-DeckAutoCompactLaunch $root (-not $autoCompact)
                         $autoCompact = [bool]$warmSettings.AutoCompactLaunchEnabled
-                        $notice = if($autoCompact){'Auto-compact enabled for account and pool launches ('+$warmSettings.AutoCompactMode+').'}else{'Auto-compact disabled.'}
+                        $notice = if($autoCompact){'Auto-compact enabled for future account and pool launches ('+$warmSettings.AutoCompactMode+').'}else{'Deck auto-compact disabled for future launches and shared-setting Custom sessions; Codex may still compact natively.'}
                     }
                 }
                 'R' {

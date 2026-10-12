@@ -17,7 +17,10 @@ export class Pairing{
     let approval;try{approval=JSON.parse(fs.readFileSync(this.approvals,'utf8').replace(/^\uFEFF/,''));}catch{}
     if(approval?.id!==id||approval?.code!==item.code)return {status:'pending'};
     fs.rmSync(this.approvals,{force:true});this.pending.delete(id);this.write();
-    const bridgeKey=newKey();this.store.config.clients.push({id:randomUUID(),name:'Chrome Router bridge',hash:await hashKey(bridgeKey),routes:this.store.config.routes.filter(r=>r.enabled).map(r=>r.id),rpm:60,enabled:true,created:new Date().toISOString()});this.store.save();
+    const bridgeKey=newKey();
+    this.store.config.clients=this.store.config.clients.filter(client=>!(client.pairingExtension===extension));
+    this.store.config.clients.push({id:randomUUID(),name:'Chrome Router bridge',hash:await hashKey(bridgeKey),routes:this.store.config.routes.filter(r=>r.enabled).map(r=>r.id),rpm:60,enabled:true,pairingExtension:extension,created:new Date().toISOString()});
+    await this.store.save();
     return {status:'approved',token:this.store.secrets.adminToken,bridgeKey};
   }
 }

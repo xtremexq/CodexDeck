@@ -8,6 +8,10 @@ export const providers = [
   { id: 'cloudflare', name: 'Cloudflare Workers AI', mark: 'CF', color: '#df864d', baseUrl: '', dialect: 'openai', capabilities: ['chat','embeddings'], docs: 'https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/' },
   { id: 'openrouter', name: 'OpenRouter', mark: 'OR', color: '#8580a9', baseUrl: 'https://openrouter.ai/api/v1', dialect: 'openai', capabilities: ['chat'], docs: 'https://openrouter.ai/settings/keys' },
   { id: 'mistral', name: 'Mistral', mark: 'M', color: '#d49a3d', baseUrl: 'https://api.mistral.ai/v1', dialect: 'openai', capabilities: ['chat','embeddings'], docs: 'https://console.mistral.ai/api-keys' },
+  { id: 'chatgpt-web', name: 'ChatGPT Web', mark: 'GPT', color: '#6e9c82', baseUrl: 'https://chatgpt.com', dialect: 'openai', capabilities: ['chat'], docs: 'https://chatgpt.com', webSession: true },
+  { id: 'claude-web', name: 'Claude Web', mark: 'C', color: '#bd7c5a', baseUrl: 'https://claude.ai', dialect: 'openai', capabilities: ['chat'], docs: 'https://claude.ai', webSession: true },
+  { id: 'gemini-web', name: 'Gemini Web', mark: 'G', color: '#6485af', baseUrl: 'https://gemini.google.com', dialect: 'openai', capabilities: ['chat'], docs: 'https://gemini.google.com', webSession: true },
+  { id: 'grok-web', name: 'Grok Web', mark: 'X', color: '#626260', baseUrl: 'https://grok.com', dialect: 'openai', capabilities: ['chat'], docs: 'https://grok.com', webSession: true },
   { id: 'custom', name: 'OpenAI-compatible', mark: '+', color: '#829484', baseUrl: '', dialect: 'openai', capabilities: ['chat','responses','embeddings','images','audio'], docs: 'https://github.com/ollama/ollama/blob/main/docs/openai.md' }
 ];
 export const providerById = id => providers.find(p => p.id === id);

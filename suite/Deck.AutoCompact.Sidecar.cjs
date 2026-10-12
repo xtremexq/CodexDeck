@@ -13,8 +13,8 @@ const COMPACT_READY_TIMEOUT_MS = 25000;
 const COMPACT_READY_RETRY_MS = 500;
 
 function optionsFromArgs(args) {
-  const options = {threshold:55, cwd:process.cwd(), codexExe:null, codexEntry:null, handoffRequest:null, serverConfig:[], mode:'Custom', autoEnabled:false};
-  const names = {'--threshold':'threshold','--cwd':'cwd','--codex-exe':'codexExe','--codex-entry':'codexEntry','--mode':'mode','--auto-enabled':'autoEnabled'};
+  const options = {threshold:55, cwd:process.cwd(), codexExe:null, codexEntry:null, handoffRequest:null, serverConfig:[], mode:'Custom', autoEnabled:false, settingsPath:null};
+  const names = {'--threshold':'threshold','--cwd':'cwd','--codex-exe':'codexExe','--codex-entry':'codexEntry','--mode':'mode','--auto-enabled':'autoEnabled','--settings-path':'settingsPath'};
   for(let i=0;i<args.length;i++) {
     const name=args[i];
     if(i+1>=args.length) throw Error(`Missing value for ${name}.`);
@@ -80,11 +80,29 @@ class RpcClient {
 }
 
 class ThreadObserver {
-  constructor(rpc, threshold, handoffRequest, report=()=>{}, mode='Custom', autoEnabled=true) {
+  constructor(rpc, threshold, handoffRequest, report=()=>{}, mode='Custom', autoEnabled=true, settingsPath=null) {
     this.rpc=rpc; this.threshold=threshold; this.handoffRequest=handoffRequest; this.report=report; this.mode=mode; this.autoEnabled=autoEnabled;
+    this.settingsPath=settingsPath;
     this.controllers=new Map(); this.pending=new Set(); this.subscribed=new Set(); this.serial=new Map();
     this.targetThreadId=null; this.selection=Promise.resolve(); this.discovery=Promise.resolve(); this.loadedIds=new Set(); this.attachErrors=new Map(); this.emptyDiscoveries=0; this.selectionError=null;
     this.readyTimeoutMs=COMPACT_READY_TIMEOUT_MS; this.readyRetryMs=COMPACT_READY_RETRY_MS;
+  }
+  setAutoEnabled(enabled) {
+    const next=Boolean(enabled);
+    if(this.autoEnabled===next) return;
+    const wasEnabled=this.autoEnabled;
+    this.autoEnabled=next;
+    for(const controller of this.controllers.values()) {
+      controller.autoEnabled=next;
+      if(next && !wasEnabled && controller.phase==='normal') controller.armed=true;
+    }
+  }
+  syncAutoEnabledFromSettings() {
+    if(!this.settingsPath) return;
+    try {
+      const settings=JSON.parse(fs.readFileSync(this.settingsPath,'utf8'));
+      if(typeof settings.AutoCompactLaunchEnabled==='boolean') this.setAutoEnabled(settings.AutoCompactLaunchEnabled);
+    } catch {}
   }
   async attach(threadId) {
     if(!threadId) return;
@@ -267,6 +285,7 @@ class ThreadObserver {
   }
   onNotification(message) {
     const event=message.params || {};
+    if(['turn/started','item/completed','thread/tokenUsage/updated','turn/completed','thread/status/changed'].includes(message.method)) this.syncAutoEnabledFromSettings();
     if(message.method==='thread/started' && event.thread?.id) {
       // The native TUI emits this for the conversation it starts or resumes. Child
       // threads belong to subagents and must never replace the observed conversation.
@@ -362,9 +381,10 @@ async function main() {
       reportedBytes+=Buffer.byteLength(line);
       process.stderr.write(line);
     };
-    observer=new ThreadObserver((method,params)=>client.call(method,params),options.threshold,options.handoffRequest,report,options.mode,options.autoEnabled);
+    observer=new ThreadObserver((method,params)=>client.call(method,params),options.threshold,options.handoffRequest,report,options.mode,options.autoEnabled,options.settingsPath);
     let retrying=false;
     poll=setInterval(async()=>{
+      observer.syncAutoEnabledFromSettings();
       if(retrying) return;
       retrying=true;
       try { await observer.retry(); }

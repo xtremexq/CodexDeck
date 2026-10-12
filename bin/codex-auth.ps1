@@ -1043,6 +1043,7 @@ if ($Account -eq 'plugin') {
 if($CheckAll -and @($PSBoundParameters.Keys | Where-Object {$_ -ne 'CheckAll'}).Count){
     throw '-a only works with the plain codex-auth dashboard command.'
 }
+$autoCompactWasExplicit=[bool]$AutoCompact
 $autoCompactThresholdOverride=$null
 if($AutoCompact -and $CodexArgs -and [string]$CodexArgs[0] -match '^([0-9]+)%$'){
     $autoCompactThresholdOverride=[int]$Matches[1]
@@ -1385,6 +1386,7 @@ try {
             $serverConfigJson = ConvertTo-Json -InputObject ([object[]]$serverConfigArgs) -Compress -Depth 10
             $serverConfigEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($serverConfigJson))
             $sidecarArgs = @($sidecarPath,'--codex-exe',$codexExecutable,'--threshold',[string]$threshold,'--cwd',(Get-Location).Path,'--handoff-base64',$handoffEncoded,'--server-config-base64',$serverConfigEncoded,'--mode',$compactSettings.AutoCompactMode,'--auto-enabled',([string][bool]$deckCustomAutoCompact).ToLowerInvariant())
+            if($deckCustomAutoCompact -and -not $autoCompactWasExplicit){$sidecarArgs+=@('--settings-path',(Join-Path $suiteRoot 'deck/settings.json'))}
             if ($codexEntry) { $sidecarArgs += @('--codex-entry',$codexEntry) }
             $nodeExecutable = (Get-Command node.exe -ErrorAction Stop).Source
             $startInfo = [Diagnostics.ProcessStartInfo]::new()

@@ -7,11 +7,12 @@ import { endpoints } from './catalog.mjs';
 import { HttpError, requireThat, errorBody } from './errors.mjs';
 import { equalToken, tokenHash } from './store.mjs';
 import { Router } from './router.mjs';
-import { deckAccounts, launchDeck } from './deck.mjs';
+import { WebProviderBridge } from './web-provider-bridge.mjs';
+import { deckAccounts, launchDeck, runDeckChat } from './deck.mjs';
 
 const uiRoot = fileURLToPath(new URL('../ui/',import.meta.url));
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
-const staticFiles = new Set(['index.html','app.js','style.css','logo.svg']);
+const staticFiles = new Set(['index.html','app.js','style.css','logo.svg',...['anthropic','claude','cloudflare','compatible','deepseek','gemini','grok','mistral','openai','openrouter','xai'].map(name=>`icons-${name}.svg`)]);
 const MAX_BODY = 24 * 1024 * 1024;
 async function readBuffer(req) {
   let size = 0; const chunks = [];
@@ -25,6 +26,12 @@ async function readJson(req) {
 }
 const send = (res, status, value) => { res.writeHead(status,{ 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
 export function createApp(store, { router = new Router(store), deckLauncher = launchDeck, pairing } = {}) {
+  const webProviderBridge=new WebProviderBridge(store);
+  const upstreamFetch=router.adapters?.fetch;
+  if(typeof upstreamFetch==='function')router.adapters.fetch=(url,options={})=>options.headers?.['x-aideck-web-provider']?webProviderBridge.fetch(url,options):upstreamFetch(url,options);
+  router.webProviderBridge=webProviderBridge;
+  const deck={list:()=>deckAccounts(store.config.settings),launch:input=>deckLauncher(store.config.settings,input),run:(account,harness,model,body,signal)=>runDeckChat(store.config.settings,account,harness,model,body,signal)};
+  router.deck=deck;
   const rates = new Map();
   const server = http.createServer(async (req,res) => {
     const controller = new AbortController();
@@ -73,7 +80,7 @@ export function createApp(store, { router = new Router(store), deckLauncher = la
       if (url.pathname.startsWith('/admin/')) {
         requireThat(admin && own,'This action requires the owner key from the local dashboard or extension.',403);
         const body = ['POST','PUT'].includes(req.method) ? await readJson(req) : {};
-        const value = await administer(store,router,url.pathname,{method:req.method,body,signal:AbortSignal.any([controller.signal,AbortSignal.timeout(store.config.settings.timeoutMs)]),deck:{list:()=>deckAccounts(store.config.settings),launch:input=>deckLauncher(store.config.settings,input)}});
+        const value = await administer(store,router,url.pathname,{method:req.method,body,signal:AbortSignal.any([controller.signal,AbortSignal.timeout(store.config.settings.timeoutMs)]),deck});
         send(res,req.method==='POST' && url.pathname==='/admin/clients'?201:200,value);return;
       }
       if (url.pathname === '/v1/models' && req.method === 'GET') { send(res,200,{ object: 'list', data: router.models(client) }); return; }
@@ -99,7 +106,11 @@ export function createApp(store, { router = new Router(store), deckLauncher = la
       }
     }
   });
+  server.on('upgrade',(request,socket,head)=>{
+    if(request.url!=='/extension-bridge'){socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');return;}
+    webProviderBridge.upgrade(request,socket,head);
+  });
   server.headersTimeout = 10000;
   server.requestTimeout = 30000;
-  return { server, router, listen: (port = 0) => new Promise((resolve,reject) => { const fail=error=>reject(error);server.once('error',fail);server.listen(port,'127.0.0.1',() => {server.off('error',fail);resolve(server.address().port);}); }), close: async () => { server.closeIdleConnections(); await new Promise(resolve => server.close(resolve)); await router.adapters.close(); } };
+  return { server, router, listen: (port = 0) => new Promise((resolve,reject) => { const fail=error=>reject(error);server.once('error',fail);server.listen(port,'127.0.0.1',() => {server.off('error',fail);resolve(server.address().port);}); }), close: async () => { webProviderBridge.close();server.closeIdleConnections(); await new Promise(resolve => server.close(resolve)); await router.adapters.close(); } };
 }

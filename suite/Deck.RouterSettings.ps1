@@ -25,7 +25,7 @@ $routerRefresh={
     $status=& $routerCommands['Get-DeckRouterStatus'] $routerContext.Suite
     $routerStatus.Text=if($status.Ready){'Ready: http://127.0.0.1:5147/v1'}elseif($status.Enabled){'Enabled: starting or restarting. Check deck/ai-router/server-error.log and supervisor-error.log if this persists.'}elseif($status.Installed){'Installed. Enable the server to pair.'}else{'Not installed. Node.js 22 or newer is required.'}
     $routerRequests.Items.Clear()
-    foreach($pending in $status.Pending){if($pending -and $pending.expires -gt [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()){$item=[Windows.Controls.ComboBoxItem]::new();$item.Content=$pending.code+' / '+$pending.extension;$item.Tag=$pending;[void]$routerRequests.Items.Add($item)}}
+    foreach($pending in @(Expand-DeckRouterPending $status.Pending)){if($pending -and $pending.expires -gt [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()){$item=[Windows.Controls.ComboBoxItem]::new();$item.Content=('{0} / {1}' -f [string]$pending.code,[string]$pending.extension);$item.Tag=$pending;[void]$routerRequests.Items.Add($item)}}
     if($routerRequests.Items.Count){$routerRequests.SelectedIndex=0};$routerApprove.IsEnabled=$routerRequests.Items.Count -gt 0
 }.GetNewClosure()
 $routerButtons['Refresh'].Add_Click($routerRefresh)

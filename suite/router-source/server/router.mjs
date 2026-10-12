@@ -1,21 +1,30 @@
 const randomUUID = () => globalThis.crypto.randomUUID();
 import { endpoints } from './catalog.mjs';
 import { HttpError, requireThat } from './errors.mjs';
-import { Adapters, fromAnthropic, anthropicStream, chatToMessages, messagesStream } from './adapters.mjs';
+import { Adapters, fromAnthropic, anthropicStream, chatToMessages, messagesStream, messagesToChat } from './adapters.mjs';
+
+const clientCanUseRoute=(client,routeId)=>!client||client.routes?.includes('*')||client.routes?.includes(routeId);
 
 export class Router {
-  constructor(store, adapters = new Adapters()) { this.store = store; this.adapters = adapters; this.cooldowns = new Map(); this.cursors = new Map(); this.events = []; this.active = 0; this.count = 0; }
+  constructor(store, adapters = new Adapters(), deck = null) { this.store = store; this.adapters = adapters; this.deck = deck; this.cooldowns = new Map(); this.cursors = new Map(); this.events = []; this.active = 0; this.count = 0; }
   record(event) { this.events.unshift({ at: new Date().toISOString(), ...event }); this.events.length = Math.min(this.events.length,200); }
   models(client) {
-    return this.store.config.routes.filter(r => r.enabled && (!client || client.routes.includes(r.id))).map(r => ({ id: r.id, object: 'model', created: 0, owned_by: 'aideck-router' }));
+    return this.store.config.routes.filter(r => r.enabled && clientCanUseRoute(client,r.id)).map(r => ({ id: r.id, object: 'model', created: 0, owned_by: 'aideck-router' }));
   }
   select(body, capability, client) {
     const config = this.store.config;
     const alias = body.model || config.settings.defaultRoute;
     const route = config.routes.find(r => r.id === alias && r.enabled);
     requireThat(route, 'No enabled route matches this model. Create a route alias in AIDeck Router.', 404);
-    requireThat(!client || client.routes.includes(route.id), 'This integration key cannot use that route.', 403);
-    let targets = route.targets.map(t => ({ ...t, accountConfig: config.accounts.find(a => a.id === t.account && a.enabled && (a.capabilities.includes(capability) || capability==='messages' && a.capabilities.includes('chat'))) })).filter(t => t.accountConfig);
+    requireThat(clientCanUseRoute(client,route.id), 'This integration key cannot use that route.', 403);
+    const deckAccounts=this.deck?.list().accounts||[];
+    let targets = route.targets.map(t => {
+      if(t.account.startsWith('deck:')){
+        const native=deckAccounts.find(a=>`deck:${a.id}`===t.account&&a.routable&&a.harness==='Codex');
+        return {...t,accountConfig:native&&(capability==='chat'||capability==='messages')?{id:t.account,deckAccountId:native.id,harness:native.harness,provider:native.provider,name:`${native.id} · ${native.harness}`,enabled:true,capabilities:['chat'],native:true}:null};
+      }
+      return {...t,accountConfig:config.accounts.find(a=>a.id===t.account&&a.enabled&&(a.capabilities.includes(capability)||capability==='messages'&&a.capabilities.includes('chat')))};
+    }).filter(t => t.accountConfig);
     requireThat(targets.length, `No enabled target on ${route.id} supports ${capability}.`, 501);
     if (route.strategy === 'round-robin') { const offset = (this.cursors.get(route.id) || 0) % targets.length; this.cursors.set(route.id,offset+1); targets = [...targets.slice(offset), ...targets.slice(0,offset)]; }
     if (!route.failover) targets = targets.slice(0,1);
@@ -35,13 +44,30 @@ export class Router {
         attempts++;
         const account = target.accountConfig;
         const combinedSignal = AbortSignal.any([signal, AbortSignal.timeout(this.store.config.settings.timeoutMs)]);
-        let response;
+        let response, upstream;
         try {
-          const payload = { ...body, model: target.model };
+          let payload = { ...body, model: target.model };
+          let nativeReverse=false;
+          if(account.native){
+            if(endpoint==='/messages'){payload=messagesToChat(payload);payload.model=target.model;nativeReverse=true;}
+            const value=await this.deck.run(account.deckAccountId,account.harness,target.model,payload,combinedSignal);
+            let content;
+            if(body.stream){
+              const id=value.id,created=value.created,model=value.model,choice=value.choices[0],chunks=[
+                {id,object:'chat.completion.chunk',created,model,choices:[{index:0,delta:{role:'assistant'},finish_reason:null}]},
+                ...(choice.message.content?[{id,object:'chat.completion.chunk',created,model,choices:[{index:0,delta:{content:choice.message.content},finish_reason:null}]}]:[]),
+                {id,object:'chat.completion.chunk',created,model,choices:[{index:0,delta:{},finish_reason:choice.finish_reason}],...(body.stream_options?.include_usage?{usage:value.usage}: {})}
+              ];
+              content=''+chunks.map(chunk=>`data: ${JSON.stringify(chunk)}\n\n`).join('')+'data: [DONE]\n\n';
+            }else content=JSON.stringify(value);
+            response=new Response(content,{status:200,headers:{'content-type':body.stream?'text/event-stream':'application/json'}});
+            upstream={response,translated:false,reverse:nativeReverse,native:true};
+          }else{
           let outgoing=payload;
           if(rawOptions?.form){outgoing=new FormData();for(const[key,value]of rawOptions.form)if(key!=='model')outgoing.append(key,value);outgoing.set('model',target.model);}
-          const upstream = await this.adapters.request(account,this.store.secrets.accounts[account.id] || '',endpoint,outgoing,combinedSignal,rawOptions);
+          upstream = await this.adapters.request(account,this.store.secrets.accounts[account.id] || '',endpoint,outgoing,combinedSignal,rawOptions);
           response = upstream.response;
+          }
           if (!response.ok) {
             await response.body?.cancel();
             const retryable = [408,409,425,429,500,502,503,504,529].includes(response.status) || (route.retryAuthErrors && [401,403].includes(response.status));
@@ -52,6 +78,7 @@ export class Router {
             throw error;
           }
           const headers = { 'x-aideck-route': route.id, 'x-aideck-account': account.id, 'x-request-id': requestId, 'cache-control': 'no-store' };
+          if (account.native && body.stream) headers['x-aideck-streaming'] = 'buffered';
           // Hold headers until the first body read succeeds. Never replay an emitted stream.
           if ((upstream.translated || upstream.reverse) && body.stream) {
             const generator = upstream.reverse ? messagesStream(response.body,target.model) : anthropicStream(response.body,target.model,body.stream_options?.include_usage);

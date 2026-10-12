@@ -468,7 +468,7 @@ function Update-DeckPanelControls {
     $EfficiencyButton.ToolTip=if($settings.EfficiencyAnalyticsEnabled){'Open independent local efficiency analytics'}else{'Enable Efficiency Analytics in Deck Settings first'}
     $compactOn=[bool]$settings.AutoCompactLaunchEnabled
     $AutoCompactButton.Content='Auto-compact '+$(if($compactOn){'On'}else{'Off'})
-    $AutoCompactButton.ToolTip=if($compactOn){'Auto-compaction is enabled for terminals opened next. Click to disable it.'}else{'Auto-compaction is disabled for terminals opened next. Click to enable it.'}
+    $AutoCompactButton.ToolTip=if($compactOn){'Deck auto-compaction is enabled for future terminals. Turning it off stops automatic handoffs in shared-setting Custom sessions already running; Native sessions keep their startup threshold.'}else{'Deck auto-compaction is disabled for future terminals and shared-setting Custom sessions already running. Codex CLI may still compact natively at its built-in threshold.'}
     $AutoCompactButton.Foreground=if($compactOn){'#8CE6CD'}else{'#DDE2E7'}
     $AutoCompactButton.Background=if($compactOn){'#24463F'}else{'#181A1D'}
 }
@@ -1627,7 +1627,7 @@ $AutoCompactButton.Add_Click({
         if($SmokeTest -or $Demo){$settings.AutoCompactLaunchEnabled=$enabled}else{$script:settings=Set-DeckAutoCompactLaunch $root $enabled}
         if(-not $SmokeTest -and -not $Demo){$settingsItem=Get-Item -LiteralPath (Join-Path $root 'settings.json') -ErrorAction SilentlyContinue;if($settingsItem){$script:settingsStamp=$settingsItem.LastWriteTimeUtc.Ticks}}
         Update-DeckPanelControls
-        $script:notice='Auto-compact '+$(if($enabled){'enabled'}else{'disabled'})+' for terminals opened next.'
+        $script:notice=if($enabled){'Auto-compact enabled for terminals opened next.'}else{'Deck auto-compact disabled for future terminals and shared-setting Custom sessions. Codex may still compact natively.'}
         $script:lastRender=''; Render-Deck
     }catch{$script:notice='Auto-compact setting failed: '+$_.Exception.Message;$script:lastRender='';Render-Deck}
 })

@@ -2,11 +2,24 @@
     $root=Join-Path $SuiteRoot 'deck/ai-router'
     @{Root=$root;App=(Join-Path $root 'app');Data=(Join-Path $root 'data');Service=(Join-Path $root 'service.json')}
 }
+function Expand-DeckRouterPending($Value) {
+    foreach($entry in $Value){
+        if($null -eq $entry){continue}
+        if($entry -is [System.Collections.IEnumerable] -and $entry -isnot [string] -and $entry -isnot [System.Collections.IDictionary]){Expand-DeckRouterPending $entry;continue}
+        $valueProperty=$entry.PSObject.Properties['value'];$countProperty=$entry.PSObject.Properties['Count']
+        if($valueProperty -and $countProperty){Expand-DeckRouterPending $valueProperty.Value;continue}
+        $idProperty=$entry.PSObject.Properties['id'];$codeProperty=$entry.PSObject.Properties['code'];$extensionProperty=$entry.PSObject.Properties['extension'];$expiresProperty=$entry.PSObject.Properties['expires']
+        if(-not $idProperty -or -not $codeProperty -or -not $extensionProperty -or -not $expiresProperty){continue}
+        $id=[string]$idProperty.Value;$code=[string]$codeProperty.Value;$extension=[string]$extensionProperty.Value
+        if($id -notmatch '^[a-f0-9-]{36}$' -or $code -notmatch '^\d{6}$' -or $extension -notmatch '^[a-p]{32}$'){continue}
+        [pscustomobject]@{id=$id;code=$code;extension=$extension;expires=[long]$expiresProperty.Value}
+    }
+}
 function Get-DeckRouterStatus([string]$SuiteRoot) {
     $paths=Get-DeckRouterPaths $SuiteRoot; $service=Read-DeckJson $paths.Service
     $ready=$false
     if($service.Enabled){try{$health=Invoke-RestMethod 'http://127.0.0.1:5147/health' -TimeoutSec 1;$ready=$health.name -eq 'AIDeck Router'}catch{}}
-    @{Installed=(Test-Path -LiteralPath (Join-Path $paths.App 'server/index.mjs'));Enabled=[bool]$service.Enabled;Ready=$ready;Pending=@(Read-DeckJson (Join-Path $paths.Data 'pairing.json'));Paths=$paths}
+    @{Installed=(Test-Path -LiteralPath (Join-Path $paths.App 'server/index.mjs'));Enabled=[bool]$service.Enabled;Ready=$ready;Pending=@(Expand-DeckRouterPending (Read-DeckJson (Join-Path $paths.Data 'pairing.json')));Paths=$paths}
 }
 function Stop-DeckRouter([string]$SuiteRoot) {
     $paths=Get-DeckRouterPaths $SuiteRoot
@@ -74,7 +87,7 @@ function Open-DeckRouterDashboard([string]$SuiteRoot) {
 }
 function Approve-DeckRouterPairing([string]$SuiteRoot,[string]$Id,[string]$Code) {
     $paths=Get-DeckRouterPaths $SuiteRoot
-    $pending=@(Read-DeckJson (Join-Path $paths.Data 'pairing.json')) | Where-Object {$_.id -eq $Id -and $_.code -ceq $Code -and $_.expires -gt [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()}
+    $pending=@(Expand-DeckRouterPending (Read-DeckJson (Join-Path $paths.Data 'pairing.json'))) | Where-Object {$_.id -eq $Id -and $_.code -ceq $Code -and $_.expires -gt [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()}
     if(-not $pending){throw 'Pairing request expired. Request a new code in the extension.'}
     Write-DeckJson (Join-Path $paths.Data 'approvals.json') @{id=$Id;code=$Code}
 }

@@ -184,6 +184,13 @@ export class Adapters {
     const headers = { 'content-type': contentType, accept: body?.stream ? 'text/event-stream' : '*/*' };
     if (provider.dialect === 'anthropic') { headers['x-api-key'] = key; headers['anthropic-version'] = '2023-06-01'; }
     else if (key) headers.authorization = `Bearer ${key}`;
+    if (provider.webSession) {
+      headers['x-aideck-web-provider'] = provider.id;
+      headers['x-aideck-web-account'] = account.id;
+      headers['x-aideck-web-transport'] = account.webOptions?.transport || 'api-v2';
+      headers['x-aideck-web-images'] = account.webOptions?.images === false ? 'false' : 'true';
+      headers['x-aideck-web-tools'] = account.webOptions?.tools === false ? 'false' : 'true';
+    }
     if (provider.id === 'openrouter') headers['X-OpenRouter-Title'] = 'AIDeck Router';
     const payload = translated ? toAnthropic(body) : reverse ? messagesToChat(body) : body;
     let requestBody = raw ? body : JSON.stringify(payload);
