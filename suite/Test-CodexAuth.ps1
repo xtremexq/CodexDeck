@@ -16,7 +16,7 @@ try {
     $invalidCheckAllExit=$LASTEXITCODE
 } finally { $ErrorActionPreference=$savedErrorPreference }
 if($invalidCheckAllExit -eq 0 -or ($invalidCheckAll -join "`n") -notmatch 'only works with the plain codex-auth dashboard command'){throw 'codex-auth -a accepted a non-plain command'}
-foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Get-AccountDirectories','Find-DeckConversationOwner','Normalize-AccountName','Ensure-FreeAccountDefaults','Ensure-AccountInstructions','Read-TextFile','Write-TextFile','Normalize-Newlines','ConvertTo-DeckWindowsArgument','Invoke-DeckCodex','Write-DeckSessionExit','Get-DeckSessionRoutingArguments','ConvertFrom-DeckTomlScalar','Get-DeckTomlTopLevelValue','Get-DeckCodexArgumentSetting','Get-DeckNativeAutoCompactConfiguration','Open-DeckLaunchInspector') {
+foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Get-AccountDirectories','Find-DeckConversationOwner','Normalize-AccountName','Ensure-FreeAccountDefaults','Ensure-AccountSandboxDefaults','Ensure-AccountInstructions','Read-TextFile','Write-TextFile','Normalize-Newlines','Trim-TrailingNewlines','Get-SettingLine','ConvertTo-DeckWindowsArgument','Invoke-DeckCodex','Write-DeckSessionExit','Get-DeckSessionRoutingArguments','ConvertFrom-DeckTomlScalar','Get-DeckTomlTopLevelValue','Get-DeckCodexArgumentSetting','Get-DeckNativeAutoCompactConfiguration','Open-DeckLaunchInspector') {
     $definition=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $true)
     . ([scriptblock]::Create($definition.Extent.Text))
 }
@@ -141,6 +141,21 @@ foreach ($plan in 'plus','free') {
 $before=Read-TextFile (Join-Path $newAccount 'config.toml')
 Ensure-FreeAccountDefaults $newAccount
 if ((Read-TextFile (Join-Path $newAccount 'config.toml')) -ne $before) { throw 'Defaults not idempotent' }
+$defaultConfigPath=Join-Path $fixture 'global-config.toml'
+Write-TextFile $defaultConfigPath "sandbox_mode = `"danger-full-access`"`napproval_policy = `"never`"`n[features]`napps = true`n"
+$freshAccount=Join-Path $accountsRoot 'fresh'
+$freshBootstrap=Initialize-AccountDirectory 'fresh' $freshAccount
+if(-not $freshBootstrap.Created){throw 'Fresh account fixture was not created'}
+Write-TextFile (Join-Path $freshAccount 'config.toml') "model = `"test-model`"`n[features]`napps = true`n"
+Ensure-AccountSandboxDefaults $freshAccount
+$freshConfig=Read-TextFile (Join-Path $freshAccount 'config.toml')
+if($freshConfig -notmatch '(?m)^sandbox_mode = "danger-full-access"$' -or $freshConfig -notmatch '(?m)^approval_policy = "never"$' -or $freshConfig -notmatch '(?m)^\[features\]$'){throw 'New accounts did not inherit missing global permission defaults without damaging config tables'}
+$customAccount=Join-Path $accountsRoot 'custom-permissions'
+[void][IO.Directory]::CreateDirectory($customAccount)
+Write-TextFile (Join-Path $customAccount 'config.toml') "sandbox_mode = `"workspace-write`"`napproval_policy = `"on-request`"`n"
+Ensure-AccountSandboxDefaults $customAccount
+$customConfig=Read-TextFile (Join-Path $customAccount 'config.toml')
+if($customConfig -notmatch '(?m)^sandbox_mode = "workspace-write"$' -or $customConfig -notmatch '(?m)^approval_policy = "on-request"$'){throw 'Account-specific sandbox and approval settings were overwritten'}
 $started=[DateTimeOffset]::Now.AddMinutes(-1)
 Write-DeckSessionExit (Join-Path $fixture 'deck') 'account2' 17 $started $true 9 'account7'
 $exitRecord=(Get-Content -LiteralPath (Join-Path $fixture 'deck/session-exits.jsonl') -Raw | ConvertFrom-Json)

@@ -486,6 +486,28 @@ function Ensure-FreeAccountDefaults {
     if ($prefix) { Write-TextFile -Path $path -Content ($prefix + $config) }
 }
 
+function Ensure-AccountSandboxDefaults {
+    param([string]$AccountDir)
+    $defaultConfig = Normalize-Newlines (Read-TextFile $defaultConfigPath)
+    if ([string]::IsNullOrWhiteSpace($defaultConfig)) { return }
+    $defaultTop = ($defaultConfig -split '(?m)^\[', 2)[0]
+    $path = Join-Path $AccountDir 'config.toml'
+    $config = Normalize-Newlines (Read-TextFile $path)
+    $accountTop = ($config -split '(?m)^\[', 2)[0]
+    $updated = $config
+    foreach ($key in @('sandbox_mode','approval_policy')) {
+        if (Get-SettingLine -Config $accountTop -Key $key) { continue }
+        $line = Get-SettingLine -Config $defaultTop -Key $key
+        if (-not $line) { continue }
+        $tableMatch = [regex]::Match($updated, '(?m)^\[')
+        if ($tableMatch.Success) { $updated = $updated.Insert($tableMatch.Index, "$line`n") }
+        elseif ([string]::IsNullOrWhiteSpace($updated)) { $updated = "$line`n" }
+        else { $updated = "$(Trim-TrailingNewlines $updated)`n$line`n" }
+        $accountTop = ($updated -split '(?m)^\[', 2)[0]
+    }
+    if ($updated -ne $config) { Write-TextFile -Path $path -Content $updated }
+}
+
 function Ensure-AccountInstructions {
     param([string]$AccountDir)
     $path = Join-Path $AccountDir 'AGENTS.md'
@@ -1207,6 +1229,7 @@ Write-TextFile $configPath $loginConfig
 if($CodexArgs -and $CodexArgs[0] -eq 'login' -and @($CodexArgs | Where-Object {$_ -in @('--with-api-key','--api-key')}).Count){throw 'Codex Deck accounts require ChatGPT sign-in.'}
 Ensure-AccountInstructions -AccountDir $accountDir
 Ensure-FreeAccountDefaults -AccountDir $accountDir
+if ($bootstrapResult.Created) { Ensure-AccountSandboxDefaults -AccountDir $accountDir }
 if(Get-Command Sync-DeckBundledSkills -ErrorAction SilentlyContinue){
     foreach($warning in @(Sync-DeckBundledSkills $runtimeRoot $accountName)){if($warning){Write-Warning $warning}}
 }

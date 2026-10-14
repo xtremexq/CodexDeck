@@ -292,6 +292,9 @@ async function createProxy(config, dependencies = {}) {
   // owner now and other accounts lazily, so one damaged unused login cannot
   // prevent an ordinary account from opening.
   if (automatic) for (const name of pool) getCredentials(name); else getCredentials(current);
+  const initialAccount = current;
+  const responseAccounts = new Map();
+  const defaultThreadKey = '\u0000default';
   const secret = crypto.randomBytes(32).toString('hex');
   let activeRequests = 0;
   let lastRequestAccount = null;
@@ -376,11 +379,12 @@ async function createProxy(config, dependencies = {}) {
         const decode = {gzip:zlib.gunzipSync,deflate:zlib.inflateSync,br:zlib.brotliDecompressSync,zstd:zlib.zstdDecompressSync}[encoding];
         try { body = decode(body, {maxOutputLength:MAX_BODY}); } catch { return reply(res, 400, 'Invalid or oversized compressed request.'); }
       }
-      let bound = false;
+      let bound = false, conversationKey = defaultThreadKey;
       if (conversation) {
         let parsed; try { parsed = JSON.parse(body); } catch { return reply(res, 400, 'Expected JSON request.'); }
+        conversationKey = contextThreadId(req.headers, parsed) || defaultThreadKey;
         if (contextEnabled) {
-          const threadId=contextThreadId(req.headers,parsed);
+          const threadId=conversationKey === defaultThreadKey ? null : conversationKey;
           if(threadId && threadId!==contextThread){
             if(contextThread)threadRules.set(contextThread,contextRules);
             contextRules=threadRules.get(threadId) || new Map();
@@ -417,7 +421,14 @@ async function createProxy(config, dependencies = {}) {
             resetProbes.add(current);
           }
         }
-        const used = current, auth = getCredentials(used);
+        const used = current;
+        if (conversation && bound) {
+          const responseOwner = responseAccounts.get(conversationKey) || initialAccount;
+          if (responseOwner.toLowerCase() !== used.toLowerCase()) {
+            return reply(res, 409, `This request contains account-scoped history created by ${responseOwner}. Switch back to that account or start a new conversation before using another account.`);
+          }
+        }
+        const auth = getCredentials(used);
         lastRequestAccount = used;
         lastRequestRoute = routePath;
         const headers = {};
@@ -459,6 +470,7 @@ async function createProxy(config, dependencies = {}) {
           }
           res.writeHead(429, { 'content-type':'application/json', 'cache-control':'no-store' }); res.end(rejected); return;
         }
+        if (conversation && incoming.statusCode >= 200 && incoming.statusCode < 300) responseAccounts.set(conversationKey, used);
         resetProbes.delete(used);
         const responseHeaders = { 'cache-control':'no-store' };
         const blockedResponseHeaders = new Set(['connection','proxy-connection','transfer-encoding','upgrade','set-cookie']);
