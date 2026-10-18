@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.8.8 - 2026-10-18
+
 - Avoided Windows `File.Replace` when detaching legacy shared account instructions; rename the hard link with recovery so a ReplaceFile failure cannot abort resume.
 - Made shared-setting Custom auto-compaction observe the live Deck toggle in already-running sessions, and clarified that Codex's native auto-compaction remains active when Deck automation is off.
 - Fixed warm-up workers sleeping through updated account quota and selection changes, retained discovered reset times across grace checks, and used current quota data from both dashboards when scheduling.
