@@ -12,6 +12,9 @@ Assert ($source -match '(?m)refreshToken\s*=\s*\$false') 'App-server quota fallb
 $syntheticHttpError=[pscustomobject]@{Exception=[pscustomobject]@{Response=[pscustomobject]@{StatusCode=401;Content=$null};Message='Unauthorized';InnerException=$null}}
 $httpDetails=Get-UsageHttpErrorDetails $syntheticHttpError
 Assert ($httpDetails.StatusCode -eq 401 -and $httpDetails.Message -match 'HTTP 401') 'HTTP failure status was not retained for fallback suppression'
+$providerErrorDetails=[pscustomobject]@{Exception=[pscustomobject]@{Response=[pscustomobject]@{StatusCode=401;Content=$null};Message='Unauthorized';InnerException=$null};ErrorDetails=[pscustomobject]@{Message='{"error":{"code":"token_revoked","message":"invalidated oauth token"}}'}}
+$providerDetails=Get-UsageHttpErrorDetails $providerErrorDetails
+Assert ($providerDetails.StatusCode -eq 401 -and $providerDetails.Message -match 'token_revoked') 'PowerShell HTTP error body did not preserve the provider OAuth rejection code'
 Add-Type -AssemblyName System.Net.Http
 $syntheticHttpResponse=[System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Unauthorized)
 try {

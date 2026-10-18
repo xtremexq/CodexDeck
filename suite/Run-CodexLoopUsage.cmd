@@ -365,7 +365,9 @@ function Get-UsageHttpErrorDetails {
     param([Parameter(Mandatory = $true)][object]$ErrorRecord)
 
     $statusCode = 0
-    $body = $null
+    $details = Get-PropertyValue -Object $ErrorRecord -Name 'ErrorDetails'
+    $body = [string](Get-PropertyValue -Object $details -Name 'Message' -Default '')
+    if ([string]::IsNullOrWhiteSpace($body)) { $body = $null }
     $exception = $ErrorRecord.Exception
     while ($exception) {
         $response = Get-PropertyValue -Object $exception -Name 'Response'
