@@ -115,6 +115,14 @@ function Invoke-DeckWarmupWorker {
     $now=[DateTimeOffset]::Now; $unix=$now.ToUnixTimeSeconds()
     $warmJobs=@{}
     foreach($account in @($requests.Keys)){$warmJobs[$account]=[pscustomobject]@{Mode=[string]$requests[$account].Request.Mode;Reset=0;Path=$requests[$account].Path}}
+    foreach($account in @($warmJobs.Keys)){
+        $job=$warmJobs[$account]
+        if($job.Mode -ne 'Timed'){continue}
+        if($account -in $checked -and $cache[$account].Status -eq 'available' -and -not $cache[$account].Error){continue}
+        if($job.Path){Remove-Item -LiteralPath $job.Path -ErrorAction SilentlyContinue}
+        $warmJobs.Remove($account)
+        Write-DeckWarmupLog ("skipped timed warm-up for ${account}: current quota check failed or account is unavailable")
+    }
     foreach($account in @($accounts)){
         $record=$cache[$account]; if(-not $record -or $account -notin $checked){continue}
         $previous=Get-DeckWarmupReset $record $resets[$account] $unix

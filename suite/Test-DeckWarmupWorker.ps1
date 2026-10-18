@@ -100,6 +100,20 @@ Assert (@($starts | Where-Object Kind -eq 'Warm-up').Count -eq 0) 'Failed quota 
 Assert ($failedCache.account1.Status -eq 'error' -and $failedCache.account1.Error -match 'Synthetic quota') 'Quota failure was absent from persisted state'
 Assert (([DateTimeOffset]$state.NextRun) -ge $now.AddMinutes(19)) 'Quota failure did not back off'
 
+New-Fixture failed-timed-check
+$now=[DateTimeOffset]::Now
+$settings.WarmupTimedEnabled=$true
+$settings.WarmupTimes='08:00'
+Write-DeckJson (Join-Path $root 'settings.json') $settings
+$responses.account1=New-Quota account1 ($now.AddHours(5).ToUnixTimeSeconds())
+Write-DeckJson (Join-Path $root 'cache.json') @($responses.account1)
+$script:failChecks=@('account1')
+Write-DeckJson (Join-Path $root 'warmup-requests/account1.json') @{Account='account1';Mode='Timed';At=$now.ToUnixTimeSeconds()}
+Invoke-DeckWarmupWorker
+Assert (@($starts | Where-Object Kind -eq 'Warm-up').Count -eq 0) 'Timed warm-up ran after its current quota check failed'
+Assert (-not (Test-Path (Join-Path $root 'warmup-requests/account1.json'))) 'Failed timed request remained queued'
+Assert ((Get-Content -LiteralPath $logPath -Raw) -match 'skipped timed warm-up for account1') 'Skipped timed warm-up was not diagnosed'
+
 New-Fixture failed-warmup
 $now=[DateTimeOffset]::Now
 $responses.account1=New-Quota account1 ($now.AddHours(5).ToUnixTimeSeconds())
