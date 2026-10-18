@@ -55,6 +55,10 @@ Write-DeckJson (Join-Path $SuiteRoot 'accounts/account1/auth.json') @{tokens=@{a
 $duplicateSelection=@{account1=[pscustomobject]@{PlanType='free'};account2=[pscustomobject]@{PlanType='free'}}
 $deduplicated=@(Get-DeckWarmupAccounts $SuiteRoot $settings $duplicateSelection)
 Assert ($deduplicated.Count -eq 1 -and $deduplicated[0] -eq 'account1') 'Duplicate profile names scheduled separate prompts for the same OpenAI quota identity'
+$duplicateSelection.account1=[pscustomobject]@{PlanType='free';Status='error';Error='token_revoked'}
+$duplicateSelection.account2=[pscustomobject]@{PlanType='free';Status='available';Error=$null}
+$deduplicated=@(Get-DeckWarmupAccounts $SuiteRoot $settings $duplicateSelection)
+Assert ($deduplicated.Count -eq 1 -and $deduplicated[0] -eq 'account2') 'A healthy alias was not preferred over a revoked duplicate profile'
 
 New-Fixture discovery
 $caseStart=[DateTimeOffset]::Now.ToUnixTimeSeconds()

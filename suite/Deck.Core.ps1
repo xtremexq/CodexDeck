@@ -910,14 +910,22 @@ function Get-DeckOAuthAccountId([string]$SuiteRoot,[string]$Account) {
 }
 function Get-DeckWarmupAccounts([string]$SuiteRoot, $Settings, $Cache = @{}) {
     $seenIdentities=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $eligible=@()
     foreach($account in @(Get-DeckSignedInAccounts $SuiteRoot)){
-        $plan=[string]$Cache[$account].PlanType
+        $record=$Cache[$account]
+        $plan=if($record -and $record.PSObject.Properties['PlanType']){[string]$record.PSObject.Properties['PlanType'].Value}else{''}
         if(-not $plan){$plan=[string](Get-DeckProfile $SuiteRoot $account).PlanType}
         if((Test-DeckWarmupPlanSupported $plan) -and (Test-DeckWarmupSelected $Settings $account $plan)){
             $identity=Get-DeckOAuthAccountId $SuiteRoot $account
-            if($identity -and -not $seenIdentities.Add($identity)){continue}
-            $account
+            $status=if($record -and $record.PSObject.Properties['Status']){[string]$record.PSObject.Properties['Status'].Value}else{''}
+            $error=if($record -and $record.PSObject.Properties['Error']){$record.PSObject.Properties['Error'].Value}else{$null}
+            $priority=if($record -and $status -eq 'available' -and -not $error){0}elseif($record -and ($error -or $status -eq 'error')){2}else{1}
+            $eligible+=[pscustomobject]@{Account=$account;Identity=$(if($identity){'id:'+$identity}else{'name:'+$account});Priority=$priority}
         }
+    }
+    foreach($entry in @($eligible | Sort-Object Priority,Account)){
+        if(-not $seenIdentities.Add([string]$entry.Identity)){continue}
+        $entry.Account
     }
 }
 function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, [DateTimeOffset]$Now = [DateTimeOffset]::Now, [int]$UnknownDelayMinutes = 1) {
