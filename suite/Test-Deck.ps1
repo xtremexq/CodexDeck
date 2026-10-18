@@ -83,6 +83,7 @@ Assert (@(Complete-DeckSessionRead $sessionRead | Where-Object Account -eq 'work
 Remove-Item -LiteralPath $namedSession
 Assert (-not $settings.WarmupEnabled) 'Warm-up must default off'
 Assert (-not $settings.WarmupSchedulingEnabled) 'Background warm-up scheduling must default off'
+Assert ($settings.WarmupModel -eq 'gpt-6-luna') 'Paid-plan warm-up must default to gpt-6-luna'
 Assert (-not $settings.AlwaysOnTop) 'Always on top must default off'
 Assert ($settings.ViewMode -eq 'Widget') 'Widget must be default'
 Assert ($settings.DashboardTheme -eq 'Default') 'Terminal dashboard theme must default to the original layout'
@@ -113,6 +114,8 @@ $record.PlanType='free'; $record.Windows=@([pscustomobject]@{DurationSeconds=259
 Assert (Test-DeckWarmup $settings $record ($now-90) $null $now) 'Selected Free account was not eligible on its primary window'
 Assert ((Get-DeckWarmupWindow $record).DurationSeconds -eq 2592000) 'Free warm-up did not select its primary allowance window'
 Assert (-not (Get-DeckWarmupModel $settings free)) 'Free warm-up forced the paid-plan model'
+$settings.WarmupModel='gpt-6-luna'
+Assert ((Get-DeckWarmupModel $settings plus) -eq 'gpt-6-luna') 'Paid warm-up ignored the configured model'
 foreach($plan in 'unknown',''){
     $record.PlanType=$plan
     Assert (-not (Test-DeckWarmup $settings $record ($now-90) $null $now)) "Excluded plan accepted: $plan"
@@ -156,10 +159,14 @@ $settings.PollMinutes=1; $settings.MinimumGapSeconds=0
 Write-DeckJson (Join-Path $fixture 'settings.json') $settings
 $clamped=Get-DeckSettings $fixture
 Assert ($clamped.PollMinutes -eq 5 -and $clamped.MinimumGapSeconds -eq 15) 'Request throttles not clamped'
-$code=Get-DeckWarmupCode $PSScriptRoot account5 gpt-5.6-luna
-Assert ($code -match '--ignore-user-config' -and $code -match "'--sandbox','read-only'" -and $code -match '--ephemeral' -and $code -match "'-m','gpt-5.6-luna'") 'Paid warm-up isolation or model selection missing'
+$code=Get-DeckWarmupCode $PSScriptRoot account5 gpt-6-luna
+Assert ($code -match '--ignore-user-config' -and $code -match "'--sandbox','read-only'" -and $code -match '--ephemeral' -and $code -match "'-m','gpt-6-luna'" -and $code -match 'model_reasoning_effort="low"') 'Paid warm-up isolation, model or low reasoning effort missing'
 $freeCode=Get-DeckWarmupCode $PSScriptRoot account2 ''
 Assert ($freeCode -notmatch "'-m'") 'Free warm-up forced a configured model'
+$statusSettings=Get-DeckDefaults; $statusSettings.WarmupEnabled=$true; $statusSettings.WarmupSchedulingEnabled=$true; $statusSettings.WarmupPlanTypes='free'
+$revokedRecord=[pscustomobject]@{Account='account2';PlanType='free';Status='error';CheckedAt='now';Error='OAuth token_revoked';Windows=@()}
+$recentHistory=[pscustomobject]@{AttemptAt=([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()-60);Outcome='Replied: hi'}
+Assert ((Get-DeckWarmupStatus $statusSettings $revokedRecord $recentHistory) -eq 'Sign in again') 'Revoked OAuth status was hidden by recent warm-up history'
 $failed=$false; try{Get-DeckWarmupCode $PSScriptRoot '../outside' 'gpt-5.6-luna'}catch{$failed=$true}
 Assert $failed 'Account injection accepted'
 $failed=$false; try{Get-DeckWarmupCode $PSScriptRoot account5 "bad'; echo injected"}catch{$failed=$true}

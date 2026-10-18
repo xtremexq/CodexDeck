@@ -77,7 +77,7 @@ Assert ((Get-DeckTerminalCache (Join-Path $fixture 'deck')).account1.Status -eq 
 $terminalAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'Deck.Terminal.ps1'),[ref]$null,[ref]$null)
 $dashboard=$terminalAst.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-DeckTerminal'},$true).Extent.Text
 Assert ($dashboard -notmatch '\$attempted|TotalMinutes\s+-lt\s+5') 'Opening the terminal dashboard still schedules automatic usage checks'
-Assert ($dashboard -match 'Auto-compact enabled for account and pool launches') 'Dashboard does not advertise pool auto-compact support'
+Assert ($dashboard -match 'Auto-compact enabled for future account and pool launches') 'Dashboard does not advertise pool auto-compact support'
 Assert ($dashboard -notmatch 'Auto-compact needs an individual account') 'Dashboard still blocks pool auto-compact launches'
 Assert ($dashboard -match '\$queueAll=\$CheckAll\.IsPresent' -and $dashboard -match 'Add-DeckTerminalCheckQueue') 'Dashboard -a startup does not reuse the A shortcut queue'
 Assert ($dashboard -match '\$dashboardState=@\{LastConversation=\$null\}' -and $dashboard -match 'Get-DeckTerminalRecentConversation') 'Dashboard does not keep the returned conversation only in its current process'

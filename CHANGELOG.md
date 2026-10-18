@@ -6,6 +6,7 @@
 - Made shared-setting Custom auto-compaction observe the live Deck toggle in already-running sessions, and clarified that Codex's native auto-compaction remains active when Deck automation is off.
 - Fixed warm-up workers sleeping through updated account quota and selection changes, retained discovered reset times across grace checks, and used current quota data from both dashboards when scheduling.
 - Recorded quota-check and warm-up failures, prevented reset warm-ups after failed checks, drained manual requests arriving during an active worker, and kept the scheduling watchdog active without a one-day expiry.
+- Defaulted paid-plan warm-ups to gpt-6-luna at low reasoning effort, and show a sign-in prompt when an account's OAuth token has been revoked.
 - Included the Debug Swarm launch helper and regression tests in the installer payload.
 - Fixed premature Custom auto-compaction by measuring current context usage instead of cumulative conversation tokens, retaining the last reported context capacity when later notifications omit it.
 - Fixed automatic handoff requests accepted after a turn's final answer but never processed by Codex: Deck now requests the handoff once in a fresh turn before deciding whether to compact.

@@ -874,7 +874,7 @@ function Show-DeckSettings {
             }elseif($key -eq 'WarmupModel'){
                 $control=[Windows.Controls.ComboBox]::new()
                 $cachedModels=Read-DeckJson (Join-Path $root 'models.json')
-                foreach($model in @(Get-DeckModelNames @($settings.WarmupModel,'gpt-5.6-luna',$cachedModels.Models))){[void]$control.Items.Add([string]$model)}
+                foreach($model in @(Get-DeckModelNames @($settings.WarmupModel,'gpt-6-luna',$cachedModels.Models))){[void]$control.Items.Add([string]$model)}
                 $control.SelectedItem=$settings.WarmupModel; $control.ToolTip='Paid-plan warm-up uses low reasoning effort. Free and Go use their Codex-default model. Loading models from Codex...'
             }elseif($key -eq 'WarmupAccounts'){
                 $control=[Windows.Controls.ListBox]::new(); $control.SelectionMode='Multiple'; $control.MaxHeight=150
@@ -1154,7 +1154,7 @@ function Show-DeckSettings {
                 $validated=Resolve-DeckFailoverPool $settingsSaveContext.SuiteRoot $updated.FailoverAccounts Ordered
                 if($updated.FailoverAccounts -notin @('*','*free','*paid')){$updated.FailoverAccounts=$validated.Pool -join ','}
             }
-            if ($updated.WarmupModel -notmatch '^gpt-[a-zA-Z0-9.-]+$') { throw 'Enter a model ID, e.g. gpt-5.6-luna.' }
+            if ($updated.WarmupModel -notmatch '^gpt-[a-zA-Z0-9.-]+$') { throw 'Enter a model ID, e.g. gpt-6-luna.' }
             if ($updated.ViewMode -notin @('Panel','Widget','Tray')) { throw 'View Mode must be Panel, Widget, or Tray.' }
             if ($updated.DashboardTheme -notin @('Default','Focus','Cards','Ledger','Split')) { throw 'Choose a dashboard theme.' }
             if ($updated.AutoCompactMode -notin @('Native','Custom')) { throw 'Choose Native or Custom auto-compaction.' }
@@ -1232,7 +1232,7 @@ function Show-DeckSettings {
             if(-not $models.Count){throw 'Empty model list'}
             $picker=$controls.WarmupModel; $selected=[string]$picker.SelectedItem
             $picker.Items.Clear()
-            foreach($model in @(Get-DeckModelNames @($selected,'gpt-5.6-luna',$models))){[void]$picker.Items.Add($model)}
+            foreach($model in @(Get-DeckModelNames @($selected,'gpt-6-luna',$models))){[void]$picker.Items.Add($model)}
             $picker.SelectedItem=$selected; $picker.ToolTip='Models from Codex. Paid-plan warm-up uses low reasoning effort; Free and Go use their Codex-default model.'
             Write-DeckJson (Join-Path $root 'models.json') @{Models=$models;CheckedAt=[DateTimeOffset]::Now.ToString('o')}
         }catch{$controls.WarmupModel.ToolTip='Model list unavailable; showing saved choices. Paid-plan warm-up uses low reasoning effort; Free and Go use their Codex-default model.'}

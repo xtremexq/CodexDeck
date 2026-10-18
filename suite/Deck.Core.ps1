@@ -37,7 +37,7 @@ function Get-DeckDefaults {
         ShowModel=$false; AccountPickerUsage=$false; SkillAccessAccounts='*'
         ViewMode='Widget'; DashboardTheme='Default'; WidgetOneLine=$true; WidgetShowEmail=$false; WidgetShowResets=$true; WidgetAutoHeight=$true
         WidgetWidth=238; WidgetHeight=0
-        WarmupEnabled=$false; WarmupSchedulingEnabled=$false; WarmupPlanTypes=''; WarmupAccounts=''; WarmupModel='gpt-5.6-luna'
+        WarmupEnabled=$false; WarmupSchedulingEnabled=$false; WarmupPlanTypes=''; WarmupAccounts=''; WarmupModel='gpt-6-luna'
         WarmupGraceSeconds=60; WarmupMaxDelayMinutes=30
         WarmupResetEnabled=$true; WarmupTimedEnabled=$false; WarmupTimes=''
         WarmupStartAtLogin=$true
@@ -813,12 +813,12 @@ function Get-DeckWarmupModel($Settings, [string]$PlanType) {
     return [string]$Settings.WarmupModel
 }
 function Get-DeckWarmupStatus($Settings, $Record, $History, [long]$Now = ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())) {
-    if ($History -and $Now - [long]$History.AttemptAt -lt 14400) { return $History.Outcome }
     if (-not (Test-DeckWarmupSelected $Settings $Record.Account $Record.PlanType)) { return 'Not selected' }
     if (-not $Settings.WarmupEnabled) { return 'Paused' }
     if (-not $Settings.WarmupSchedulingEnabled) { return 'Background scheduling off' }
     if ($Settings.WarmupTimedEnabled -and -not $Settings.WarmupResetEnabled) { return 'Daily ' + $Settings.WarmupTimes + ' (local)' }
     if ($Record.PlanType -and -not (Test-DeckWarmupPlanSupported $Record.PlanType)) { return 'Unsupported account plan' }
+    if ($Record.Error -match '(?i)token_revoked|invalidated oauth token') { return 'Sign in again' }
     if ($History -and $Now - [long]$History.AttemptAt -lt 14400) { return $History.Outcome }
     if (-not $Record.CheckedAt -or $Record.Error -or $Record.Status -ne 'available') { return 'Waiting for fresh quota' }
     if (@($Record.Windows | Where-Object { $_.Dead -or ($null -ne $_.UsedPct -and $_.UsedPct -ge 99.5) }).Count) { return 'Waiting for quota reset' }
