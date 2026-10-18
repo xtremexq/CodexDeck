@@ -904,11 +904,20 @@ function Get-DeckSignedInAccounts([string]$SuiteRoot) {
         Where-Object { $_.Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'auth.json') -PathType Leaf) -and (Test-DeckCodexAccount $SuiteRoot $_.Name) } |
         Sort-Object Name | ForEach-Object Name)
 }
+function Get-DeckOAuthAccountId([string]$SuiteRoot,[string]$Account) {
+    $auth=Read-DeckJson (Join-Path $SuiteRoot "accounts/$Account/auth.json")
+    if($auth -and $auth.tokens.account_id){return [string]$auth.tokens.account_id}
+}
 function Get-DeckWarmupAccounts([string]$SuiteRoot, $Settings, $Cache = @{}) {
+    $seenIdentities=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach($account in @(Get-DeckSignedInAccounts $SuiteRoot)){
         $plan=[string]$Cache[$account].PlanType
         if(-not $plan){$plan=[string](Get-DeckProfile $SuiteRoot $account).PlanType}
-        if((Test-DeckWarmupPlanSupported $plan) -and (Test-DeckWarmupSelected $Settings $account $plan)){$account}
+        if((Test-DeckWarmupPlanSupported $plan) -and (Test-DeckWarmupSelected $Settings $account $plan)){
+            $identity=Get-DeckOAuthAccountId $SuiteRoot $account
+            if($identity -and -not $seenIdentities.Add($identity)){continue}
+            $account
+        }
     }
 }
 function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, [DateTimeOffset]$Now = [DateTimeOffset]::Now, [int]$UnknownDelayMinutes = 1) {

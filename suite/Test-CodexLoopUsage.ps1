@@ -3,6 +3,23 @@ $source = Get-Content (Join-Path $PSScriptRoot 'Run-CodexLoopUsage.cmd') -Raw
 $body = ($source -split '(?m)^__POWERSHELL__\r?\n', 2)[1]
 . ([scriptblock]::Create($body.Substring(0, $body.IndexOf('if (-not (Test-Path -LiteralPath $AccountsRoot))'))))
 function Assert($Condition, $Message) { if (-not $Condition) { throw $Message } }
+Assert (-not (Test-UsageFallbackAllowed 401)) 'HTTP 401 still starts the token-refreshing app-server fallback'
+Assert (-not (Test-UsageFallbackAllowed 403)) 'HTTP 403 still starts the token-refreshing app-server fallback'
+Assert (Test-UsageFallbackAllowed 0) 'A transport failure incorrectly disabled the usage fallback'
+Assert (Test-UsageFallbackAllowed 500) 'A server failure incorrectly disabled the usage fallback'
+Assert ($source -notmatch '(?m)refreshToken\s*=\s*\$true') 'Quota checking still explicitly requests an OAuth refresh'
+Assert ($source -match '(?m)refreshToken\s*=\s*\$false') 'App-server quota fallback still explicitly requests an OAuth refresh'
+$syntheticHttpError=[pscustomobject]@{Exception=[pscustomobject]@{Response=[pscustomobject]@{StatusCode=401;Content=$null};Message='Unauthorized';InnerException=$null}}
+$httpDetails=Get-UsageHttpErrorDetails $syntheticHttpError
+Assert ($httpDetails.StatusCode -eq 401 -and $httpDetails.Message -match 'HTTP 401') 'HTTP failure status was not retained for fallback suppression'
+Add-Type -AssemblyName System.Net.Http
+$syntheticHttpResponse=[System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Unauthorized)
+try {
+    $syntheticHttpResponse.Content=[System.Net.Http.StringContent]::new('{"error":{"code":"token_revoked","message":"invalidated oauth token"}}')
+    $providerHttpError=[pscustomobject]@{Exception=[pscustomobject]@{Response=$syntheticHttpResponse;Message='Unauthorized';InnerException=$null}}
+    $providerHttpDetails=Get-UsageHttpErrorDetails $providerHttpError
+    Assert ($providerHttpDetails.StatusCode -eq 401 -and $providerHttpDetails.Message -match 'token_revoked') 'Provider OAuth rejection code was lost from the HTTP error'
+} finally { $syntheticHttpResponse.Dispose() }
 $future = [DateTimeOffset]::UtcNow.AddDays(8).ToUnixTimeSeconds()
 $free = @{ plan_type='free'; rate_limit=@{ allowed=$false; limit_reached=$true; primary_window=@{used_percent=100;limit_window_seconds=2592000;reset_at=$future};secondary_window=$null } }
 $http = Convert-HttpUsageToRecord 'test' '' $free

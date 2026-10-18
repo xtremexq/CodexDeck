@@ -49,6 +49,13 @@ function Start-DeckTask($Code,$Kind,$Account){
     @{Process=[pscustomobject]@{ExitCode=$(if($failure){1}else{0})};Out=[pscustomobject]@{IsCompleted=$true;Result=$output};Err=[pscustomobject]@{IsCompleted=$true;Result=$failure};Started=[DateTimeOffset]::UtcNow}
 }
 
+New-Fixture duplicate-identity
+Write-DeckJson (Join-Path $SuiteRoot 'accounts/account2/auth.json') @{tokens=@{account_id='same-chatgpt-user'}}
+Write-DeckJson (Join-Path $SuiteRoot 'accounts/account1/auth.json') @{tokens=@{account_id='same-chatgpt-user'}}
+$duplicateSelection=@{account1=[pscustomobject]@{PlanType='free'};account2=[pscustomobject]@{PlanType='free'}}
+$deduplicated=@(Get-DeckWarmupAccounts $SuiteRoot $settings $duplicateSelection)
+Assert ($deduplicated.Count -eq 1 -and $deduplicated[0] -eq 'account1') 'Duplicate profile names scheduled separate prompts for the same OpenAI quota identity'
+
 New-Fixture discovery
 $caseStart=[DateTimeOffset]::Now.ToUnixTimeSeconds()
 $responses.account1=New-Quota account1 ($caseStart+18000)

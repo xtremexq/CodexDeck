@@ -314,7 +314,9 @@ function Invoke-CodexRateLimitRead {
             method = "account/read"
             id = 2
             params = @{
-                refreshToken = $true
+                # Quota checks must not proactively rotate credentials. A
+                # normal Codex request can refresh when it actually needs to.
+                refreshToken = $false
             }
         }
         $accountResponse = Read-JsonRpcResponse -Process $process -Id 2
@@ -356,6 +358,86 @@ function Invoke-CodexRateLimitRead {
         catch {
         }
         $process.Dispose()
+    }
+}
+
+function Get-UsageHttpErrorDetails {
+    param([Parameter(Mandatory = $true)][object]$ErrorRecord)
+
+    $statusCode = 0
+    $body = $null
+    $exception = $ErrorRecord.Exception
+    while ($exception) {
+        $response = Get-PropertyValue -Object $exception -Name 'Response'
+        if ($response) {
+            try { $statusCode = [int]$response.StatusCode } catch { }
+            if (-not $body) {
+                try {
+                    if ($response -is [System.Net.HttpWebResponse]) {
+                        $stream = $response.GetResponseStream()
+                        if ($stream) {
+                            $reader = [IO.StreamReader]::new($stream)
+                            try { $body = $reader.ReadToEnd() } finally { $reader.Dispose() }
+                        }
+                    } else {
+                        $content = Get-PropertyValue -Object $response -Name 'Content'
+                        if ($content) { $body = $content.ReadAsStringAsync().GetAwaiter().GetResult() }
+                    }
+                } catch { }
+            }
+            break
+        }
+        $exception = $exception.InnerException
+    }
+
+    $providerCode = $null
+    $providerMessage = $null
+    if ($body) {
+        try {
+            $payload = $body | ConvertFrom-Json -ErrorAction Stop
+            $providerError = Get-PropertyValue -Object $payload -Name 'error'
+            $providerCode = [string](Get-PropertyValue -Object $providerError -Name 'code' -Default '')
+            $providerMessage = [string](Get-PropertyValue -Object $providerError -Name 'message' -Default '')
+        } catch { }
+    }
+
+    $message = [string]$ErrorRecord.Exception.Message
+    if ($providerCode) {
+        $message = "HTTP $statusCode $providerCode"
+        if ($providerMessage) { $message += ': ' + $providerMessage.Substring(0, [Math]::Min(300, $providerMessage.Length)) }
+    } elseif ($statusCode) {
+        $message = "HTTP $statusCode $message"
+    }
+    [pscustomobject]@{ StatusCode = $statusCode; Message = $message }
+}
+
+function Test-UsageFallbackAllowed([int]$StatusCode) {
+    # Authentication rejection is already definitive. Avoid starting an
+    # app-server request that could attempt another refresh of the same token.
+    return $StatusCode -notin @(401, 403)
+}
+
+function New-UsageErrorRecord {
+    param([string]$AccountName, [string]$Email, [string]$Message)
+    [PSCustomObject][ordered]@{
+        Status               = "error"
+        Windows              = @()
+        Account              = $AccountName
+        Email                = $Email
+        PlanType             = $null
+        FiveHourUsedPct      = $null
+        FiveHourRemainingPct = $null
+        FiveHourDead         = $null
+        FiveHourResetsAt     = $null
+        FiveHourResetsAtUnix = $null
+        WeeklyUsedPct        = $null
+        WeeklyRemainingPct   = $null
+        WeeklyDead           = $null
+        WeeklyResetsAt       = $null
+        WeeklyResetsAtUnix   = $null
+        CreditsUnlimited     = $null
+        Source               = $null
+        Error                = $Message
     }
 }
 
@@ -763,7 +845,12 @@ $results = foreach ($dir in $accountDirs) {
         continue
     }
     catch {
-        $httpError = $_.Exception.Message
+        $httpFailure = Get-UsageHttpErrorDetails $_
+        $httpError = $httpFailure.Message
+        if (-not (Test-UsageFallbackAllowed $httpFailure.StatusCode)) {
+            New-UsageErrorRecord -AccountName $dir.Name -Email $metadata.Email -Message $httpError
+            continue
+        }
     }
 
     try {
@@ -776,26 +863,7 @@ $results = foreach ($dir in $accountDirs) {
         $record
     }
     catch {
-        [PSCustomObject][ordered]@{
-            Status               = "error"
-            Windows              = @()
-            Account              = $dir.Name
-            Email                = $metadata.Email
-            PlanType             = $null
-            FiveHourUsedPct      = $null
-            FiveHourRemainingPct = $null
-            FiveHourDead         = $null
-            FiveHourResetsAt     = $null
-            FiveHourResetsAtUnix = $null
-            WeeklyUsedPct        = $null
-            WeeklyRemainingPct   = $null
-            WeeklyDead           = $null
-            WeeklyResetsAt       = $null
-            WeeklyResetsAtUnix   = $null
-            CreditsUnlimited     = $null
-            Source               = $null
-            Error                = "HTTP failed: $httpError | fallback failed: $($_.Exception.Message)"
-        }
+        New-UsageErrorRecord -AccountName $dir.Name -Email $metadata.Email -Message "HTTP failed: $httpError | fallback failed: $($_.Exception.Message)"
     }
 }
 
