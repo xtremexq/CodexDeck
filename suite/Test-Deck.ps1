@@ -345,6 +345,17 @@ Assert (Test-Path $queued) 'Daily warm-up not queued'
 Remove-Item -LiteralPath $queued
 Add-DeckTimedWarmups $queueSuite $ws @('account1') @{account1=@{PlanType='plus'}} $at
 Assert (-not (Test-Path $queued)) 'Daily slot repeated after queue consumption'
+$ledgerPath=Join-Path $queueSuite 'deck/warmup-schedule.json'
+$ledgerEntries=@(
+    @{Key='20260908-0800/account1';At=$at.ToUnixTimeSeconds()},
+    @{Key='20260908-0800/account2';At=$at.ToUnixTimeSeconds()}
+)
+Write-DeckJson $ledgerPath $ledgerEntries
+$nextDay=$at.AddDays(1)
+Add-DeckTimedWarmups $queueSuite $ws @('account1') @{account1=@{PlanType='plus'}} $nextDay
+$ledgerAfterReplay=@(Read-DeckJson $ledgerPath | ForEach-Object { $_ })
+Assert ($ledgerAfterReplay.Count -eq 3 -and @($ledgerAfterReplay.Key) -contains '20260908-0800/account2') 'Multi-entry daily schedule ledger was not replayed and retained'
+Remove-Item -LiteralPath $queued -ErrorAction SilentlyContinue
 Request-DeckWarmup $queueSuite 'account1' -NoStart
 Write-DeckJson $queued @{Account='account1';Mode='Timed';At=1}
 Request-DeckWarmup $queueSuite 'account1' -NoStart

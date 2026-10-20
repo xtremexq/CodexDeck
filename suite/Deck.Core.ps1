@@ -1055,8 +1055,11 @@ function Sync-DeckWarmupStartup([string]$SuiteRoot, $Settings, $NextRun = $null)
 function Add-DeckTimedWarmups([string]$SuiteRoot, $Settings, $Accounts, $Cache, [DateTimeOffset]$Now) {
     if(-not $Settings.WarmupEnabled -or -not $Settings.WarmupTimedEnabled){return}
     $root=Join-Path $SuiteRoot 'deck'; $ledger=@{}
-    foreach($entry in @(Read-DeckJson (Join-Path $root 'warmup-schedule.json'))){
-        if($entry.Key -and $Now.ToUnixTimeSeconds()-[long]$entry.At -lt 172800){$ledger[$entry.Key]=$entry}
+    # PowerShell 5.1 preserves the JSON array as one function-return value when
+    # it is captured in @(...).  Send it through the pipeline so each persisted
+    # ledger row is enumerated before its timestamp is read.
+    foreach($entry in @((Read-DeckJson (Join-Path $root 'warmup-schedule.json')) | ForEach-Object { $_ })){
+        if($entry.Key -and $Now.ToUnixTimeSeconds()-[long]($entry.At) -lt 172800){$ledger[$entry.Key]=$entry}
     }
     $dirty=$false
     foreach($slot in @(Get-DeckDueWarmupTimes $Settings.WarmupTimes $Now)){

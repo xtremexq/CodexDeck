@@ -194,7 +194,12 @@ try{
     # launcher exits, so the active worker must drain the newly queued request.
     do{Invoke-DeckWarmupWorker}while(@(Get-ChildItem -LiteralPath (Join-Path $root 'warmup-requests') -Filter '*.json' -File -ErrorAction SilentlyContinue).Count)
 }catch{
-    $message=$_.Exception.Message; Write-DeckWarmupLog ('worker failed: '+$message)
+    $message=$_.Exception.Message
+    # Keep the function/line in the local worker log.  A scheduled task only
+    # reports exit code 1, which otherwise makes a type failure impossible to
+    # distinguish from a provider failure.
+    $where=($_.ScriptStackTrace -replace "[\r\n]+",' <- ')
+    Write-DeckWarmupLog ('worker failed: '+$message+$(if($where){' | '+$where}else{''}))
     try{Write-DeckJson $statePath ([ordered]@{LastRun=[DateTimeOffset]::Now.ToString('o');Outcome='Failed: '+$message;Checked=@();Warmed=@();NextRun=[DateTimeOffset]::Now.AddMinutes(20).ToString('o')}); Sync-DeckWarmupStartup $SuiteRoot (Get-DeckSettings $root) ([DateTimeOffset]::Now.AddMinutes(20))}catch{}
     exit 1
 }finally{
