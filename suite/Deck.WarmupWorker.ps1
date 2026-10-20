@@ -93,6 +93,8 @@ function Invoke-DeckWarmupWorker {
     }
     $checked=@(); $changed=@{}
     if($settings.WarmupEnabled -and $accounts.Count){
+        $authStamps=@{}
+        foreach($account in @($accounts)){$authStamps[$account]=Get-DeckAuthFileStamp $SuiteRoot $account}
         $checks=Invoke-DeckWorkerBatch $accounts Check $settings.WarmupModel
         foreach($account in @($accounts)){
             $result=$checks[$account]
@@ -107,6 +109,7 @@ function Invoke-DeckWarmupWorker {
                 $failedRecord | Add-Member NoteProperty Error $message -Force
                 $failedRecord | Add-Member NoteProperty Status 'error' -Force
                 $failedRecord | Add-Member NoteProperty CheckedAt ([DateTimeOffset]::Now.ToString('o')) -Force
+                $failedRecord | Add-Member NoteProperty AuthFileStamp ([string]$authStamps[$account]) -Force
                 $cache[$account]=$failedRecord; $changed[$account]=$failedRecord
                 Write-DeckWarmupLog ("check failed for ${account}: "+$message)
             }
@@ -160,6 +163,8 @@ function Invoke-DeckWarmupWorker {
         }
         # A successful prompt starts/changes quota state. Refresh those accounts so
         # the following scheduled wake uses the provider's real next reset time.
+        $postAuthStamps=@{}
+        foreach($account in @($warmJobs.Keys)){$postAuthStamps[$account]=Get-DeckAuthFileStamp $SuiteRoot $account}
         $post=Invoke-DeckWorkerBatch @($warmJobs.Keys) Check $settings.WarmupModel
         foreach($account in @($warmJobs.Keys)){
             $result=$post[$account]
@@ -176,6 +181,7 @@ function Invoke-DeckWarmupWorker {
                 $failedRecord | Add-Member NoteProperty Error $message -Force
                 $failedRecord | Add-Member NoteProperty Status 'error' -Force
                 $failedRecord | Add-Member NoteProperty CheckedAt ([DateTimeOffset]::Now.ToString('o')) -Force
+                $failedRecord | Add-Member NoteProperty AuthFileStamp ([string]$postAuthStamps[$account]) -Force
                 $cache[$account]=$failedRecord; $changed[$account]=$failedRecord
                 Write-DeckWarmupLog ("quota refresh failed for ${account}: "+$message)
             }

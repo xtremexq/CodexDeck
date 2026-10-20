@@ -15,7 +15,7 @@ function New-Fixture([string]$Name){
     $script:SuiteRoot=Join-Path $fixture $Name; $script:root=Join-Path $SuiteRoot 'deck'
     $script:statePath=Join-Path $root 'warmup-worker.json'; $script:logPath=Join-Path $root 'warmup-worker.log'
     $script:settings=Get-DeckDefaults; $settings.WarmupEnabled=$true; $settings.WarmupSchedulingEnabled=$true; $settings.WarmupPlanTypes='all'
-    $script:responses=@{}; $script:starts=@(); $script:failChecks=@(); $script:failWarmups=@(); $script:failPostChecks=@(); $script:dynamicReset=$false; $script:enqueueDuringWarmup=$false
+    $script:responses=@{}; $script:starts=@(); $script:failChecks=@(); $script:failCheckMessage=''; $script:failWarmups=@(); $script:failPostChecks=@(); $script:dynamicReset=$false; $script:enqueueDuringWarmup=$false
     Write-DeckJson (Join-Path $SuiteRoot 'accounts/account1/auth.json') @{}
     Write-DeckJson (Join-Path $root 'settings.json') $settings
 }
@@ -32,7 +32,7 @@ function Start-DeckTask($Code,$Kind,$Account){
     $script:starts+=[pscustomobject]@{Account=$Account;Kind=$Kind}
     $output=''; $failure=''
     if($Kind -eq 'Check'){
-        if($Account -in $script:failChecks -or ($Account -in $script:failPostChecks -and @($starts | Where-Object { $_.Account -eq $Account -and $_.Kind -eq 'Warm-up' }).Count)){$failure='Synthetic quota request failed.'}
+        if($Account -in $script:failChecks -or ($Account -in $script:failPostChecks -and @($starts | Where-Object { $_.Account -eq $Account -and $_.Kind -eq 'Warm-up' }).Count)){$failure=if($script:failCheckMessage){$script:failCheckMessage}else{'Synthetic quota request failed.'}}
         else{
             $record=$script:responses[$Account]
             if($script:dynamicReset){
@@ -110,6 +110,25 @@ $failedCache=Get-DeckUsageCache $root; $state=Read-DeckJson $statePath
 Assert (@($starts | Where-Object Kind -eq 'Warm-up').Count -eq 0) 'Failed quota check allowed a reset warm-up using stale data'
 Assert ($failedCache.account1.Status -eq 'error' -and $failedCache.account1.Error -match 'Synthetic quota') 'Quota failure was absent from persisted state'
 Assert (([DateTimeOffset]$state.NextRun) -ge $now.AddMinutes(19)) 'Quota failure did not back off'
+
+New-Fixture revoked-auth
+$now=[DateTimeOffset]::Now
+$responses.account1=New-Quota account1 ($now.AddHours(5).ToUnixTimeSeconds())
+Write-DeckJson (Join-Path $root 'cache.json') @($responses.account1)
+$script:failChecks=@('account1'); $script:failCheckMessage='HTTP 401 token_revoked: invalidated oauth token'
+Invoke-DeckWarmupWorker
+$revokedCache=Get-DeckUsageCache $root
+Assert (Test-DeckCachedRevokedAuth $SuiteRoot account1 $revokedCache.account1) 'Revoked OAuth failure was not tied to the checked auth file'
+Assert (@(Get-DeckWarmupAccounts $SuiteRoot $settings $revokedCache).Count -eq 0) 'Unchanged revoked credentials remained in automatic warm-up checks'
+$script:starts=@()
+Invoke-DeckWarmupWorker
+Assert (@($starts | Where-Object Kind -eq 'Check').Count -eq 0) 'Worker retried a known-revoked, unchanged auth file'
+$oldStamp=[string]$revokedCache.account1.AuthFileStamp
+Write-DeckJson (Join-Path $SuiteRoot 'accounts/account1/auth.json') @{tokens=@{refresh_token='synthetic-relogin'}}
+Assert ((Get-DeckAuthFileStamp $SuiteRoot account1) -ne $oldStamp) 'Synthetic re-login did not change the auth file stamp'
+Assert (@(Get-DeckWarmupAccounts $SuiteRoot $settings $revokedCache) -contains 'account1') 'Re-authenticated profile did not return to automatic checks'
+$expiredRecord=[pscustomobject]@{Status='error';Error='HTTP 401 token_expired';AuthFileStamp=(Get-DeckAuthFileStamp $SuiteRoot account1)}
+Assert (-not (Test-DeckCachedRevokedAuth $SuiteRoot account1 $expiredRecord)) 'A refreshable expired access token was incorrectly quarantined'
 
 New-Fixture failed-timed-check
 $now=[DateTimeOffset]::Now

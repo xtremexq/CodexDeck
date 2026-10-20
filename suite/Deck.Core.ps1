@@ -908,11 +908,27 @@ function Get-DeckOAuthAccountId([string]$SuiteRoot,[string]$Account) {
     $auth=Read-DeckJson (Join-Path $SuiteRoot "accounts/$Account/auth.json")
     if($auth -and $auth.tokens.account_id){return [string]$auth.tokens.account_id}
 }
+function Get-DeckAuthFileStamp([string]$SuiteRoot,[string]$Account) {
+    try {
+        $file=Get-Item -LiteralPath (Join-Path $SuiteRoot "accounts/$Account/auth.json") -ErrorAction Stop
+        return '{0}:{1}' -f $file.Length,$file.LastWriteTimeUtc.Ticks
+    } catch { return '' }
+}
+function Test-DeckCachedRevokedAuth([string]$SuiteRoot,[string]$Account,$Record) {
+    if(-not $Record -or [string]$Record.Status -ne 'error' -or [string]$Record.Error -notmatch '(?i)token[_ ]revoked|refresh token.{0,40}revoked|invalidated oauth token'){return $false}
+    $stampProperty=$Record.PSObject.Properties['AuthFileStamp']
+    if(-not $stampProperty -or [string]::IsNullOrWhiteSpace([string]$stampProperty.Value)){return $false}
+    return ([string]$stampProperty.Value -eq (Get-DeckAuthFileStamp $SuiteRoot $Account))
+}
 function Get-DeckWarmupAccounts([string]$SuiteRoot, $Settings, $Cache = @{}) {
     $seenIdentities=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $eligible=@()
     foreach($account in @(Get-DeckSignedInAccounts $SuiteRoot)){
         $record=$Cache[$account]
+        # A revoked OAuth grant cannot recover by retrying its unchanged auth.json.
+        # Keep it visible in the cache/dashboard, but stop the background worker
+        # from issuing the same doomed quota request until the user signs in again.
+        if(Test-DeckCachedRevokedAuth $SuiteRoot $account $record){continue}
         $plan=if($record -and $record.PSObject.Properties['PlanType']){[string]$record.PSObject.Properties['PlanType'].Value}else{''}
         if(-not $plan){$plan=[string](Get-DeckProfile $SuiteRoot $account).PlanType}
         if((Test-DeckWarmupPlanSupported $plan) -and (Test-DeckWarmupSelected $Settings $account $plan)){
