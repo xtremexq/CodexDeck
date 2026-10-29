@@ -5,6 +5,7 @@ $harnessPanel=[Windows.Controls.StackPanel]::new(); $harnessPanel.Margin='2,0,12
 [void]$tabs.Items.Add($harnessTab)
 [void]$harnessPanel.Children.Add((New-DeckText 'Coding harnesses' '#EDF1F7' 18))
 [void]$harnessPanel.Children.Add((New-DeckText 'Enable a harness, install its CLI, then add an account from Deck or codex-auth. Changes apply to new launches after saving.' '#929CA4'))
+[void]$harnessPanel.Children.Add((New-DeckText 'Dangerous mode skips permission prompts and, where the CLI supports it, removes sandbox restrictions. It applies to every current and future account of that harness.' '#F0C66E'))
 $harnessUI=@{}
 $harnessContext=@{Suite=$suite;Demo=[bool]($SmokeTest -or $Demo);Window=$dialog}
 $harnessCommands=@{}
@@ -16,7 +17,15 @@ foreach($definition in @(Get-DeckHarnessCatalog)){
     $enabled.IsChecked=Test-DeckHarnessEnabled $settings $id; $enabled.IsEnabled=$id -ne 'Codex'
     if($id -eq 'Codex'){$enabled.ToolTip='Codex CLI is always enabled.';$enabled.Opacity=0.5;$enabled.Cursor='Arrow'}else{$controls[('Harness'+$id+'Enabled')]=$enabled}
     [void]$section.Children.Add($enabled)
+    $permissions=[Windows.Controls.CheckBox]::new(); $permissions.Content='Enable dangerous automatic permissions for all '+$definition.Name+' accounts'; $permissions.IsChecked=[bool]$settings[('Harness'+$id+'FullPermissions')]; $permissions.Margin='0,0,0,14'; $permissions.ToolTip=switch($id){'Codex'{'Run with danger-full-access and no approval prompts.'} 'Claude'{'Start Claude Code with --dangerously-skip-permissions.'} 'Antigravity'{'Start AGY with --dangerously-skip-permissions; all native tool calls are approved.'} 'OpenCode'{'Start with --auto; automatic approval still honors explicit deny rules.'}}; $controls[('Harness'+$id+'FullPermissions')]=$permissions; [void]$section.Children.Add($permissions)
     $details=[Windows.Controls.StackPanel]::new(); [void]$section.Children.Add($details)
+    $headlessFailover=$null;$failoverPool=$null
+    if($id -eq 'Antigravity'){
+        $headlessFailover=[Windows.Controls.CheckBox]::new();$headlessFailover.Content='Retry quota/provider errors with other AGY accounts for headless prompts';$headlessFailover.IsChecked=[bool]$settings.HarnessAntigravityFailoverEnabled;$headlessFailover.Margin='0,0,0,14';$headlessFailover.ToolTip='Ordered retries run only for agy -p/--print/--prompt. Deck switches profiles only when AGY reports a structured quota/provider failure before any tool or subagent step. Interactive AGY sessions stay on their selected profile.';$controls.HarnessAntigravityFailoverEnabled=$headlessFailover;[void]$details.Children.Add($headlessFailover)
+        $poolLabel=New-DeckText 'AGY headless failover profiles (* = all current and future signed-in AGY file profiles)' '#929CA4';$poolLabel.Margin='0,0,0,5';[void]$details.Children.Add($poolLabel)
+        $failoverPool=[Windows.Controls.TextBox]::new();$failoverPool.Text=[string]$settings.HarnessAntigravityFailoverAccounts;$failoverPool.Margin='0,0,0,14';$failoverPool.ToolTip='Enter * or comma-separated AGY account names in retry order. Codex, Claude, OpenCode and Windows runner profiles are rejected.';$controls.HarnessAntigravityFailoverAccounts=$failoverPool;[void]$details.Children.Add($failoverPool)
+        [void]$details.Children.Add((New-DeckText 'Retry is limited to one-shot headless prompts; native AGY stream output is parsed internally and returned in your requested text, JSON or stream-JSON format.' '#929CA4'))
+    }
     $providerNote=New-DeckText ('Account sign-in: '+($definition.Providers -join ', ')) '#929CA4'; [void]$details.Children.Add($providerNote)
     $status=New-DeckText '' '#A9E8D5'; [void]$details.Children.Add($status)
     $actions=[Windows.Controls.WrapPanel]::new(); $actions.Margin='0,8,0,10'; [void]$details.Children.Add($actions)
@@ -37,7 +46,7 @@ foreach($definition in @(Get-DeckHarnessCatalog)){
     $runner=$null
     if($id -eq 'Antigravity'){$runner=[Windows.Controls.Button]::new();$runner.Content='Configure runner (optional)';$runner.ToolTip='New accounts use isolated file login. Configure an existing Windows user only for the runner fallback.';$runner.IsEnabled=$accounts.Items.Count -gt 0;[void]$configActions.Children.Add($runner)}
     $empty=New-DeckText 'Add an account to edit its isolated native settings. Use the native settings command or file shown in its documentation.' '#929CA4'; $empty.Margin='0,6,0,0'; $empty.Visibility=if($accounts.Items.Count){'Collapsed'}else{'Visible'}; [void]$details.Children.Add($empty)
-    $card=@{Id=$id;Definition=$definition;Enabled=$enabled;Details=$details;Path=$path;Status=$status;Install=$install;Info=$info;Docs=$docs;Accounts=$accounts;Edit=$edit;Runner=$runner;Task=$null;Timer=$null;Installed=$false;Context=$harnessContext;Commands=$harnessCommands}
+    $card=@{Id=$id;Definition=$definition;Enabled=$enabled;Details=$details;Path=$path;Status=$status;Install=$install;Info=$info;Docs=$docs;Accounts=$accounts;Edit=$edit;Runner=$runner;Failover=$headlessFailover;FailoverPool=$failoverPool;Task=$null;Timer=$null;Installed=$false;Context=$harnessContext;Commands=$harnessCommands}
     $harnessUI[$id]=$card
     $refresh={
         $card.Details.Visibility=if($card.Enabled.IsChecked){'Visible'}else{'Collapsed'}
@@ -59,7 +68,7 @@ foreach($definition in @(Get-DeckHarnessCatalog)){
         $sample=if($card.Id -in @('Claude','Antigravity')){'account1'}else{'my-account'}
         $create=if($card.Id -in @('Claude','Antigravity')){$command+' '+$sample+' login'}else{'codex-auth '+$sample+' -NewAccount -Harness '+$card.Id+' -Provider '+$provider}
         $check=if($card.Id -eq 'Claude'){$command+' '+$sample+' check'}elseif($card.Id -eq 'Antigravity'){$command+' '+$sample+' check (local credential-file check; use /usage for live limits)'}else{''}
-        $body.Text=$card.Definition.Name+"`n`nCreate and sign in:`n"+$create+"`n`nOpen the dashboard:`n"+$command+"`n`nLog in again:`n"+$command+' '+$sample+" login`n"+$(if($check){"`nCheck sign-in:`n$check`n"}else{''})+"`n"+$card.Definition.Help+"`n`nAccount sign-in and request routing are separate. Codex ChatGPT failover is available today. Cross-provider conversation routing and ChatGPT / Claude / Gemini web adapters are planned and are not active controls. Native provider settings remain available inside each harness."
+        $body.Text=$card.Definition.Name+"`n`nCreate and sign in:`n"+$create+"`n`nOpen the dashboard:`n"+$command+"`n`nLog in again:`n"+$command+' '+$sample+" login`n"+$(if($check){"`nCheck sign-in:`n$check`n"}else{''})+"`n"+$card.Definition.Help+"`n`nFailover stays within a harness. Codex requests can use Codex accounts; AGY supports ordered retries for eligible headless prompts using AGY accounts. Claude and OpenCode do not have Deck failover. Native provider settings remain available inside each harness."
         $scroll.Content=$body; [void]$help.ShowDialog()
     }.GetNewClosure())
     if($runner){$runner.Add_Click({

@@ -73,6 +73,123 @@ function Get-DeckTerminalThemePageSize([string]$Theme, [int]$Height) {
         default { return [Math]::Max(1,$Height - 18) }
     }
 }
+function Get-DeckTerminalDashboardPageSize([string]$Theme,[int]$Height,[bool]$ShowShortcuts,[string]$Harness=$null,[bool]$HasLastConversation=$false) {
+    $lastPenalty=if($HasLastConversation){1}else{0}
+    if($Theme -in @('Focus','Cards','Ledger','Split')){
+        $pageSize=Get-DeckTerminalThemePageSize $Theme $Height
+        if($ShowShortcuts){
+            if($Harness -eq 'Claude'){if($Theme -eq 'Cards'){$pageSize-=1}}
+            elseif($Harness){$pageSize-=1}
+            else{switch($Theme){
+                'Focus'{$pageSize-=4}
+                'Cards'{$pageSize-=2}
+                'Ledger'{$pageSize-=4}
+                'Split'{$pageSize-=4}
+            }}
+        }elseif($Theme -eq 'Cards'){$pageSize+=2}else{$pageSize+=5}
+        return [Math]::Max(1,$pageSize-$lastPenalty)
+    }
+    $pageSize=$Height-18
+    if($ShowShortcuts){if($Harness){$pageSize-=2}else{$pageSize-=4}}
+    else{if($Harness){$pageSize+=1}else{$pageSize+=4}}
+    return [Math]::Max(1,$pageSize-$lastPenalty)
+}
+function Get-DeckTerminalShortcutTable([string]$Harness,[int]$Width,[bool]$Themed=$false,[bool]$CompactAdjusting=$false,[bool]$AutoCompact=$false,[int]$CompactThreshold=55,[string]$CompactMode='Native',$WarmupSettings=$null) {
+    $rows=[Collections.Generic.List[object]]::new()
+    if($Themed){
+        if($Harness -eq 'Claude'){
+            $rows.Add(@{Label='NAVIGATE';Text='Enter open   / search   Q quit'})
+            $rows.Add(@{Label='CHECK';Text='R selected sign-in   A all sign-ins'})
+            $rows.Add(@{Label='ACCOUNTS';Text='L login   N new   F2 rename   Del delete   M mask'})
+            $rows.Add(@{Label='DISPLAY';Text='D desktop   S settings   Y Analytics'})
+            $rows.Add(@{Label='FILES';Text='G defaults   I instructions   E memory folder   K skills'})
+            $rows[2].SeparatorBefore=$true
+        }elseif($Harness -eq 'Antigravity'){
+            $rows.Add(@{Label='NAVIGATE';Text='Enter open Antigravity   / search   Q quit'})
+            $rows.Add(@{Label='CHECK';Text='R selected credentials   A all credentials'})
+            $rows.Add(@{Label='ACCOUNTS';Text='L login   N new   F2 rename   Del delete   M mask'})
+            $rows.Add(@{Label='DISPLAY';Text=('D desktop   S settings   F failover {0}   Y Analytics' -f $(if($WarmupSettings.HarnessAntigravityFailoverEnabled){'ON'}else{'OFF'}))})
+            $rows.Add(@{Label='FILES';Text='G defaults   I instructions   E learned rules   K skills'})
+            $rows[2].SeparatorBefore=$true
+        }elseif($Harness){
+            $rows.Add(@{Label='NAVIGATE';Text=('Enter open {0}   / search   Q quit' -f (Get-DeckHarness $Harness).Name)})
+            $rows.Add(@{Label='MANAGE';Text='G global   F2 rename'})
+            $rows.Add(@{Label='ACCOUNTS';Text='L login   N new   Del delete   M mask'})
+            $rows.Add(@{Label='DISPLAY';Text='D desktop   S settings   Y Analytics'})
+            $rows.Add(@{Label='FILES';Text='I instructions   E memories   K skills'})
+            $rows[2].SeparatorBefore=$true
+        }else{
+            $rows.Add(@{Label='LAUNCH';Text='Enter launch   / search   B best   Q quit'})
+            $rows.Add(@{Label='MANAGE';Text='R check   A all   J auto-login   H history'})
+            $rows.Add(@{Label='ACCOUNTS';Text='F2 rename   L login   N new   Del delete   M mask'})
+            $rows.Add(@{Label='OPEN';Text='D desktop   S settings   Y Analytics'})
+            $rows.Add(@{Label='FILES';Text='G global   V auth helper   I instructions   E memories   K skills'})
+            $rows.Add(@{Label='WARM-UP';Text='U run now   T daily times   W select account   P pause/resume'})
+            $rows.Add(@{Label='COMPACT';Text=$(if($CompactAdjusting){'Up/Down 5%   Enter save   Esc cancel'}else{('C compact [{0}] {1} {2}% free   hold C to adjust' -f $(if($AutoCompact){'x'}else{' '}),$CompactMode,$CompactThreshold)})})
+            $rows[4].SeparatorBefore=$true
+        }
+    }elseif($Harness -eq 'Claude'){
+        $rows.Add(@{Label='NAVIGATE';Text='Enter open   / search   Q quit'})
+        $rows.Add(@{Label='CHECK';Text='R check sign-in   A all sign-ins'})
+        $rows.Add(@{Label='ACCOUNTS';Text='L login   N new   F2 rename   Del delete   M mask'})
+        $rows.Add(@{Label='DISPLAY';Text='D desktop   S settings   Y Analytics'})
+        $rows.Add(@{Label='FILES';Text='G defaults   I instructions   E memory folder   K skills'})
+        $rows[2].SeparatorBefore=$true
+    }elseif($Harness -eq 'Antigravity'){
+        $rows.Add(@{Label='NAVIGATE';Text='Enter open Antigravity   / search   Q quit'})
+        $rows.Add(@{Label='CHECK';Text='R selected credentials   A all credentials'})
+        $rows.Add(@{Label='ACCOUNTS';Text='L login   N new   F2 rename   Del delete   M mask'})
+        $rows.Add(@{Label='DISPLAY';Text=('D desktop   S settings   F failover {0}   Y Analytics' -f $(if($WarmupSettings.HarnessAntigravityFailoverEnabled){'ON'}else{'OFF'}))})
+        $rows.Add(@{Label='FILES';Text='G defaults   I instructions   E learned rules   K skills'})
+        $rows[2].SeparatorBefore=$true
+    }elseif($Harness){
+        $rows.Add(@{Label='NAVIGATE';Text=('Enter open {0}   / search   Q quit' -f (Get-DeckHarness $Harness).Name)})
+        $rows.Add(@{Label='MANAGE';Text='G global   F2 rename'})
+        $rows.Add(@{Label='ACCOUNTS';Text='L login   N new   Del delete   M mask'})
+        $rows.Add(@{Label='DISPLAY';Text='D desktop   S settings   Y Analytics'})
+        $rows.Add(@{Label='FILES';Text='I instructions   E memories   K skills'})
+        $rows[2].SeparatorBefore=$true
+    }else{
+        $rows.Add(@{Label='NAVIGATE';Text='Enter launch / sign in   / search   B best   Q quit'})
+        $rows.Add(@{Label='MANAGE';Text='R refresh   A all   J auto-login   H history'})
+        $rows.Add(@{Label='ACCOUNTS';Text='F2 rename   L login   N new   Del delete   M mask'})
+        $rows.Add(@{Label='DISPLAY';Text='D desktop   S settings   Y Analytics'})
+        $rows.Add(@{Label='FILES';Text='G global   V auth helper   I instructions   E memories   K skills'})
+        $rows.Add(@{Label='WARMUP';Text='U run now   T daily times   W select account   P pause/resume'})
+        $rows.Add(@{Label='COMPACT';Text=$(if($CompactAdjusting){'Up/Down 5%   Enter save   Esc cancel'}else{('C compact [{0}] {1} {2}% free   hold C to adjust' -f $(if($AutoCompact){'x'}else{' '}),$CompactMode,$CompactThreshold)})})
+        $rows[4].SeparatorBefore=$true
+    }
+    $inside=[Math]::Max(1,[Math]::Min(78,$Width-7))
+    $labelWidth=[Math]::Min(10,[Math]::Max(1,$inside-4))
+    $valueWidth=[Math]::Max(1,$inside-$labelWidth-3)
+    $borderWidth=$inside+2
+    $table=[Collections.Generic.List[string]]::new()
+    $title=' SHORTCUTS / CTRL TO HIDE '
+    $left=[int][Math]::Floor(($borderWidth-$title.Length)/2)
+    $right=[Math]::Max(0,$borderWidth-$title.Length-$left)
+    $table.Add(('+'+('-' * $left)+$title+('-' * $right)+'+'))
+    foreach($row in $rows){
+        if($row.SeparatorBefore){$table.Add(('+'+('-' * $borderWidth)+'+'))}
+        $label=ConvertTo-DeckTerminalText $row.Label $labelWidth
+        $value=ConvertTo-DeckTerminalText $row.Text $valueWidth
+        $table.Add(('| {0} | {1} |' -f $label.PadRight($labelWidth),$value.PadRight($valueWidth)))
+    }
+    $table.Add(('+'+('-' * $borderWidth)+'+'))
+    return $table.ToArray()
+}
+function Initialize-DeckTerminalKeyboard {
+    if('CodexDeckNativeKeyboard' -as [type]){return}
+    Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class CodexDeckNativeKeyboard {
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int virtualKey);
+}
+'@
+}
+function Get-DeckTerminalControlKeyDown {
+    try{Initialize-DeckTerminalKeyboard;return (([CodexDeckNativeKeyboard]::GetAsyncKeyState(0x11) -band 0x8000) -ne 0)}catch{return $false}
+}
 function Get-DeckTerminalRecentConversation([string]$SuiteRoot, [string]$Account, [DateTimeOffset]$Since) {
     if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){return}
     $cutoff=$Since.UtcDateTime.AddSeconds(-2)
@@ -110,7 +227,7 @@ function Format-DeckTerminalThemePercent($Window) {
     if(-not $Window -or $null -eq $Window.RemainingPct){return '  ?%'}
     return ('{0,3}%' -f [int][Math]::Min(100,[Math]::Max(0,[double]$Window.RemainingPct)))
 }
-function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[int]$Selected,[int]$Width,[int]$Height,[string]$Filter,[string]$Notice,[bool]$Mask,$WarmupSettings,$WarmupHistory,[bool]$AutoCompact,[int]$CompactThreshold,[bool]$CompactAdjusting,[string]$CompactMode,[string]$Theme,$LastConversation=$null,$SessionIndex=$null,[string]$Harness=$null) {
+function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[int]$Selected,[int]$Width,[int]$Height,[string]$Filter,[string]$Notice,[bool]$Mask,$WarmupSettings,$WarmupHistory,[bool]$AutoCompact,[int]$CompactThreshold,[bool]$CompactAdjusting,[string]$CompactMode,[string]$Theme,$LastConversation=$null,$SessionIndex=$null,[string]$Harness=$null,[bool]$ShowShortcuts=$true) {
     $lines=[Collections.Generic.List[object]]::new()
     if(-not $SessionIndex){$SessionIndex=New-DeckSessionIndex $Sessions}
     function Add-Line([string]$Text,[string]$Color='Gray',[string]$Background='Black') {
@@ -118,12 +235,12 @@ function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[in
     }
     $rule='  '+('-' * [Math]::Max(1,[Math]::Min(78,$Width - 4)))
     $lastConversationLine=Format-DeckTerminalLastConversation $LastConversation
-    $pageSize=[Math]::Max(1,(Get-DeckTerminalThemePageSize $Theme $Height)-$(if($lastConversationLine){1}else{0}))
+    $pageSize=Get-DeckTerminalDashboardPageSize $Theme $Height $ShowShortcuts $Harness ([bool]$lastConversationLine)
     $start=[int]([Math]::Floor($Selected / $pageSize) * $pageSize)
     $end=[Math]::Min($Names.Count,$start+$pageSize)
     $entries=@(for($i=$start;$i -lt $end;$i++){Get-DeckTerminalThemeEntry $Names[$i] $Cache $Profiles $sessionIndex $Tasks $Mask})
     $active=if($Names.Count){Get-DeckTerminalThemeEntry $Names[$Selected] $Cache $Profiles $sessionIndex $Tasks $Mask}else{$null}
-    $filterText=if($Filter){"FILTER  $Filter"}elseif($Harness){"FILTER  All $Harness accounts  / to search"}else{'FILTER  All accounts  / to search'}
+    $filterText=if($Filter){"FILTER  $Filter"}elseif($Harness){"FILTER  All $Harness accounts"}else{'FILTER  All accounts'}
     $dashboardName=if($Harness){(Get-DeckHarness $Harness).Name}else{'Codex'}
     Add-Line ("  $($dashboardName.ToUpperInvariant()) / DECK     $($Theme.ToUpperInvariant())") 'Cyan'
     Add-Line ('  {0} accounts    {1} sessions    {2} checking    |    {3}' -f $Names.Count,@($Sessions).Count,$Tasks.Count,$filterText) 'DarkGray'
@@ -133,14 +250,14 @@ function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[in
             Add-Line '  SELECTED ACCOUNT' 'Cyan'
             if($active){
                 Add-Line ('  > {0}   {1}   {2}' -f $active.DisplayName,$active.Plan,$active.State) 'White' 'DarkBlue'
-                if($Harness -eq 'Claude'){Add-Line ('    LAST AUTH CHECK  {0}    SESSIONS  {1}' -f $active.Checked,$active.SessionCount) 'Gray'}
+                if($Harness){Add-Line ('    LAST PROFILE CHECK  {0}    SESSIONS  {1}' -f $active.Checked,$active.SessionCount) 'Gray'}
                 else{Add-Line ('    PRIMARY  {0}    WEEKLY  {1}' -f (Format-DeckTerminalQuota $active.Primary),(Format-DeckTerminalQuota $active.Weekly)) 'Green';Add-Line ('    RESET  {0}    CHECKED  {1}    SESSIONS  {2}' -f $active.Reset,$active.Checked,$active.SessionCount) 'Gray'}
                 Add-Line ('    {0}   |   {1} / {2}' -f $active.Email,$active.Model,$active.Effort) 'DarkGray'
-            }else{Add-Line '  No matching accounts. Press N to add one.' 'Yellow';Add-Line '';Add-Line '';Add-Line ''}
-            Add-Line $(if($Harness -eq 'Claude'){'  ACCOUNT ROSTER                         PROVIDER   AUTH STATUS'}else{'  ACCOUNT ROSTER                         PRIMARY   WEEKLY   STATE'}) 'DarkCyan'
+            }else{Add-Line '  No matching accounts.' 'Yellow';Add-Line '';Add-Line '';Add-Line ''}
+            Add-Line $(if($Harness){'  ACCOUNT ROSTER                         PROVIDER   AUTH STATUS'}else{'  ACCOUNT ROSTER                         PRIMARY   WEEKLY   STATE'}) 'DarkCyan'
             foreach($entry in $entries){
                 $marker=if($entry.Name -eq $active.Name){'>'}else{' '}
-                if($Harness -eq 'Claude'){Add-Line ('  {0} {1,-27} {2,-10} {3}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 27),$entry.Plan,$entry.State) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})}
+                if($Harness){Add-Line ('  {0} {1,-27} {2,-10} {3}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 27),$entry.Plan,$entry.State) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})}
                 else{Add-Line ('  {0} {1,-27} {2,5}   {3,5}   {4}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 27),(Format-DeckTerminalThemePercent $entry.Primary),(Format-DeckTerminalThemePercent $entry.Weekly),$entry.State) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})}
             }
         }
@@ -148,65 +265,53 @@ function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[in
             foreach($entry in $entries){
                 $marker=if($entry.Name -eq $active.Name){'>'}else{' '}
                 Add-Line ('  {0} {1,-24} {2,-9} {3}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 24),(ConvertTo-DeckTerminalText $entry.Plan 9),$entry.State) $(if($marker -eq '>'){'White'}else{'Cyan'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})
-                if($Harness -eq 'Claude'){Add-Line ('      LAST AUTH CHECK {0}' -f $entry.Checked) 'DarkGray'}else{Add-Line ('      PRIMARY {0}    WEEKLY {1}    RESET {2}' -f (Format-DeckTerminalQuota $entry.Primary),(Format-DeckTerminalQuota $entry.Weekly),$entry.Reset) 'Green'}
+                if($Harness){Add-Line ('      LAST PROFILE CHECK {0}' -f $entry.Checked) 'DarkGray'}else{Add-Line ('      PRIMARY {0}    WEEKLY {1}    RESET {2}' -f (Format-DeckTerminalQuota $entry.Primary),(Format-DeckTerminalQuota $entry.Weekly),$entry.Reset) 'Green'}
             }
-            if(-not $Names.Count){Add-Line '  No matching accounts. Press N to add one.' 'Yellow'}
+            if(-not $Names.Count){Add-Line '  No matching accounts.' 'Yellow'}
             if($active){Add-Line ('  SELECTED  {0}  |  {1} / {2}  |  {3}' -f $active.DisplayName,$active.Model,$active.Effort,$active.Email) 'DarkCyan'}
         }
         'Ledger' {
-            Add-Line $(if($Harness -eq 'Claude'){('  {0,-20} {1,-12} {2}' -f 'ACCOUNT','PROVIDER','AUTH STATUS')}else{('  {0,-20} {1,-8} {2,7} {3,7} {4,-15} {5}' -f 'ACCOUNT','PLAN','PRIMARY','WEEK','STATE','RESET')}) 'DarkCyan'
+            Add-Line $(if($Harness){('  {0,-20} {1,-12} {2}' -f 'ACCOUNT','PROVIDER','AUTH STATUS')}else{('  {0,-20} {1,-8} {2,7} {3,7} {4,-15} {5}' -f 'ACCOUNT','PLAN','PRIMARY','WEEK','STATE','RESET')}) 'DarkCyan'
             foreach($entry in $entries){
                 $marker=if($entry.Name -eq $active.Name){'>'}else{' '}
-                if($Harness -eq 'Claude'){Add-Line ('  {0}{1,-19} {2,-12} {3}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 19),(ConvertTo-DeckTerminalText $entry.Plan 12),$entry.State) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})}
+                if($Harness){Add-Line ('  {0}{1,-19} {2,-12} {3}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 19),(ConvertTo-DeckTerminalText $entry.Plan 12),$entry.State) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})}
                 else{Add-Line ('  {0}{1,-19} {2,-8} {3,7} {4,7} {5,-15} {6}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 19),(ConvertTo-DeckTerminalText $entry.Plan 8),(Format-DeckTerminalThemePercent $entry.Primary),(Format-DeckTerminalThemePercent $entry.Weekly),(ConvertTo-DeckTerminalText $entry.State 15),$entry.Reset) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})}
             }
-            if(-not $Names.Count){Add-Line '  No matching accounts. Press N to add one.' 'Yellow'}
+            if(-not $Names.Count){Add-Line '  No matching accounts.' 'Yellow'}
             Add-Line $rule 'DarkGray'
-            if($active){Add-Line ('  {0}  |  {1} / {2}  |  {3}' -f $active.DisplayName,$active.Model,$active.Effort,$active.Email) 'Cyan';Add-Line ('  Checked {0}   Sessions {1}   Reset credits {2}' -f $active.Checked,$active.SessionCount,$active.Credits) 'DarkGray'}
+            if($active){Add-Line ('  {0}  |  {1} / {2}  |  {3}' -f $active.DisplayName,$active.Model,$active.Effort,$active.Email) 'Cyan';if($Harness){Add-Line ('  Last profile check {0}   Sessions {1}' -f $active.Checked,$active.SessionCount) 'DarkGray'}else{Add-Line ('  Checked {0}   Sessions {1}   Reset credits {2}' -f $active.Checked,$active.SessionCount,$active.Credits) 'DarkGray'}}
             else{Add-Line '';Add-Line ''}
         }
         'Split' {
             $left=[Math]::Min(34,[Math]::Max(24,[int][Math]::Floor($Width * .38)))
             Add-Line (('  {0,-'+$left+'} | ACCOUNT DETAIL') -f 'ACCOUNTS') 'DarkCyan'
             $detail=@()
-            if($active){if($Harness -eq 'Claude'){$detail=@($active.DisplayName,('Provider: '+$active.Plan),('Sign-in: '+$active.State),('Last auth check: '+$active.Checked),('Sessions: '+$active.SessionCount),('Model: '+$active.Model+' / '+$active.Effort))}else{$detail=@($active.DisplayName,('Plan: '+$active.Plan),('State: '+$active.State),('Primary: '+(Format-DeckTerminalQuota $active.Primary)),('Weekly:  '+(Format-DeckTerminalQuota $active.Weekly)),('Next reset: '+$active.Reset),('Checked: '+$active.Checked),('Sessions: '+$active.SessionCount),('Model: '+$active.Model+' / '+$active.Effort),$active.Email)}}
+            if($active){if($Harness){$detail=@($active.DisplayName,('Provider: '+$active.Plan),('Profile status: '+$active.State),('Last profile check: '+$active.Checked),('Sessions: '+$active.SessionCount),('Model: '+$active.Model+' / '+$active.Effort))}else{$detail=@($active.DisplayName,('Plan: '+$active.Plan),('State: '+$active.State),('Primary: '+(Format-DeckTerminalQuota $active.Primary)),('Weekly:  '+(Format-DeckTerminalQuota $active.Weekly)),('Next reset: '+$active.Reset),('Checked: '+$active.Checked),('Sessions: '+$active.SessionCount),('Model: '+$active.Model+' / '+$active.Effort),$active.Email)}}
             for($j=0;$j -lt [Math]::Max($entries.Count,[Math]::Min($detail.Count,$pageSize));$j++){
                 $entry=if($j -lt $entries.Count){$entries[$j]}else{$null}
                 $marker=if($entry -and $entry.Name -eq $active.Name){'>'}else{' '}
-                $leftText=if($entry){if($Harness -eq 'Claude'){'{0} {1,-16} {2}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 16),$entry.State}else{'{0} {1,-16} {2,4}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 16),(Format-DeckTerminalThemePercent $entry.Primary)}}else{''}
+                $leftText=if($entry){if($Harness){'{0} {1,-16} {2}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 16),$entry.State}else{'{0} {1,-16} {2,4}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 16),(Format-DeckTerminalThemePercent $entry.Primary)}}else{''}
                 $rightText=if($j -lt $detail.Count){$detail[$j]}else{''}
                 Add-Line (('  {0,-'+$left+'} | {1}') -f $leftText,$rightText) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})
             }
-            if(-not $Names.Count){Add-Line '  No matching accounts. Press N to add one.' 'Yellow'}
+            if(-not $Names.Count){Add-Line '  No matching accounts.' 'Yellow'}
         }
     }
     Add-Line ('  {0}-{1} of {2} accounts' -f [Math]::Min($start+1,$Names.Count),$end,$Names.Count) 'DarkGray'
     Add-Line $rule 'DarkGray'
-    if($Harness -eq 'Claude'){
-        Add-Line '  LAUNCH    Enter open   / find   Q quit' 'Cyan'
-        Add-Line '  CHECK     R selected sign-in   A all sign-ins' 'Gray'
-        Add-Line '  ACCOUNTS  N new   L login   F2 rename   M mask' 'Gray'
-        Add-Line '  OPEN      D desktop   S settings   Y Analytics' 'Gray'
-        Add-Line $(if($Harness -eq 'Claude'){'  FILES     G defaults   I instructions   E memory folder   K skills'}else{'  FILES     G rules   I instructions   E memories   K skills'}) 'Gray'
-        Add-Line '  STATUS    Claude /usage shows plan limits; Deck checks sign-in only' 'Yellow'
-    }else{
-        Add-Line '  LAUNCH    Enter open   / find   B best   Q quit' 'Cyan'
-        Add-Line '  ACCOUNTS  R check   A all   N new   L login   F2 rename   M mask' 'Gray'
-        Add-Line '  WARM-UP   U now   T times   W select   P pause' 'Gray'
-        Add-Line '  OPEN      D desktop   S settings   Y Analytics' 'Gray'
-        Add-Line '  FILES     G rules   I instructions   E memories   K skills' 'Gray'
-        if($CompactAdjusting){Add-Line ('  COMPACT   {0}  {1}% free   Up/Down 5%   Enter save   Esc cancel' -f $CompactMode,$CompactThreshold) 'White' 'DarkBlue'}
-        else{Add-Line ('  COMPACT   C [{0}] {1} at {2}% free   Hold C to adjust' -f $(if($AutoCompact){'x'}else{' '}),$CompactMode,$CompactThreshold) 'Gray'}
+    if(-not $Harness){
         $warmMode=if(-not $WarmupSettings -or -not $WarmupSettings.WarmupEnabled){'PAUSED'}elseif($WarmupSettings.WarmupSchedulingEnabled){'SCHEDULED'}else{'UNSCHEDULED'}
         $warmState=if($WarmupSettings -and $active){if($active.AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}else{Get-DeckWarmupStatus $WarmupSettings $(if($Cache[$active.Name]){$Cache[$active.Name]}else{@{Account=$active.Name}}) $WarmupHistory[$active.Name]}}else{'No account selected'}
         Add-Line ('  STATUS    Warm-up {0}  |  {1}' -f $warmMode,$warmState) 'Yellow'
     }
     if($lastConversationLine){Add-Line ('  '+$lastConversationLine) 'DarkCyan'}
     Add-Line ('  NOTICE    '+$Notice) 'Yellow'
+    if($ShowShortcuts){foreach($shortcutLine in @(Get-DeckTerminalShortcutTable $Harness $Width -Themed:$true -CompactAdjusting:$CompactAdjusting -AutoCompact:$AutoCompact -CompactThreshold $CompactThreshold -CompactMode $CompactMode -WarmupSettings $WarmupSettings)){Add-Line ('  '+$shortcutLine) $(if($shortcutLine.StartsWith('+')){'DarkCyan'}else{'Gray'})}}
+    else{Add-Line '  Press Ctrl to show shortcuts' 'DarkGray'}
     return $lines.ToArray()
 }
-function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 55, [bool]$CompactAdjusting = $false, [string]$CompactMode = 'Native', [string]$Theme = 'Default', $LastConversation = $null, $SessionIndex=$null, [string]$Harness=$null) {
-    if($Theme -in @('Focus','Cards','Ledger','Split')){return Get-DeckTerminalThemeFrame $Names $Cache $Profiles $Sessions $Tasks $Selected $Width $Height $Filter $Notice $Mask $WarmupSettings $WarmupHistory $AutoCompact $CompactThreshold $CompactAdjusting $CompactMode $Theme $LastConversation $SessionIndex $Harness}
+function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 55, [bool]$CompactAdjusting = $false, [string]$CompactMode = 'Native', [string]$Theme = 'Default', $LastConversation = $null, $SessionIndex=$null, $Harness=$null,[bool]$ShowShortcuts=$true) {
+    if($Theme -in @('Focus','Cards','Ledger','Split')){return Get-DeckTerminalThemeFrame $Names $Cache $Profiles $Sessions $Tasks $Selected $Width $Height $Filter $Notice $Mask $WarmupSettings $WarmupHistory $AutoCompact $CompactThreshold $CompactAdjusting $CompactMode $Theme $LastConversation $SessionIndex $Harness $ShowShortcuts}
     $lines = [Collections.Generic.List[object]]::new()
     if(-not $SessionIndex){$SessionIndex=New-DeckSessionIndex $Sessions}
     function Add-Line([string]$Text, [string]$Color = 'Gray', [string]$Background = 'Black') {
@@ -215,11 +320,11 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
     $dashboardName=if($Harness){(Get-DeckHarness $Harness).Name}else{'Codex'}
     Add-Line ('  {0} / DECK                                      ACCOUNT CONTROL' -f $dashboardName.ToUpperInvariant()) 'Cyan'
     Add-Line ('  {0} accounts   /   {1} connected sessions   /   {2} checking' -f $Names.Count, @($Sessions).Count, $Tasks.Count) 'DarkGray'
-    Add-Line $(if($Harness -eq 'Claude'){'  Isolated Claude profiles  |  press R/A to check sign-in; /usage shows plan limits'}elseif($Harness){"  Isolated $Harness profiles"}else{'  Usage remaining  |  cached instantly, fresh checks in background'}) 'DarkGray'
-    Add-Line ('  Filter: {0}' -f $(if ($Filter) { $Filter } elseif($Harness){"all $Harness accounts  (/ to search)"} else { 'all accounts  (/ to search)' })) 'Cyan'
+    if($Harness){Add-Line $(if($Harness -eq 'Claude'){'  Isolated Claude profiles  |  sign-in checks available; /usage shows plan limits'}elseif($Harness -eq 'Antigravity'){'  Isolated Antigravity profiles  |  R/A check saved credentials; /usage shows live service status'}else{"  Isolated $Harness profiles"}) 'DarkGray'}
+    Add-Line ('  Filter: {0}' -f $(if ($Filter) { $Filter } elseif($Harness){"all $Harness accounts"} else { 'all accounts' })) 'Cyan'
     if($Harness){Add-Line ('  {0,-24} {1,-14} {2}' -f 'ACCOUNT','PROVIDER','STATUS') 'DarkGray'}else{Add-Line ('  {0,-18} {1,-9} {2,-18} {3,-18} {4,-14} {5}' -f 'ACCOUNT','PLAN','PRIMARY','WEEKLY','STATE','NEXT RESET') 'DarkGray'}
     $lastConversationLine=Format-DeckTerminalLastConversation $LastConversation
-    $pageSize = [Math]::Max(1, $Height - 18 - $(if($lastConversationLine){1}else{0}))
+    $pageSize = Get-DeckTerminalDashboardPageSize $Theme $Height $ShowShortcuts $Harness ([bool]$lastConversationLine)
     $start = [int]([Math]::Floor($Selected / $pageSize) * $pageSize)
     for ($i = $start; $i -lt [Math]::Min($Names.Count, $start + $pageSize); $i++) {
         $name = $Names[$i]; $row = $Cache[$name]; $profile = $Profiles[$name]
@@ -228,7 +333,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
         $week = $row.Windows | Where-Object DurationSeconds -eq 604800 | Select-Object -First 1
         $state = if($profile.AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}else{Get-DeckTerminalHealth $row}
         if ($profile.PlanType -eq 'pool') { $state = 'Pooled session' }
-        if($profile.Harness -eq 'Claude' -and $profile.AuthStatus){$state=$profile.AuthStatus}
+        if($profile.Harness -in @('Claude','Antigravity') -and $profile.AuthStatus){$state=$profile.AuthStatus}
         elseif($profile.Harness -and $profile.Harness -ne 'Codex'){$state=$profile.Harness}
         if ($Tasks.ContainsKey($name)) { $state = 'Checking...' }
         $marker = if ($i -eq $Selected) { '>' } else { ' ' }
@@ -239,7 +344,7 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
         if($Harness){Add-Line ('{0} {1,-24} {2,-14} {3}' -f $marker,(ConvertTo-DeckTerminalText $displayName 24),(ConvertTo-DeckTerminalText $profile.Provider 14),(ConvertTo-DeckTerminalText $state 24)) $color $bg}
         else{Add-Line ('{0} {1,-18} {2,-9} {3,-18} {4,-18} {5,-14} {6}' -f $marker,(ConvertTo-DeckTerminalText $name 18),(ConvertTo-DeckTerminalText $profile.PlanType 9),(Format-DeckTerminalQuota $five),(Format-DeckTerminalQuota $week),(ConvertTo-DeckTerminalText $state 14),(Format-DeckTerminalReset $resetWindow)) $color $bg}
     }
-    if (-not $Names.Count) { Add-Line '  No matching accounts. Press N to create one, or / to change the filter.' 'Yellow' }
+    if (-not $Names.Count) { Add-Line '  No matching accounts.' 'Yellow' }
     Add-Line ('  -- {0}-{1} of {2} --' -f ([Math]::Min($start + 1,$Names.Count)),([Math]::Min($start + $pageSize,$Names.Count)),$Names.Count) 'DarkGray'
     if ($Names.Count) {
         $name = $Names[$Selected]; $row = $Cache[$name]; $profile = $Profiles[$name]
@@ -249,34 +354,28 @@ function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [in
         $checked = 'never'
         if ($row.CheckedAt) { try { $checked = ([DateTimeOffset]$row.CheckedAt).ToLocalTime().ToString('MMM dd HH:mm:ss') } catch {} }
         $activeHealth=if($profile.AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}else{Get-DeckTerminalHealth $row}
-        if($Harness -eq 'Claude'){$authChecked=if($profile.AuthCheckedAt){try{([DateTimeOffset]$profile.AuthCheckedAt).ToLocalTime().ToString('MMM dd HH:mm:ss')}catch{'unknown'}}else{'never'};Add-Line ('  Last sign-in check: {0}  |  Claude /usage shows plan limits' -f $authChecked) 'DarkGray';Add-Line '  Config, credentials, history, plugins, memory and skills are isolated.' 'DarkGray'}
-        elseif($Harness -eq 'Antigravity'){$authChecked=if($profile.AuthCheckedAt){try{([DateTimeOffset]$profile.AuthCheckedAt).ToLocalTime().ToString('MMM dd HH:mm:ss')}catch{'unknown'}}else{'never'};Add-Line ('  Last profile check: {0}  |  /usage refreshes service quota and sign-in' -f $authChecked) 'DarkGray';Add-Line '  This check only detects the isolated credential file; no Windows user is created.' 'DarkGray'}
-        elseif($Harness){Add-Line ('  Isolated '+$Harness+' profile and native settings.') 'DarkGray'}
-        else{Add-Line ('  Last checked: {0}  |  {1}  |  active here: {2}' -f $checked,$activeHealth,($env:CODEX_HOME -and (Split-Path $env:CODEX_HOME -Leaf) -eq $name)) 'DarkGray'}
+        if($profile.Harness -in @('Claude','Antigravity') -and $profile.AuthStatus){$activeHealth=$profile.AuthStatus}
+        if($Harness -eq 'Claude'){$authChecked=if($profile.AuthCheckedAt){try{([DateTimeOffset]$profile.AuthCheckedAt).ToLocalTime().ToString('MMM dd HH:mm:ss')}catch{'unknown'}}else{'never'};Add-Line ('  Last sign-in check: {0}  |  {1}  |  Claude /usage shows plan limits' -f $authChecked,$activeHealth) 'DarkGray';Add-Line ('  NOTICE  '+$Notice) 'Yellow';Add-Line '  Config, credentials, history, plugins, memory and skills are isolated.' 'DarkGray'}
+        elseif($Harness -eq 'Antigravity'){$authChecked=if($profile.AuthCheckedAt){try{([DateTimeOffset]$profile.AuthCheckedAt).ToLocalTime().ToString('MMM dd HH:mm:ss')}catch{'unknown'}}else{'never'};$failoverStatus=if($WarmupSettings.HarnessAntigravityFailoverEnabled){'ON'}else{'OFF'};$failoverGroup=[string]$WarmupSettings.HarnessAntigravityFailoverAccounts;Add-Line ('  Last check: {0}  |  headless -p failover: {1} ({2})' -f $authChecked,$failoverStatus,$failoverGroup) 'DarkGray';Add-Line ('  NOTICE  '+$Notice) 'Yellow';Add-Line $(if($profile.AuthStatus -eq 'Runner profile'){'  Legacy runner profile: sign-in is isolated by its Windows user.'}else{'  New profiles keep their OAuth files separate under this Deck account; no extra Windows users are needed. /usage shows live limits.'}) 'DarkGray'}
+        elseif($Harness){Add-Line ('  Isolated '+$Harness+' profile and native settings.') 'DarkGray';Add-Line ('  NOTICE  '+$Notice) 'Yellow'}
+        else{Add-Line ('  Last checked: {0}  |  {1}  |  active here: {2}' -f $checked,$activeHealth,($env:CODEX_HOME -and (Split-Path $env:CODEX_HOME -Leaf) -eq $name)) 'DarkGray';Add-Line ('  NOTICE  '+$Notice) 'Yellow'}
         $resets = foreach ($window in $row.Windows) {
             if ($window.ResetsAtUnix) { '{0}: {1}' -f $window.Label,([DateTimeOffset]::FromUnixTimeSeconds([long]$window.ResetsAtUnix).ToLocalTime().ToString('MMM dd HH:mm')) }
         }
         if(-not $Harness){Add-Line ('  Window resets (primary = 5H or plan window): ' + ($resets -join '  /  ') + ' | Reset credits: ' + (Format-DeckResetCredits $row)) 'DarkGray'}
         $connected = @(Get-DeckIndexedSessions $sessionIndex $name)
-        if (-not $Harness -and $connected.Count) { Add-Line ('  Sessions: ' + (($connected | ForEach-Object { '{0} @ {1}' -f $_.ProcessId,$_.Folder }) -join ' | ')) 'DarkGray' }
+        if ($connected.Count) { Add-Line ('  Sessions: ' + (($connected | ForEach-Object { '{0} @ {1}' -f $_.ProcessId,$_.Folder }) -join ' | ')) 'DarkGray' }
     }
     if ($WarmupSettings -and -not $Harness) {
         $warmState=if($Names.Count){if($Profiles[$Names[$Selected]].AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}else{Get-DeckWarmupStatus $WarmupSettings $(if($Cache[$Names[$Selected]]){$Cache[$Names[$Selected]]}else{@{Account=$Names[$Selected]}}) $WarmupHistory[$Names[$Selected]]}}else{'No account selected'}
         $warmMode=if(-not $WarmupSettings.WarmupEnabled){'PAUSED'}elseif($WarmupSettings.WarmupSchedulingEnabled){'SCHEDULED'}else{'UNSCHEDULED'}
         Add-Line ('  AUTO WARM-UP: '+$warmMode+' | '+$warmState) 'Yellow'
     }
+    if(-not $Names.Count){Add-Line ('  NOTICE  '+$Notice) 'Yellow'}
     if($lastConversationLine){Add-Line ('  '+$lastConversationLine) 'DarkCyan'}
-    if(-not $Harness){Add-Line '  WARMUP   U run now  T daily times  W select account  P pause/resume' 'DarkMagenta'}
-    Add-Line ('  ' + $Notice) 'Yellow'
-    if($CompactAdjusting){
-        Add-Line ('  AUTO-COMPACT {0} / FREE CONTEXT  [{1}%]   Up/Down 5%   Enter save   Esc cancel' -f $CompactMode.ToUpperInvariant(),$CompactThreshold) 'White' 'DarkBlue'
-    }else{
-        if($Harness){Add-Line ('  NAVIGATE Enter open '+(Get-DeckHarness $Harness).Name+'  / search  Q quit') 'Gray'}else{Add-Line ('  NAVIGATE Enter launch / sign in if needed  / search  B best  Q quit  C compact [{0}] {1} {2}% free (hold C to adjust)' -f $(if($AutoCompact){'x'}else{' '}),$CompactMode,$CompactThreshold) 'Gray'}
-    }
-    if($Harness -eq 'Claude'){Add-Line '  MANAGE R check sign-in  A all  L login  N new  F2 rename  G defaults  M mask' 'DarkGray';Add-Line '  DISPLAY D desktop  S settings  Y Analytics  I instructions  E memory folder  K skills' 'DarkGray'}
-    elseif($Harness -eq 'Antigravity'){Add-Line '  MANAGE R check profile  A all  L login  N new  F2 rename  G defaults  M mask' 'DarkGray';Add-Line '  DISPLAY D desktop  S settings  Y Analytics  I rules  E learned rules  K skills' 'DarkGray'}
-    elseif($Harness){Add-Line '  MANAGE L login  N new  F2 rename  G global  M mask' 'DarkGray';Add-Line '  DISPLAY D desktop  S settings  Y Analytics  I instructions  E memories  K skills' 'DarkGray'}
-    else{Add-Line '  MANAGE R refresh  A all  J auto-login  H history  F2 rename  L login  N new  G global  V auth helper  M mask' 'DarkGray';Add-Line '  DISPLAY D desktop  S settings  Y Analytics  I instructions  E memories  K skills' 'DarkGray'}
+    if($CompactAdjusting -and -not $ShowShortcuts){Add-Line ('  AUTO-COMPACT {0} / FREE CONTEXT  [{1}%]   Up/Down 5%   Enter save   Esc cancel' -f $CompactMode.ToUpperInvariant(),$CompactThreshold) 'White' 'DarkBlue'}
+    if($ShowShortcuts){foreach($shortcutLine in @(Get-DeckTerminalShortcutTable $Harness $Width -CompactAdjusting:$CompactAdjusting -AutoCompact:$AutoCompact -CompactThreshold $CompactThreshold -CompactMode $CompactMode -WarmupSettings $WarmupSettings)){Add-Line ('  '+$shortcutLine) $(if($shortcutLine.StartsWith('+')){'DarkCyan'}else{'Gray'})}}
+    else{Add-Line '  Press Ctrl to show shortcuts' 'DarkGray'}
     return $lines.ToArray()
 }
 function Read-DeckTerminalInput([string]$Prompt, [int]$MaxLength = 40) {
@@ -296,15 +395,7 @@ function Read-DeckTerminalInput([string]$Prompt, [int]$MaxLength = 40) {
 }
 function Test-DeckTerminalKeyHold([int]$VirtualKey, [int]$HoldMilliseconds = 450) {
     try {
-        if(-not ('CodexDeckNativeKeyboard' -as [type])){
-            Add-Type -TypeDefinition @'
-using System.Runtime.InteropServices;
-public static class CodexDeckNativeKeyboard {
-    [DllImport("user32.dll")]
-    public static extern short GetAsyncKeyState(int virtualKey);
-}
-'@
-        }
+        Initialize-DeckTerminalKeyboard
         $until=[DateTimeOffset]::UtcNow.AddMilliseconds($HoldMilliseconds)
         while([DateTimeOffset]::UtcNow -lt $until){
             if(([CodexDeckNativeKeyboard]::GetAsyncKeyState($VirtualKey) -band 0x8000) -eq 0){return $false}
@@ -379,7 +470,7 @@ function Show-DeckTerminal {
     $cache = Get-DeckTerminalCache $root
     $profiles = @{}; $tasks = @{}; $pending = [Collections.Generic.Queue[string]]::new()
     $names=@(); $sessions=@(); $sessionIndex=@{}; $sessionRead=$null; $lastSessionRead=[DateTimeOffset]::MinValue; $warmHistory=@{}; $stateRefreshAt=[DateTimeOffset]::MinValue; $authIssuesStamp=''
-    $selected = 0; $filter = ''; $notice = if($Harness -eq 'Claude'){"Claude profiles. R/A check sign-in; use /usage inside Claude Code for plan limits."}elseif($Harness){"$Harness profiles. Sign in with L."}else{'Ready. Cached usage is shown; press R or A for fresh checks.'}; $mask = $true; $autoCompact = [bool]$warmSettings.AutoCompactLaunchEnabled
+    $selected = 0; $filter = ''; $notice = if($Harness -eq 'Claude'){"Claude profiles. Sign-in checks are available; use /usage inside Claude Code for plan limits."}elseif($Harness -eq 'Antigravity'){'Antigravity profiles. N creates isolated file profiles; R/A check saved credentials; /usage shows live status and limits.'}elseif($Harness){"$Harness profiles. Sign-in is available."}else{'Ready. Cached usage is shown; fresh checks are available.'}; $mask = $true; $autoCompact = [bool]$warmSettings.AutoCompactLaunchEnabled; $showShortcuts=$false; $controlWasDown=$false
     $dashboardState=@{LastConversation=$null}
     $queueAll=$CheckAll.IsPresent
     $compactAdjusting=$false; $compactDraft=[int]$warmSettings.AutoCompactThresholdPercent
@@ -390,16 +481,16 @@ function Show-DeckTerminal {
     }
     $oldColor = [Console]::ForegroundColor; $oldBackground = [Console]::BackgroundColor
     $oldCursor = $true
-    if ($interactive) { $oldCursor = [Console]::CursorVisible; [Console]::CursorVisible = $false; Clear-Host; $lastFrame = '' }
+    if ($interactive) { Initialize-DeckTerminalKeyboard; $controlWasDown=Get-DeckTerminalControlKeyDown; $oldCursor = [Console]::CursorVisible; [Console]::CursorVisible = $false; Clear-Host; $lastFrame = '' }
     try {
         do {
             $loopNow=[DateTimeOffset]::UtcNow
             $terminalCacheDirty=$false
-            if(-not $Harness -and $sessionRead -and $sessionRead.Handle.IsCompleted){
+            if($sessionRead -and $sessionRead.Handle.IsCompleted){
                 try{$sessions=@(Complete-DeckSessionRead $sessionRead);$sessionIndex=New-DeckSessionIndex $sessions;$lastFrame=''}catch{}
                 $sessionRead=$null
             }
-            if($interactive -and -not $Harness -and -not $sessionRead -and ($loopNow-$lastSessionRead).TotalSeconds -ge 5){
+            if($interactive -and -not $sessionRead -and ($loopNow-$lastSessionRead).TotalSeconds -ge 5){
                 try{$sessionRead=Start-DeckSessionRead $root}catch{}
                 $lastSessionRead=$loopNow
             }
@@ -429,10 +520,10 @@ function Show-DeckTerminal {
                         if(-not $profiles[$name].AuthIssue -and $profiles[$name].PlanType -ne 'pool' -and (Test-DeckCodexAccount $SuiteRoot $name) -and (Test-Path -LiteralPath (Join-Path $accountRoot "$name/auth.json")) -and -not $tasks.ContainsKey($name) -and -not $pending.Contains($name)){$pending.Enqueue($name)}
                     }
                 }
-                if(-not $interactive -and -not $Harness){$sessions=@(Get-DeckSessions $root);$sessionIndex=New-DeckSessionIndex $sessions}
+                if(-not $interactive){$sessions=@(Get-DeckSessions $root);$sessionIndex=New-DeckSessionIndex $sessions}
                 $stateRefreshAt=$loopNow.AddSeconds(2)
             }
-            if($interactive -and $queueAll){
+            if($queueAll -and ($interactive -or $Harness -in @('Claude','Antigravity'))){
                 if($Harness -eq 'Claude'){
                     $summary=Invoke-DeckClaudeTerminalAuthChecks $SuiteRoot $names $profiles
                     $notice='Checked '+$summary.Total+' Claude profiles: '+$summary.SignedIn+' signed in, '+$summary.NeedsSignIn+' need sign-in, '+$summary.Failed+' checks failed. Usage limits remain in Claude /usage.'
@@ -465,7 +556,7 @@ function Show-DeckTerminal {
                     if($revoked){
                         [void](Set-DeckAuthIssue $SuiteRoot $name $failureMessage)
                         $profiles[$name]=Get-DeckProfile $SuiteRoot $name
-                        $notice="$name needs sign-in. Press Enter or L to sign in again."
+                    $notice="$name needs sign-in. Use its sign-in action to continue."
                     }else{$notice = "$name : $failureMessage"}
                     if (-not $cache[$name]) { $cache[$name] = [pscustomobject]@{Account=$name;Status='error';Windows=@()} }
                     $cache[$name] | Add-Member NoteProperty Error $(if($revoked){'OAuth token expired or invalid; sign in again.'}else{'Last refresh failed; displayed usage is cached.'}) -Force
@@ -485,7 +576,8 @@ function Show-DeckTerminal {
             $width = 110; $height = [Math]::Max(25,$visible.Count + 18)
             if ($interactive) { $width = [Console]::WindowWidth; $height = [Console]::WindowHeight }
             $compactThreshold=if($compactAdjusting){$compactDraft}else{[int]$warmSettings.AutoCompactThresholdPercent}
-            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory $autoCompact $compactThreshold $compactAdjusting $warmSettings.AutoCompactMode $warmSettings.DashboardTheme $dashboardState.LastConversation $sessionIndex $Harness)
+            $frame = @(Get-DeckTerminalFrame $visible $cache $profiles $sessions $tasks $selected $width $height $filter $notice $mask $warmSettings $warmHistory $autoCompact $compactThreshold $compactAdjusting $warmSettings.AutoCompactMode $warmSettings.DashboardTheme $dashboardState.LastConversation $sessionIndex $Harness $showShortcuts)
+            $pageStep=Get-DeckTerminalDashboardPageSize $warmSettings.DashboardTheme $height $showShortcuts $Harness ([bool](Format-DeckTerminalLastConversation $dashboardState.LastConversation))
             if (-not $interactive) { $frame | ForEach-Object { Write-Output $_.Text }; return }
             $signature = "$width/$height/" + (($frame | ForEach-Object { $_.Text + $_.Color + $_.Background }) -join "`n")
             if ($signature -ne $lastFrame) {
@@ -500,7 +592,13 @@ function Show-DeckTerminal {
             $lastFrame = $signature
             }
             $until = [DateTimeOffset]::UtcNow.AddMilliseconds(500)
-            while (-not [Console]::KeyAvailable -and [DateTimeOffset]::UtcNow -lt $until) { Start-Sleep -Milliseconds 50 }
+            while ([DateTimeOffset]::UtcNow -lt $until) {
+                $controlDown=Get-DeckTerminalControlKeyDown
+                if($controlDown -and -not $controlWasDown){$showShortcuts=-not $showShortcuts;$lastFrame=''}
+                $controlWasDown=$controlDown
+                if([Console]::KeyAvailable){break}
+                Start-Sleep -Milliseconds 20
+            }
             if (-not [Console]::KeyAvailable) { continue }
             $key = [Console]::ReadKey($true)
             $name = if ($visible.Count) { $visible[$selected] } else { $null }
@@ -526,18 +624,45 @@ function Show-DeckTerminal {
             }
             switch ($action) {
                 'Q' { return }
+                'F' {
+                    if($Harness -ne 'Antigravity'){$notice='Headless failover is an Antigravity-only setting.';continue}
+                    try{
+                        $warmSettings=Get-DeckSettings $root
+                        $warmSettings.HarnessAntigravityFailoverEnabled=-not [bool]$warmSettings.HarnessAntigravityFailoverEnabled
+                        Write-DeckJson (Join-Path $root 'settings.json') $warmSettings
+                        $lastFrame=''
+                        $notice=if($warmSettings.HarnessAntigravityFailoverEnabled){'AGY ordered headless failover is on for quota/provider errors before tools run.'}else{'AGY headless failover is off; prompts stay on the selected profile.'}
+                    }catch{$notice='Could not update AGY failover: '+$_.Exception.Message}
+                    continue
+                }
+                'Delete' {
+                    if(-not $name){$notice='Select an account to delete.';continue}
+                    [Console]::CursorVisible=$true; Clear-Host
+                    try{
+                        if($tasks.ContainsKey($name) -or $pending.Contains($name)){throw 'Wait for this account''s check to finish before deleting it.'}
+                        $confirmation=Read-DeckTerminalInput ("Move $name to local recovery storage? Y/N") 3
+                        if($confirmation -match '^(?i:y|yes)$'){
+                            Move-DeckAccountToRecovery $SuiteRoot $name
+                            [void]$profiles.Remove($name);[void]$cache.Remove($name)
+                            $notice='Deleted '+$name+' / saved in local recovery storage.'
+                            $stateRefreshAt=[DateTimeOffset]::MinValue
+                            $lastSessionRead=[DateTimeOffset]::MinValue
+                        }else{$notice='Account deletion cancelled.'}
+                    }catch{$notice=$_.Exception.Message}
+                    finally{[Console]::CursorVisible=$false;Clear-Host;$lastFrame=''}
+                }
                 'Escape' { if ($filter) { $filter = ''; $selected = 0 } else { return } }
                 'UpArrow' { $selected = [Math]::Max(0,$selected - 1) }
                 'DownArrow' { $selected = [Math]::Min($visible.Count - 1,$selected + 1) }
                 'Home' { $selected = 0 }
                 'End' { $selected = [Math]::Max(0,$visible.Count - 1) }
-                'PageUp' { $selected = [Math]::Max(0,$selected - (Get-DeckTerminalThemePageSize $warmSettings.DashboardTheme $height)) }
-                'PageDown' { $selected = [Math]::Min($visible.Count - 1,$selected + (Get-DeckTerminalThemePageSize $warmSettings.DashboardTheme $height)) }
+                'PageUp' { $selected = [Math]::Max(0,$selected - $pageStep) }
+                'PageDown' { $selected = [Math]::Min($visible.Count - 1,$selected + $pageStep) }
                 'B' {
                     if($Harness){$notice='Best-account recommendations are available for Codex usage checks.';continue}
                     $choice = @(Get-DeckRecommendations $names $cache) | Select-Object -First 1
                     if ($choice) { $filter=''; $selected=[array]::IndexOf($names,$choice.Account); $notice=$choice.Account+': '+$choice.Reason }
-                    else { $notice='No fresh usable account. Press A to refresh; unknown/exhausted accounts are excluded.' }
+                    else { $notice='No fresh usable account. Refresh a signed-in account; unknown and exhausted accounts are excluded.' }
                 }
                 'H' {
                     if($Harness){$notice='Claude sessions are managed by Claude Code.';continue}
@@ -576,16 +701,16 @@ function Show-DeckTerminal {
                 'R' {
                     if($Harness -eq 'Claude'){
                         if(-not $name){$notice='Select a Claude account first.'}
-                        else{try{$check=Get-DeckClaudeAuthStatus $SuiteRoot $name;$profiles[$name]=Get-DeckProfile $SuiteRoot $name;$notice=if($check.LoggedIn){$name+' is signed in ('+$check.AuthMethod+').'}else{$name+' needs Claude sign-in. Press L to log in.'}}catch{$notice=$_.Exception.Message}}
+                        else{try{$check=Get-DeckClaudeAuthStatus $SuiteRoot $name;$profiles[$name]=Get-DeckProfile $SuiteRoot $name;$notice=if($check.LoggedIn){$name+' is signed in ('+$check.AuthMethod+').'}else{$name+' needs Claude sign-in. Use its login action.'}}catch{$notice=$_.Exception.Message}}
                         continue
                     }
                     if($Harness -eq 'Antigravity'){
                         if(-not $name){$notice='Select an Antigravity account first.'}
-                        else{try{$check=Get-DeckAntigravityAuthStatus $SuiteRoot $name;$profiles[$name]=Get-DeckProfile $SuiteRoot $name;$notice=if($check.Mode -eq 'Windows runner'){$name+' uses the legacy Windows runner; open it to check sign-in.'}elseif($check.CredentialsPresent){$name+' has a saved isolated credential file. Use /usage to refresh service status and limits.'}else{$name+' needs sign-in. Press L to log in.'}}catch{$notice=$_.Exception.Message}}
+                        else{try{$check=Get-DeckAntigravityAuthStatus $SuiteRoot $name;$profiles[$name]=Get-DeckProfile $SuiteRoot $name;$notice=if($check.Mode -eq 'Windows runner'){$name+' uses the legacy Windows runner; open it to check sign-in.'}elseif($check.CredentialsPresent){$name+' has a saved isolated credential file. Use /usage to refresh service status and limits.'}else{$name+' needs sign-in. Use its login action.'}}catch{$notice=$_.Exception.Message}}
                         continue
                     }
                     if($Harness){$notice=('{0}: use L to open the native sign-in flow.' -f $name);continue}
-                    if($name -and $profiles[$name].AuthIssue){$notice="$name needs sign-in. Press Enter or L to sign in again."}
+                    if($name -and $profiles[$name].AuthIssue){$notice="$name needs sign-in. Use its sign-in action to continue."}
                     elseif($name -and (Test-DeckCodexAccount $SuiteRoot $name) -and $profiles[$name].PlanType -ne 'pool' -and (Test-Path -LiteralPath (Join-Path $accountRoot "$name/auth.json")) -and -not $tasks.ContainsKey($name) -and -not $pending.Contains($name)){$pending.Enqueue($name); $notice="Queued $name."}
                     elseif($name){$notice="$name is not signed in or cannot be checked."}
                 }
@@ -660,7 +785,7 @@ function Show-DeckTerminal {
                             }
                             $helperAutoLoginAvailable=$false
                             if($enterNeedsLogin -and $name){$helperAutoLoginAvailable=Test-DeckAuthHelperEmail $SuiteRoot ([string]$profiles[$name].Email)}
-                            if($automaticLoginActive){$notice="$name automatic sign-in is already running. Wait for it to finish, then press Enter again."}
+                            if($automaticLoginActive){$notice="$name automatic sign-in is already running. Wait for it to finish before continuing."}
                             elseif($enterNeedsLogin -and $helperAutoLoginAvailable){
                                 [void](Start-DeckAuthHelperRecoveryWorker $SuiteRoot $name ([string]$profiles[$name].Email) -Force)
                                 $notice="$name automatic sign-in started in the background. The dashboard will queue a fresh check when it completes."
@@ -721,7 +846,7 @@ function Show-DeckTerminal {
                                                 }
                                             }
                                         }else{$notice="$name sign-in completed for a different or unverified account. Check its email before resuming."}
-                                    }else{$notice="$name still needs sign-in. Complete Codex login, then try L again."}
+                        }else{$notice="$name still needs sign-in. Complete Codex login, then continue from the dashboard."}
                                 }
                                 if($action -eq 'Enter' -and -not $enterNeedsLogin){
                                     $recent=Get-DeckTerminalRecentConversation $SuiteRoot $name $launchedAt
@@ -750,8 +875,8 @@ function Show-DeckPoolPicker([string]$SuiteRoot, [string]$Environment, [string[]
         $cache=Get-DeckTerminalCache (Join-Path $SuiteRoot 'deck')
         Clear-Host
         Write-Host ("POOL: $Environment | one environment, selectable account usage") -ForegroundColor Cyan
-        $frame=Get-DeckTerminalFrame $Members $cache $profiles @() @{} $selected ([Console]::WindowWidth) ([Math]::Max(24,[Console]::WindowHeight-3)) '' $notice
-        $frame | Select-Object -SkipLast 3 | ForEach-Object { Write-Host $_.Text -ForegroundColor $_.Color }
+        $frame=Get-DeckTerminalFrame $Members $cache $profiles @() @{} $selected ([Console]::WindowWidth) ([Math]::Max(24,[Console]::WindowHeight-3)) '' $notice -ShowShortcuts:$false
+        $frame | Select-Object -SkipLast 2 | ForEach-Object { Write-Host $_.Text -ForegroundColor $_.Color }
         Write-Host 'Up/Down select | Enter use account | R refresh | B best available | Q back'
         $key=[Console]::ReadKey($true)
         switch ($key.Key.ToString()) {

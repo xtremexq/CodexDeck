@@ -13,6 +13,8 @@ $previousAuthToken=$env:ANTHROPIC_AUTH_TOKEN
 $previousOAuthToken=$env:CLAUDE_CODE_OAUTH_TOKEN
 $previousStatusConfig=$env:DECK_TEST_STATUS_CONFIG_DIRECTORY
 $previousStatusLoggedIn=$env:DECK_TEST_LOGGED_IN
+$previousAgyMode=$env:DECK_TEST_AGY_FAILOVER_MODE
+$previousAgyLog=$env:DECK_TEST_AGY_LOG
 $claudeCredentialEnvironmentKeys=@('ANTHROPIC_BASE_URL','ANTHROPIC_MODEL','AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN','AWS_PROFILE','AWS_BEARER_TOKEN_BEDROCK','ANTHROPIC_BEDROCK_BASE_URL','ANTHROPIC_VERTEX_PROJECT_ID','ANTHROPIC_VERTEX_REGION','GOOGLE_APPLICATION_CREDENTIALS','CLOUD_ML_REGION','CLOUD_ML_PROJECT_ID')
 $previousClaudeCredentialEnvironment=@{}
 foreach($key in $claudeCredentialEnvironmentKeys){$previousClaudeCredentialEnvironment[$key]=[Environment]::GetEnvironmentVariable($key,'Process')}
@@ -21,6 +23,8 @@ try{
     $preferences=Get-DeckDefaults
     Assert (Test-DeckHarnessEnabled $preferences Codex) 'Codex must always be enabled'
     foreach($id in @('Claude','Antigravity','OpenCode')){Assert (-not (Test-DeckHarnessEnabled $preferences $id)) 'Optional harness enabled by default'}
+    foreach($id in @('Codex','Claude','Antigravity','OpenCode')){Assert (-not $preferences[('Harness'+$id+'FullPermissions')]) 'Dangerous permissions must be opt-in by default'}
+    Assert (-not $preferences.HarnessAntigravityFailoverEnabled -and $preferences.HarnessAntigravityFailoverAccounts -eq '*') 'AGY headless failover defaults are invalid'
     Refuses {New-DeckHarnessAccount $fixture disabled Claude Claude} 'Disabled harness accepted'
     foreach($id in @('Claude','Antigravity','OpenCode')){$preferences[('Harness'+$id+'Enabled')]=$true}
     $executable=Join-Path $fixture 'fake harness.exe'
@@ -42,6 +46,28 @@ public static class FakeDeckHarness {
             Console.WriteLine("{\"loggedIn\":"+(loggedIn?"true":"false")+",\"authMethod\":\"claude.ai\",\"configDirectory\":\""+directory+"\"}");
             return loggedIn?0:1;
         }
+        bool printMode=false; string outputFormat="text"; string mode=Environment.GetEnvironmentVariable("DECK_TEST_AGY_FAILOVER_MODE")??"";
+        for(int i=0;i<args.Length;i++) { if(args[i]=="-p"||args[i]=="--print"||args[i]=="--prompt") printMode=true; if(args[i]=="--output-format"&&i+1<args.Length) outputFormat=args[++i]; }
+        if(printMode&&outputFormat=="stream-json") {
+            var profile=Environment.GetEnvironmentVariable("USERPROFILE")??"";
+            var log=Environment.GetEnvironmentVariable("DECK_TEST_AGY_LOG");
+            if(!String.IsNullOrEmpty(log)) File.AppendAllText(log,profile+Environment.NewLine);
+            Console.WriteLine("{\"event\":\"init\",\"init\":{\"tools\":[\"run_command\"]}}");
+            bool first=profile.IndexOf("googleB",StringComparison.OrdinalIgnoreCase)>=0;
+            if(first) {
+                if(mode=="tool") Console.WriteLine("{\"event\":\"step_update\",\"step_update\":{\"state\":\"DONE\",\"step_type\":\"tool\",\"tool_name\":\"run_command\"}}");
+                if(mode=="provider") {
+                    Console.WriteLine("{\"event\":\"result\",\"result\":{\"status\":\"ERROR\",\"response\":\"partial\",\"error\":\"provider unavailable\"}}");
+                    Console.Error.WriteLine("AGY_ERROR: {\"canonical_status\":\"UNAVAILABLE\",\"error_code\":503,\"retryable\":true}");
+                } else {
+                    Console.WriteLine("{\"event\":\"result\",\"result\":{\"status\":\"ERROR\",\"response\":\"partial\",\"error\":\"quota exceeded\"}}");
+                    Console.Error.WriteLine("AGY_ERROR: {\"canonical_status\":\"RESOURCE_EXHAUSTED\",\"error_code\":429,\"retryable\":false}");
+                }
+                return 3;
+            }
+            Console.WriteLine("{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"fallback response\"}}");
+            return 0;
+        }
         return 17;
     }
 }
@@ -56,6 +82,17 @@ public static class FakeDeckHarness {
     Refuses {New-DeckHarnessAccount $fixture mismatch Codex Claude} 'Codex accepted Claude'
     Refuses {New-DeckHarnessAccount $fixture dashboard Claude Claude} 'Reserved name accepted'
     foreach($item in @(@('claudeA','Claude','Claude'),@('claudeB','Claude','Claude'),@('googleA','Antigravity','Gemini'),@('googleB','Antigravity','Gemini'),@('openA','OpenCode','ChatGPT'),@('openB','OpenCode','Gemini'))){[void](New-DeckHarnessAccount $fixture $item[0] $item[1] $item[2])}
+    foreach($id in @('Codex','Claude','Antigravity','OpenCode')){$preferences[('Harness'+$id+'FullPermissions')]=$true}
+    Write-DeckJson (Join-Path $fixture 'deck/settings.json') $preferences
+    foreach($item in @(@('claudeNew','Claude','Claude'),@('googleNew','Antigravity','Gemini'),@('openNew','OpenCode','ChatGPT'))){[void](New-DeckHarnessAccount $fixture $item[0] $item[1] $item[2])}
+    $expectedPermissionFlags=@{Codex='--dangerously-bypass-approvals-and-sandbox';Claude='--dangerously-skip-permissions';Antigravity='--dangerously-skip-permissions';OpenCode='--auto'}
+    foreach($id in @('Codex','Claude','Antigravity','OpenCode')){
+        $sessionArguments=@(Get-DeckHarnessSessionArguments (Get-DeckSettings (Join-Path $fixture 'deck')) $id @())
+        Assert (($sessionArguments -join '|') -eq $expectedPermissionFlags[$id]) "$id install-wide dangerous mode was not added to interactive launches"
+        $adminArguments=@(Get-DeckHarnessSessionArguments $preferences $id @('login'))
+        Assert (($adminArguments -join '|') -eq 'login') "$id dangerous mode leaked into login/admin commands"
+    }
+    Assert ((@(Get-DeckHarnessSessionArguments $preferences Codex @('exec','--sandbox','workspace-write')) -join '|') -eq 'exec|--sandbox|workspace-write') 'Explicit Codex per-session permission mode did not override its install default'
     Refuses {New-DeckHarnessAccount $fixture claudeA Claude Claude} 'Existing account overwritten'
     $a=Get-DeckHarnessLaunch $fixture claudeA @('login')
     $b=Get-DeckHarnessLaunch $fixture claudeB @('logout')
@@ -68,6 +105,9 @@ public static class FakeDeckHarness {
     Assert (($b.Arguments -join '|') -eq 'auth|login|--provider|google') 'OpenCode Gemini login did not select Google'
     Assert ($a.Environment.XDG_DATA_HOME -ne $b.Environment.XDG_DATA_HOME) 'OpenCode credentials/history are shared'
     Assert ($a.Remove -contains 'OPENCODE_CONFIG_CONTENT') 'Inherited OpenCode config can escape isolation'
+    $openSession=Get-DeckHarnessLaunch $fixture openB @()
+    Assert ($openSession.Arguments -contains '--auto') 'OpenCode automatic permission mode did not reach an existing account session'
+    Assert ((Get-DeckHarnessLaunch $fixture openNew @()).Arguments -contains '--auto') 'New OpenCode account did not inherit the install-wide automatic permission mode'
     $env:DECK_TEST_CAPTURE=Join-Path $fixture 'capture.txt'
     $env:ANTHROPIC_API_KEY='synthetic-inherited-key'
     $env:ANTHROPIC_AUTH_TOKEN='synthetic-inherited-auth-token'
@@ -101,6 +141,8 @@ public static class FakeDeckHarness {
     Write-DeckEnvironmentJson (Get-DeckHarnessConfigPath $fixture claudeA) ([pscustomobject]@{env=[pscustomobject]@{DECK_ACCOUNT='yes'};permissions=[pscustomobject]@{allow=@('Read');deny=@()};nested=[pscustomobject]@{replace='account'}})
     $sessionPrompt=Join-Path $fixture 'session-prompt.md';[IO.File]::WriteAllText($sessionPrompt,'Session-only instruction.')
     $sessionLaunch=Get-DeckHarnessLaunch $fixture claudeA @('--settings','{"env":{"DECK_SESSION":"yes"},"permissions":{"deny":["Delete"]},"nested":{"replace":"session"}}','--append-system-prompt-file',$sessionPrompt)
+    Assert ($sessionLaunch.Arguments -contains '--dangerously-skip-permissions') 'Claude global dangerous mode did not reach an existing account session'
+    Assert ((Get-DeckHarnessLaunch $fixture claudeNew @()).Arguments -contains '--dangerously-skip-permissions') 'New Claude account did not inherit the install-wide dangerous mode'
     $prepared=New-DeckClaudeSessionArguments $fixture claudeA $sessionLaunch
     $settingsIndex=[Array]::IndexOf([string[]]$prepared.Arguments,'--settings')
     $mergedSettings=Read-DeckClaudeSettingsFile $prepared.Arguments[$settingsIndex+1] 'generated Claude settings'
@@ -128,6 +170,7 @@ public static class FakeDeckHarness {
     $env:DECK_TEST_STATUS_CONFIG_DIRECTORY=$null;$env:DECK_TEST_LOGGED_IN='true'
 
     $claudeSessionLaunch=Get-DeckHarnessLaunch $fixture claudeA @()
+    Assert ($claudeSessionLaunch.Arguments -contains '--dangerously-skip-permissions') 'New/current Claude account launch did not inherit global dangerous mode'
     Invoke-DeckHarnessAccount $fixture claudeA @()
     Assert ($LASTEXITCODE -eq 17) 'Claude interactive launch lost native exit code'
     Assert (@(Get-ChildItem -LiteralPath $claudeSessionLaunch.Environment.CLAUDE_CONFIG_DIR -Filter '.codexdeck-*' -File).Count -eq 0) 'Claude temporary defaults/instruction files were not cleaned up after launch'
@@ -139,6 +182,8 @@ public static class FakeDeckHarness {
     $a=Get-DeckHarnessLaunch $fixture googleA @('login')
     $b=Get-DeckHarnessLaunch $fixture googleB @()
     Assert ($a.Environment.USERPROFILE -ne $b.Environment.USERPROFILE -and $a.Arguments.Count -eq 0) 'Antigravity file accounts share a profile or did not translate login'
+    Assert ($b.Arguments -contains '--dangerously-skip-permissions') 'Antigravity global dangerous mode did not reach an existing account session'
+    Assert ((Get-DeckHarnessLaunch $fixture googleNew @()).Arguments -contains '--dangerously-skip-permissions') 'New Antigravity account did not inherit the install-wide dangerous mode'
     Assert ($a.Environment.SSH_CONNECTION -and $a.Environment.AGY_ADC_AUTH -eq 'false') 'AGY remote file authentication was not selected'
     $parentProfile=$env:USERPROFILE; $parentSsh=$env:SSH_CONNECTION
     Refuses {Invoke-DeckHarnessAccount $fixture googleB @('login')} 'An incompatible AGY binary was allowed to access authentication'
@@ -175,8 +220,38 @@ public static class FakeDeckHarness {
     Assert ($agyEffective.model -eq 'native-account-model' -and $agyEffective.nativeSetting -eq 'preserved') 'AGY settings sync did not preserve native account edits'
     Write-DeckEnvironmentJson $agyDefaultsPath ([pscustomobject]@{apiKey='synthetic-secret'})
     Refuses {Sync-DeckAntigravityProfile $fixture googleB} 'AGY global settings accepted a credential field'
+    Write-DeckEnvironmentJson $agyDefaultsPath ([pscustomobject]@{model='default-model'})
     $agyAuth=Join-Path $fixture 'accounts/googleB/antigravity/profile/.gemini/antigravity-cli/antigravity-oauth-token'
     Write-DeckEnvironmentJson $agyAuth @{synthetic='isolated-google-token'}
+    $agyAuthA=Join-Path $fixture 'accounts/googleA/antigravity/profile/.gemini/antigravity-cli/antigravity-oauth-token'
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $agyAuthA))
+    Write-DeckEnvironmentJson $agyAuthA @{synthetic='isolated-google-token-a'}
+    Assert (((Resolve-DeckAntigravityFailoverPool $fixture '*' googleB) -join ',') -eq 'googleB,googleA') 'Dynamic AGY failover did not use the starting account then other signed AGY profiles'
+    Assert (((Resolve-DeckAntigravityFailoverPool $fixture 'googleA,googleB' -AllowUnsigned) -join ',') -eq 'googleA,googleB') 'Explicit AGY failover order changed'
+    Refuses {Resolve-DeckAntigravityFailoverPool $fixture 'legacy' -AllowUnsigned} 'AGY failover accepted a Codex account'
+    Refuses {Resolve-DeckAntigravityFailoverPool $fixture 'claudeA' -AllowUnsigned} 'AGY failover accepted a Claude account'
+    Assert (Test-DeckAntigravityHeadlessPrompt @('--print','synthetic prompt','--output-format','json')) 'AGY print prompt was not recognized as headless'
+    Assert (-not (Test-DeckAntigravityHeadlessPrompt @('--continue','--print','synthetic prompt'))) 'AGY conversation continuation was incorrectly eligible for cross-profile retry'
+    $machineArgs=Get-DeckAntigravityMachineArguments @('-p','synthetic prompt','--output-format','json')
+    Assert ($machineArgs.RequestedFormat -eq 'json' -and ($machineArgs.Arguments -join '|') -eq '-p|synthetic prompt|--output-format|stream-json') 'AGY output format was not safely wrapped for result/tool parsing'
+    Assert (-not (Test-DeckAntigravityProviderFailure 3 'AGY_ERROR: {"canonical_status":"UNAUTHENTICATED","error_code":401,"retryable":false}' $false)) 'AGY auth failure was considered safe for failover'
+    function script:Assert-DeckAntigravityFileSupport([string]$Executable){}
+    $preferences.HarnessAntigravityFailoverEnabled=$true;$preferences.HarnessAntigravityFailoverAccounts='*';Write-DeckJson (Join-Path $fixture 'deck/settings.json') $preferences
+    $env:DECK_TEST_AGY_LOG=Join-Path $fixture 'agy-attempts.log';$env:DECK_TEST_AGY_FAILOVER_MODE='quota'
+    $savedOut=[Console]::Out;$savedError=[Console]::Error;$capturedOut=[IO.StringWriter]::new();$capturedError=[IO.StringWriter]::new()
+    try{[Console]::SetOut($capturedOut);[Console]::SetError($capturedError);Invoke-DeckHarnessAccount $fixture googleB @('-p','synthetic prompt') -EnableHeadlessFailover; $headlessExit=$LASTEXITCODE}finally{[Console]::SetOut($savedOut);[Console]::SetError($savedError)}
+    $attempts=@([IO.File]::ReadAllLines($env:DECK_TEST_AGY_LOG))
+    Assert ($headlessExit -eq 0 -and $capturedOut.ToString() -eq 'fallback response') 'AGY quota failover did not return the successful profile response in text format'
+    Assert ($attempts.Count -eq 2 -and $attempts[0] -like '*googleB*' -and $attempts[1] -like '*googleA*') 'AGY quota failure did not retry the next AGY account in order'
+    [IO.File]::WriteAllText($env:DECK_TEST_AGY_LOG,'');$env:DECK_TEST_AGY_FAILOVER_MODE='tool';$capturedOut=[IO.StringWriter]::new();$capturedError=[IO.StringWriter]::new()
+    try{[Console]::SetOut($capturedOut);[Console]::SetError($capturedError);Invoke-DeckHarnessAccount $fixture googleB @('-p','synthetic prompt') -EnableHeadlessFailover; $headlessExit=$LASTEXITCODE}finally{[Console]::SetOut($savedOut);[Console]::SetError($savedError)}
+    Assert ($headlessExit -eq 3 -and @([IO.File]::ReadAllLines($env:DECK_TEST_AGY_LOG)).Count -eq 1) 'AGY retried after a tool had already executed'
+    [IO.File]::WriteAllText($env:DECK_TEST_AGY_LOG,'');$env:DECK_TEST_AGY_FAILOVER_MODE='provider';$capturedOut=[IO.StringWriter]::new();$capturedError=[IO.StringWriter]::new()
+    try{[Console]::SetOut($capturedOut);[Console]::SetError($capturedError);Invoke-DeckHarnessAccount $fixture googleB @('-p','synthetic prompt','--output-format','json') -EnableHeadlessFailover; $headlessExit=$LASTEXITCODE}finally{[Console]::SetOut($savedOut);[Console]::SetError($savedError)}
+    $jsonResult=$capturedOut.ToString() | ConvertFrom-Json
+    Assert ($headlessExit -eq 0 -and $jsonResult.status -eq 'SUCCESS' -and $jsonResult.response -eq 'fallback response') 'AGY provider-error failover did not preserve the requested JSON output format'
+    Assert (@([IO.File]::ReadAllLines($env:DECK_TEST_AGY_LOG)).Count -eq 2) 'Retryable AGY provider failure did not try a same-harness fallback'
+    $env:DECK_TEST_AGY_FAILOVER_MODE=$null
     foreach($name in @('legacy','claudeA')){Write-DeckEnvironmentJson (Join-Path $fixture "accounts/$name/auth.json") @{tokens=@{access_token='synthetic'}}}
     Assert (((Resolve-DeckFailoverPool $fixture '*' Ordered).Pool -join ',') -eq 'legacy') 'Wildcard failover includes foreign accounts'
     Refuses {Resolve-DeckFailoverPool $fixture 'legacy,claudeA' Ordered} 'Explicit failover includes a Claude account'
@@ -262,6 +337,8 @@ public static class FakeDeckHarness {
     [Environment]::SetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN',$previousOAuthToken,'Process')
     [Environment]::SetEnvironmentVariable('DECK_TEST_STATUS_CONFIG_DIRECTORY',$previousStatusConfig,'Process')
     [Environment]::SetEnvironmentVariable('DECK_TEST_LOGGED_IN',$previousStatusLoggedIn,'Process')
+    [Environment]::SetEnvironmentVariable('DECK_TEST_AGY_FAILOVER_MODE',$previousAgyMode,'Process')
+    [Environment]::SetEnvironmentVariable('DECK_TEST_AGY_LOG',$previousAgyLog,'Process')
     foreach($key in $previousClaudeCredentialEnvironment.Keys){[Environment]::SetEnvironmentVariable($key,$previousClaudeCredentialEnvironment[$key],'Process')}
     if($password){$password.Dispose()}
     $resolved=[IO.Path]::GetFullPath($fixture)

@@ -821,6 +821,7 @@ function Show-DeckSettings {
     $fieldLabels=@{}
     $specificAccountsToggle=$null
     foreach ($key in @(@($groups.Values | ForEach-Object { $_ }) + @($settings.Keys) | Select-Object -Unique)) {
+        if($key -like 'Harness*'){continue}
         if ($key -in @('Width','Height','WidgetWidth','WidgetHeight','WidgetAutoHeight','EfficiencyLimitVersion','AccountPickerUsage','SkillAccessAccounts','CodeGraphEnabled','CodeGraphProjects','CodeGraphProfile','BrowserHarnessEnabled')) { continue }
         $group=@($groups.Keys | Where-Object { $key -in $groups[$_] })[0]
         if(-not $group){$group='Appearance'}
@@ -1160,6 +1161,11 @@ function Show-DeckSettings {
                 . (Join-Path $settingsSaveContext.SuiteRoot 'Deck.Failover.ps1')
                 $validated=Resolve-DeckFailoverPool $settingsSaveContext.SuiteRoot $updated.FailoverAccounts Ordered
                 if($updated.FailoverAccounts -notin @('*','*free','*paid')){$updated.FailoverAccounts=$validated.Pool -join ','}
+            }
+            if($updated.HarnessAntigravityFailoverEnabled -or -not [string]::IsNullOrWhiteSpace($updated.HarnessAntigravityFailoverAccounts)){
+                if([string]::IsNullOrWhiteSpace($updated.HarnessAntigravityFailoverAccounts)){throw 'Choose * or one or more Antigravity accounts for headless failover.'}
+                $agyPool=Resolve-DeckAntigravityFailoverPool $settingsSaveContext.SuiteRoot $updated.HarnessAntigravityFailoverAccounts -AllowUnsigned
+                if($updated.HarnessAntigravityFailoverAccounts -ne '*'){$updated.HarnessAntigravityFailoverAccounts=@($agyPool) -join ','}
             }
             if ($updated.WarmupModel -notmatch '^gpt-[a-zA-Z0-9.-]+$') { throw 'Enter a model ID, e.g. gpt-6-luna.' }
             if ($updated.ViewMode -notin @('Panel','Widget','Tray')) { throw 'View Mode must be Panel, Widget, or Tray.' }
@@ -1793,6 +1799,7 @@ try{
         foreach($id in @('Antigravity','Claude','OpenCode')){
             $card=$settingsTest.Harnesses[$id]
             if($card.Enabled.IsChecked -or $card.Details.Visibility -ne 'Collapsed'){throw 'Optional harnesses must start disabled.'}
+            if($id -eq 'Antigravity' -and (-not $card.Failover -or -not $card.FailoverPool -or $card.Failover.IsChecked -or $card.FailoverPool.Text -ne '*')){throw 'AGY headless failover controls/defaults are missing or invalid.'}
             $card.Enabled.IsChecked=$true; $card.Enabled.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             if($card.Details.Visibility -ne 'Visible' -or -not $card.Install.IsEnabled -or -not $card.Info.IsEnabled){throw 'Enabled harness settings/actions are unavailable.'}
             $card.Install.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
@@ -2192,6 +2199,11 @@ try{
             $shareCheck.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             $draftUI.Controls.HarnessClaudeEnabled.IsChecked=$true
             $draftUI.Controls.HarnessClaudePath.Text='C:\Synthetic\claude.exe'
+            $draftUI.Controls.HarnessClaudeFullPermissions.IsChecked=$true
+            $draftUI.Controls.HarnessAntigravityEnabled.IsChecked=$true
+            $draftUI.Controls.HarnessAntigravityFullPermissions.IsChecked=$true
+            $draftUI.Controls.HarnessAntigravityFailoverEnabled.IsChecked=$true
+            $draftUI.Controls.HarnessAntigravityFailoverAccounts.Text='*'
             $draftUI.Controls.MaskEmail.IsChecked=$true
             $draftUI.Controls.TerminalScrollbackEnabled.IsChecked=$false
             $draftUI.Controls.FailoverEnabled.IsChecked=$true
@@ -2223,7 +2235,8 @@ try{
             if($draftUI.Error.Text){throw $draftUI.Error.Text}
             $savedSettings=Read-DeckJson (Join-Path $root 'settings.json')
             if((Get-DeckPoolEntry $settingsFixture pool).Accounts[0] -ne '*free' -or -not $savedSettings.MaskEmail){throw 'Save settings did not persist environment and another tab together.'}
-            if(-not $savedSettings.HarnessClaudeEnabled -or $savedSettings.HarnessClaudePath -ne 'C:\Synthetic\claude.exe'){throw 'Harness settings did not survive Save.'}
+            if(-not $savedSettings.HarnessClaudeEnabled -or $savedSettings.HarnessClaudePath -ne 'C:\Synthetic\claude.exe' -or -not $savedSettings.HarnessClaudeFullPermissions){throw 'Harness settings did not survive Save.'}
+            if(-not $savedSettings.HarnessAntigravityEnabled -or -not $savedSettings.HarnessAntigravityFullPermissions -or -not $savedSettings.HarnessAntigravityFailoverEnabled -or $savedSettings.HarnessAntigravityFailoverAccounts -ne '*'){throw 'AGY enabled, dangerous mode and ordered headless failover settings did not survive Save.'}
             if(-not $savedSettings.FailoverEnabled -or $savedSettings.FailoverMode -ne 'Best' -or $savedSettings.FailoverAccounts -ne 'account2' -or -not $savedSettings.AutoCheck){throw 'Save settings did not persist failover and general controls.'}
             if($savedSettings.AutoCompactMode -ne 'Custom' -or $savedSettings.AutoCompactThresholdPercent -ne 72){throw 'Save settings did not persist the auto-compact implementation and threshold.'}
             if($savedSettings.TerminalScrollbackEnabled){throw 'Save settings did not persist the terminal scrollback preference.'}

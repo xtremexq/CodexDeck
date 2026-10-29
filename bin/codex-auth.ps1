@@ -712,6 +712,25 @@ function Initialize-AccountDirectory {
 }
 
 function Show-Usage {
+    if($env:CODEXDECK_DEFAULT_HARNESS -eq 'Antigravity'){
+        Write-Host 'Usage: agy-auth [dashboard|status|accountN|N|list] [Antigravity args...]'
+        Write-Host '  agy-auth                    Antigravity-only account dashboard'
+        Write-Host '  agy-auth account1           Create an isolated file profile and sign in on first use'
+        Write-Host '  agy-auth account1 login     Sign in to that profile'
+        Write-Host '  agy-auth account1 check     Check whether its isolated OAuth file is present'
+        Write-Host '  agy-auth -a                 Check saved credential files for every Antigravity profile'
+        Write-Host '  agy-auth status             Print a cached dashboard snapshot'
+        Write-Host '  agy-auth -GlobalRules       Edit Antigravity instructions and settings defaults'
+        Write-Host '  agy-auth -AntigravityDefaults Open the Antigravity-only defaults editor'
+        Write-Host '  agy-auth list               List Antigravity profiles'
+        Write-Host '  agy-auth account1 -del      Move a profile to local recovery storage'
+        Write-Host '  Dashboard: Enter open, L login, N new, R/A check credentials, Del delete, F2 rename'
+        Write-Host '             G defaults, I instructions, E learned rules, K skills, D desktop, S settings, Y Analytics'
+        Write-Host '             M mask, / search, Ctrl show/hide shortcuts, Q quit'
+        Write-Host '  New profiles keep OAuth files separate under Deck; no extra Windows users are needed.'
+        Write-Host '  File checks cannot verify token acceptance or live quota; use /usage inside the profile.'
+        return
+    }
     if($env:CODEXDECK_DEFAULT_HARNESS -eq 'Claude'){
         Write-Host 'Usage: claude-auth [dashboard|accountN|N|list] [Claude Code args...]'
         Write-Host '  claude-auth                 Claude-only account dashboard'
@@ -1116,11 +1135,29 @@ if($Account -and $Account -notin @('dashboard','status','list','--list','-l','he
     $exists=Test-Path -LiteralPath (Join-Path $accountsRoot $harnessAccount) -PathType Container
     $selectedHarness=if($Harness){$Harness}else{$identity.Harness}
     $definition=Get-DeckHarness $selectedHarness
+    $explicitFailover=$PSBoundParameters.ContainsKey('Failover')
+    $agyFailoverEnabled=$false;$agyFailoverPool='';$agyRequireFailoverPool=$false
     $selectedProvider=if($Provider){$Provider}elseif($exists){$identity.Provider}else{$definition.Providers[0]}
     if($selectedProvider -notin $definition.Providers){throw "$($definition.Name) only accepts: $($definition.Providers -join ', ')."}
     if($exists -and ($identity.Harness -ne $selectedHarness -or $identity.Provider -ne $selectedProvider)){throw 'An existing account cannot change harness or login provider. Create a separate account.'}
     if($selectedHarness -ne 'Codex'){
-        if($Pool -or $InheritFrom -or $UseAccount -or $Source -or $Targets -or $Resources -or $Direct -or $AutoCompact -or $Best -or $History -or $Resume -or $ResumePrompt -or $ResumePromptEnvironment -or $FailoverAccounts -or $PSBoundParameters.ContainsKey('Failover')){throw 'Codex pools, inheritance, history, compaction and failover options apply to ChatGPT accounts. Use native harness commands for this account.'}
+        if($selectedHarness -ne 'Antigravity' -and ($FailoverAccounts -or $explicitFailover)){throw 'Failover is currently available for Codex accounts and AGY headless prompts only; accounts never cross harnesses.'}
+        if($selectedHarness -eq 'Antigravity'){
+            if($Failover -eq 'Best'){throw 'AGY supports ordered retries for headless prompts only; quota ranking is not available.'}
+            if($FailoverAccounts -and (-not $explicitFailover -or $Failover -ne 'Ordered')){throw '-FailoverAccounts requires -Failover Ordered for AGY.'}
+            if($Failover -eq 'Ordered' -and -not (Test-DeckAntigravityHeadlessPrompt $CodexArgs)){throw 'AGY failover is available for single -p/--print/--prompt runs only.'}
+            if($FailoverAccounts -and -not (Test-DeckAntigravityHeadlessPrompt $CodexArgs)){throw 'AGY failover is available for single -p/--print/--prompt runs only.'}
+            if($explicitFailover){$agyFailoverEnabled=$Failover -eq 'Ordered'}
+            else{$agyFailoverEnabled=[bool](Get-DeckSettings (Join-Path $runtimeRoot 'deck')).HarnessAntigravityFailoverEnabled}
+            if($agyFailoverEnabled){
+                $agyFailoverPool=if($FailoverAccounts){$FailoverAccounts -join ','}else{[string](Get-DeckSettings (Join-Path $runtimeRoot 'deck')).HarnessAntigravityFailoverAccounts}
+                if($explicitFailover){
+                    $agyPoolResolved=@(Resolve-DeckAntigravityFailoverPool $runtimeRoot $agyFailoverPool $harnessAccount -RequireStartCredential)
+                    $agyFailoverPool=$agyPoolResolved -join ',';$agyRequireFailoverPool=$true
+                }
+            }
+        }
+        if($Pool -or $InheritFrom -or $UseAccount -or $Source -or $Targets -or $Resources -or $Direct -or $AutoCompact -or $Best -or $History -or $Resume -or $ResumePrompt -or $ResumePromptEnvironment -or ($selectedHarness -ne 'Antigravity' -and ($FailoverAccounts -or $explicitFailover))){throw 'Codex pools, inheritance, history, compaction and failover options apply to ChatGPT accounts. AGY supports ordered headless failover only. Use native harness commands for this account.'}
         if(-not $Del -and -not $RenameTo){
             if($selectedHarness -eq 'Claude' -and $CodexArgs.Count -eq 1 -and $CodexArgs[0] -eq 'check'){
                 if(-not $exists){throw 'Create this Claude profile first, then run claude-auth <account> check.'}
@@ -1145,7 +1182,7 @@ if($Account -and $Account -notin @('dashboard','status','list','--list','-l','he
             }elseif($NewAccount){throw 'That account already exists.'}
             $nativeArgs=@($CodexArgs)
             if(($NewAccount -or $automaticClaudeLogin -or $automaticAntigravityLogin) -and -not $nativeArgs){$nativeArgs=@('login')}
-            Invoke-DeckHarnessAccount $runtimeRoot $harnessAccount $nativeArgs -ConfigureRunner:$ConfigureRunner
+            Invoke-DeckHarnessAccount $runtimeRoot $harnessAccount $nativeArgs -ConfigureRunner:$ConfigureRunner -EnableHeadlessFailover:$agyFailoverEnabled -FailoverPool $agyFailoverPool -RequireFailoverPool:$agyRequireFailoverPool
             exit $LASTEXITCODE
         }
     }elseif($ConfigureRunner){throw 'Runner configuration is only for Antigravity accounts.'}
@@ -1159,8 +1196,9 @@ if ($Account -eq 'plugin') {
     Invoke-DeckManagedPluginCommand $runtimeRoot @($CodexArgs) | Write-Output
     exit 0
 }
-if($CheckAll -and @($PSBoundParameters.Keys | Where-Object {$_ -ne 'CheckAll'}).Count){
-    throw '-a only works with the plain codex-auth dashboard command.'
+if($CheckAll){
+    $checkAllOtherParameters=@($PSBoundParameters.Keys | Where-Object {$_ -notin @('CheckAll','Account')})
+    if($checkAllOtherParameters.Count -or ($Account -and $Account -ne 'dashboard')){throw '-a can only be combined with the dashboard command.'}
 }
 $autoCompactThresholdOverride=$null
 if($AutoCompact -and $CodexArgs -and [string]$CodexArgs[0] -match '^([0-9]+)%$'){
@@ -1386,6 +1424,7 @@ try {
         $deckSession = Register-DeckSession $deckRoot $accountName (Get-Location).Path
         $env:CODEX_DECK_SESSION_PATH = $deckSession
         $deckSettings = Get-DeckSettings $deckRoot
+        if($codexConversation){$CodexArgs=@(Get-DeckHarnessSessionArguments $deckSettings 'Codex' $CodexArgs)}
         if ($deckSettings.AutoStart) { Start-DeckCompanion $suiteRoot }
     }
 } catch { Write-Warning "Codex Deck could not attach: $($_.Exception.Message)" }

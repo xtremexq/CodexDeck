@@ -132,6 +132,7 @@ function Rename-DeckAccount([string]$SuiteRoot, [string]$OldName, [string]$NewNa
             $value = [IO.File]::ReadAllText($path) | ConvertFrom-Json -ErrorAction Stop
             if ($file -eq 'settings.json') {
                 if ($value.PSObject.Properties['FailoverAccounts']) { $value.FailoverAccounts = (@($value.FailoverAccounts -split ',' | ForEach-Object { if ($_.Trim() -eq $OldName) { $NewName } else { $_.Trim() } }) -join ',') }
+                if ($value.PSObject.Properties['HarnessAntigravityFailoverAccounts']) { $value.HarnessAntigravityFailoverAccounts = (@($value.HarnessAntigravityFailoverAccounts -split ',' | ForEach-Object { if ($_.Trim() -eq $OldName) { $NewName } else { $_.Trim() } }) -join ',') }
                 if ($value.PSObject.Properties['WarmupAccounts']) { $value.WarmupAccounts = (@($value.WarmupAccounts -split '[,;\s]+' | Where-Object { $_ } | ForEach-Object { if ($_ -eq $OldName) { $NewName } else { $_ } }) -join ',') }
             } elseif ($file -eq 'pins.json') {
                 $value = @($value | ForEach-Object { if ($_ -eq $OldName) { $NewName } else { $_ } })

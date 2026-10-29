@@ -28,7 +28,11 @@ function Get-DeckDueAccounts($Automatic, $Manual, $NextCheck, [DateTimeOffset]$N
 }
 function Get-DeckDefaults {
     return [ordered]@{
-        HarnessCodexPath=''; HarnessAntigravityEnabled=$false; HarnessAntigravityPath=''; HarnessClaudeEnabled=$false; HarnessClaudePath=''; HarnessOpenCodeEnabled=$false; HarnessOpenCodePath=''
+        HarnessCodexPath=''; HarnessCodexFullPermissions=$false
+        HarnessAntigravityEnabled=$false; HarnessAntigravityPath=''; HarnessAntigravityFullPermissions=$false
+        HarnessAntigravityFailoverEnabled=$false; HarnessAntigravityFailoverAccounts='*'
+        HarnessClaudeEnabled=$false; HarnessClaudePath=''; HarnessClaudeFullPermissions=$false
+        HarnessOpenCodeEnabled=$false; HarnessOpenCodePath=''; HarnessOpenCodeFullPermissions=$false
         DefaultFolder=$HOME; AlwaysAskFolder=$false
         AutoStart=$false; AutoCheck=$false; PollMinutes=10; MinimumGapSeconds=20
         AlwaysOnTop=$false; OpacityPercent=100; FontSize=12; Width=400; Height=0
@@ -762,6 +766,12 @@ exit `$LASTEXITCODE
 
 function Move-DeckAccountToRecovery {
     param([string]$SuiteRoot, [string]$Name)
+    if (Get-Command Assert-DeckEntryUnreferenced -ErrorAction SilentlyContinue) { Assert-DeckEntryUnreferenced $SuiteRoot $Name }
+    $savedSettings=Read-DeckJson (Join-Path $SuiteRoot 'deck/settings.json')
+    foreach($settingName in @('FailoverAccounts','HarnessAntigravityFailoverAccounts')){
+        $membership=[string]$savedSettings.$settingName
+        if($membership -and $membership -notin @('*','*free','*paid') -and $Name -in @($membership -split ',' | ForEach-Object {$_.Trim()})){throw "Remove $Name from $settingName before moving it to recovery storage."}
+    }
     $accountsRoot=Join-Path $SuiteRoot 'accounts'
     # Only an existing direct child may be removed, including old typo names.
     if ([string]::IsNullOrWhiteSpace($Name) -or $Name -in @('.', '..') -or

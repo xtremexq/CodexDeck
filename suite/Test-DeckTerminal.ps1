@@ -50,6 +50,12 @@ foreach($theme in @('Focus','Cards','Ledger','Split')){
     Assert ($themedClaude.Count -le 24 -and $themedClaudeText -match 'R selected sign-in' -and $themedClaudeText -match 'G defaults') "$theme Claude dashboard lost check/defaults shortcuts or overflowed."
     Assert ($themedClaudeText -notmatch 'WARM-?UP|PRIMARY|WEEKLY|NEXT RESET|5H|quota') "$theme Claude dashboard displayed unsupported quota or warm-up state."
 }
+$agyProfiles=@{'agy-account1'=@{Harness='Antigravity';Provider='Gemini';PlanType='Gemini';AuthStatus='Credentials stored';Model='Gemini default';Effort='default'}}
+$agySettings=@{HarnessAntigravityFailoverEnabled=$true;HarnessAntigravityFailoverAccounts='*'}
+$agyFrame=@(Get-DeckTerminalFrame @('agy-account1') @{} $agyProfiles @() @{} 0 110 25 '' 'Ready' -WarmupSettings $agySettings -Harness Antigravity)
+$agyText=$agyFrame.Text -join "`n"
+Assert ($agyText -match 'headless -p failover: ON' -and $agyText -match 'F failover ON') 'AGY dashboard did not show the configured headless failover setting or shortcut.'
+Assert ($agyText -notmatch 'WARM-?UP|quota|NEXT RESET') 'AGY dashboard displayed unsupported quota or warm-up state.'
 $lastConversation=[pscustomobject]@{Account='account40';Id='12345678-1234-1234-1234-123456789abc'}
 $lastFrame=@(Get-DeckTerminalFrame $names @{} $profiles @() @{} 39 100 25 '' 'Returned' $true $null @{} $false 55 $false 'Native' 'Default' $lastConversation)
 $lastText=$lastFrame.Text -join "`n"

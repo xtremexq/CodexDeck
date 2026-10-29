@@ -42,6 +42,44 @@ function Test-DeckHarnessEnabled($Settings,[string]$Harness) {
     [void](Get-DeckHarness $Harness)
     return $Harness -eq 'Codex' -or [bool]$Settings[('Harness'+$Harness+'Enabled')]
 }
+function Get-DeckHarnessFullPermissionArguments($Settings,[string]$Harness) {
+    [void](Get-DeckHarness $Harness)
+    if(-not [bool]$Settings[('Harness'+$Harness+'FullPermissions')]){return @()}
+    switch($Harness){
+        'Codex' {@('--dangerously-bypass-approvals-and-sandbox')}
+        'Claude' {@('--dangerously-skip-permissions')}
+        'Antigravity' {@('--dangerously-skip-permissions')}
+        'OpenCode' {@('--auto')}
+    }
+}
+function Test-DeckHarnessInteractiveSession([string]$Harness,[string[]]$Arguments) {
+    if(-not $Arguments.Count){return $true}
+    $first=[string]$Arguments[0]
+    switch($Harness){
+        'Codex' {return $first -notin @('login','logout','mcp','mcp-server','completion','features','debug','app-server','cloud','apply','sandbox','doctor','update','--help','-h','--version','-V')}
+        'Claude' {return $first -notin @('login','logout') -and (Test-DeckClaudeSessionLaunch $Arguments)}
+        'Antigravity' {return $first -notin @('login','logout','auth','update','install','uninstall','--help','-h','--version','-V')}
+        'OpenCode' {return $first -notin @('login','logout','auth','agent','agents','mcp','models','upgrade','uninstall','serve','web','attach','github','export','import','--help','-h','--version','-v')}
+    }
+    return $false
+}
+function Get-DeckHarnessSessionArguments($Settings,[string]$Harness,[string[]]$Arguments) {
+    $result=@($Arguments)
+    if(-not (Test-DeckHarnessInteractiveSession $Harness $result)){return $result}
+    $permissionArgs=@(Get-DeckHarnessFullPermissionArguments $Settings $Harness)
+    if(-not $permissionArgs.Count){return $result}
+    # A native per-invocation mode is an intentional override of the Deck default.
+    $modeFlags=switch($Harness){
+        'Codex' {@('--dangerously-bypass-approvals-and-sandbox','--yolo','--sandbox','-s','--ask-for-approval','-a')}
+        'Claude' {@('--dangerously-skip-permissions','--permission-mode')}
+        'Antigravity' {@('--dangerously-skip-permissions')}
+        'OpenCode' {@('--auto')}
+    }
+    foreach($argument in $result){
+        if($argument -in $modeFlags -or @($modeFlags | Where-Object {$argument.StartsWith($_+'=',[StringComparison]::Ordinal)}).Count){return $result}
+    }
+    return @($permissionArgs)+$result
+}
 function Resolve-DeckHarnessExecutable($Settings,[string]$Harness) {
     $definition=Get-DeckHarness $Harness
     $override=[string]$Settings[('Harness'+$Harness+'Path')]
@@ -74,6 +112,120 @@ function Assert-DeckHarnessPath([string]$Directory,[string]$Path) {
 }
 function Test-DeckAntigravityFileAccount($Identity) {
     return $Identity.Harness -eq 'Antigravity' -and -not $Identity.RunnerSid
+}
+function Test-DeckAntigravityHeadlessPrompt([string[]]$Arguments) {
+    $argsList=@($Arguments | ForEach-Object {[string]$_})
+    $hasPrompt=$false
+    for($index=0;$index -lt $argsList.Count;$index++){
+        if($argsList[$index] -in @('-p','--print','--prompt')){
+            if($index+1 -lt $argsList.Count -and -not [string]::IsNullOrWhiteSpace($argsList[$index+1])){$hasPrompt=$true}
+            break
+        }
+    }
+    if(-not $hasPrompt -or $argsList -contains '--continue' -or $argsList -contains '-c' -or $argsList -contains '--conversation' -or $argsList -contains '--input-format' -or $argsList -contains '--prompt-interactive'){return $false}
+    return $true
+}
+function Resolve-DeckAntigravityFailoverPool([string]$SuiteRoot,[string]$Pool,[string]$StartAccount='',[switch]$AllowUnsigned,[switch]$RequireStartCredential) {
+    $tokens=@($Pool -split ',' | ForEach-Object {$_.Trim()} | Where-Object {$_})
+    if(-not $Pool -or $tokens.Count -gt 200 -or @($tokens | Sort-Object -Unique).Count -ne $tokens.Count -or (@($tokens | Where-Object {$_ -eq '*'}).Count -gt 0 -and $tokens.Count -ne 1)){throw 'Choose * or 1-200 distinct Antigravity accounts.'}
+    $dynamic=$tokens.Count -eq 1 -and $tokens[0] -eq '*'
+    if($dynamic){
+        if(-not (Get-Command Get-DeckEntryNames -ErrorAction SilentlyContinue)){. (Join-Path $PSScriptRoot 'Deck.Environments.ps1')}
+        $names=@(Get-DeckEntryNames $SuiteRoot | Where-Object {
+            try{$identity=Get-DeckAccountIdentity $SuiteRoot $_; $identity.Harness -eq 'Antigravity' -and (Test-DeckAntigravityFileAccount $identity)}catch{$false}
+        })
+    }else{
+        $names=@($tokens | ForEach-Object {
+            $candidate=[string]$_
+            if($candidate -match '^\d+$'){$candidate='account'+$candidate}
+            Assert-DeckEntryName $candidate
+            if(-not (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$candidate") -PathType Container)){$candidate=Resolve-DeckHarnessScopedAccountName $SuiteRoot $candidate 'Antigravity'}
+            elseif((Get-DeckAccountIdentity $SuiteRoot $candidate).Harness -ne 'Antigravity'){
+                $scoped=Resolve-DeckHarnessScopedAccountName $SuiteRoot $candidate 'Antigravity'
+                if($scoped -eq $candidate -or -not (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$scoped") -PathType Container)){throw 'Antigravity failover only accepts AGY accounts.'}
+                $candidate=$scoped
+            }
+            $identity=Get-DeckAccountIdentity $SuiteRoot $candidate
+            if($identity.Harness -ne 'Antigravity' -or -not (Test-DeckAntigravityFileAccount $identity)){throw 'Antigravity failover only accepts isolated Antigravity file-profile accounts.'}
+            $candidate
+        })
+    }
+    $eligible=[Collections.Generic.List[string]]::new()
+    foreach($name in $names){
+        $identity=Get-DeckAccountIdentity $SuiteRoot $name
+        if($identity.Harness -ne 'Antigravity' -or -not (Test-DeckAntigravityFileAccount $identity)){continue}
+        $directory=Get-DeckEntryDirectory $SuiteRoot $name
+        $tokenPath=Join-Path $directory 'antigravity/profile/.gemini/antigravity-cli/antigravity-oauth-token'
+        Assert-DeckHarnessPath $directory $tokenPath
+        $hasCredential=$false
+        if(Test-Path -LiteralPath $tokenPath -PathType Leaf){$tokenItem=Get-Item -LiteralPath $tokenPath -Force;if(-not ($tokenItem.Attributes -band [IO.FileAttributes]::ReparsePoint)){$hasCredential=$tokenItem.Length -gt 0}}
+        if($hasCredential -or $AllowUnsigned){$eligible.Add($name)}
+        elseif(-not $dynamic){throw "Antigravity failover account $name has no saved isolated credential."}
+    }
+    if(-not $dynamic -and -not $eligible.Count){throw 'Antigravity failover needs at least one isolated account with saved credentials.'}
+    if($StartAccount){
+        $startIdentity=Get-DeckAccountIdentity $SuiteRoot $StartAccount
+        if($startIdentity.Harness -ne 'Antigravity' -or -not (Test-DeckAntigravityFileAccount $startIdentity)){throw 'AGY failover cannot use an account from another harness or a Windows runner profile.'}
+        $eligibleNames=@($eligible)
+        $startDirectory=Get-DeckEntryDirectory $SuiteRoot $StartAccount
+        $startToken=Join-Path $startDirectory 'antigravity/profile/.gemini/antigravity-cli/antigravity-oauth-token'
+        Assert-DeckHarnessPath $startDirectory $startToken
+        $startHasCredential=$false
+        if(Test-Path -LiteralPath $startToken -PathType Leaf){$startItem=Get-Item -LiteralPath $startToken -Force;$startHasCredential=-not ($startItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $startItem.Length -gt 0}
+        if(-not $startHasCredential -and $RequireStartCredential){throw 'The starting Antigravity account needs a saved isolated credential before failover can run.'}
+        if(-not $startHasCredential){return @()}
+        $eligible=[Collections.Generic.List[string]]::new();$eligible.Add($StartAccount);foreach($name in $eligibleNames){if($name -ne $StartAccount){$eligible.Add($name)}}
+    }
+    return @($eligible | Select-Object -Unique)
+}
+function Get-DeckAntigravityMachineArguments([string[]]$Arguments) {
+    $format='text';$clean=[Collections.Generic.List[string]]::new()
+    for($index=0;$index -lt $Arguments.Count;$index++){
+        $argument=[string]$Arguments[$index]
+        if($argument -eq '--output-format'){
+            if($index+1 -ge $Arguments.Count){throw 'Missing value for --output-format.'}
+            $format=[string]$Arguments[++$index]
+        }elseif($argument.StartsWith('--output-format=',[StringComparison]::Ordinal)){$format=$argument.Substring('--output-format='.Length)}
+        else{$clean.Add($argument)}
+    }
+    if($format -notin @('text','json','stream-json')){throw 'AGY output format must be text, json, or stream-json.'}
+    $clean.Add('--output-format');$clean.Add('stream-json')
+    return @{Arguments=$clean.ToArray();RequestedFormat=$format}
+}
+function Read-DeckAntigravityStream([string]$StandardOutput) {
+    $events=[Collections.Generic.List[object]]::new();$result=$null;$toolExecuted=$false
+    foreach($line in ($StandardOutput -split "`r?`n" | Where-Object {-not [string]::IsNullOrWhiteSpace($_)})){
+        try{$event=$line | ConvertFrom-Json -ErrorAction Stop}catch{continue}
+        $events.Add($event)
+        if($event.event -eq 'result' -and $event.result){$result=$event.result}
+        if($event.event -eq 'step_update' -and $event.step_update){
+            if($event.step_update.step_type -eq 'tool' -or $event.step_update.PSObject.Properties['subagent_info']){$toolExecuted=$true}
+        }
+    }
+    return @{Events=$events.ToArray();Result=$result;ToolExecuted=$toolExecuted}
+}
+function Test-DeckAntigravityProviderFailure([int]$ExitCode,[string]$StandardError,[bool]$ToolExecuted) {
+    if($ExitCode -eq 0 -or $ToolExecuted){return $false}
+    $match=[regex]::Match($StandardError,'(?m)^AGY_ERROR:\s*(\{[^\r\n]*\})\s*$')
+    if(-not $match.Success){return $false}
+    try{$errorRecord=$match.Groups[1].Value | ConvertFrom-Json -ErrorAction Stop}catch{return $false}
+    $status=[string]$(if($errorRecord.canonical_status){$errorRecord.canonical_status}else{$errorRecord.status})
+    $status=$status.ToUpperInvariant()
+    $code=0;try{$code=[int]$errorRecord.error_code}catch{}
+    if($status -eq 'RESOURCE_EXHAUSTED' -and ($code -eq 0 -or $code -in @(8,429))){return $true}
+    $retryable=$errorRecord.PSObject.Properties['retryable'] -and [bool]$errorRecord.retryable
+    if(-not $retryable){return $false}
+    return $status -in @('UNAVAILABLE','INTERNAL','DEADLINE_EXCEEDED','ABORTED','UNKNOWN') -and ($code -eq 0 -or $code -in @(4,8,10,13,14,408,429,500,502,503,504))
+}
+function Write-DeckAntigravityCapturedResult($Captured,$Parsed,[string]$RequestedFormat) {
+    $result=$Parsed.Result
+    if($RequestedFormat -eq 'stream-json' -or -not $result){if($Captured.StandardOutput){[Console]::Out.Write($Captured.StandardOutput)}}
+    elseif($RequestedFormat -eq 'json'){[Console]::Out.WriteLine((ConvertTo-Json -InputObject $result -Depth 100 -Compress))}
+    elseif($result.response){[Console]::Out.Write([string]$result.response)}
+    if($Captured.StandardError){[Console]::Error.Write($Captured.StandardError)}
+    $effectiveExit=[int]$Captured.ExitCode
+    if($effectiveExit -eq 0 -and $result -and $result.status -ne 'SUCCESS'){$effectiveExit=1}
+    $global:LASTEXITCODE=$effectiveExit
 }
 function Assert-DeckAntigravityFileSupport([string]$Executable) {
     if(-not ('DeckAntigravityIsolation' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'Deck.Antigravity.Isolation.cs')}
@@ -169,8 +321,9 @@ function Get-DeckHarnessLaunch([string]$SuiteRoot,[string]$Account,[string[]]$Ar
     $preferences=Get-DeckSettings (Join-Path $SuiteRoot 'deck')
     if(-not (Test-DeckHarnessEnabled $preferences $identity.Harness)){throw "Enable $($identity.Harness) in Settings > Harnesses first."}
     $definition=Get-DeckHarness $identity.Harness
+    $sessionArguments=@(Get-DeckHarnessSessionArguments $preferences $identity.Harness $Arguments)
     $directory=Get-DeckEntryDirectory $SuiteRoot $Account
-    $environment=@{}; $remove=@(); $argsList=@($Arguments)
+    $environment=@{}; $remove=@(); $argsList=@($sessionArguments)
     if($identity.Harness -eq 'Claude'){
         $claudeProfile=Join-Path $directory 'claude'
         $environment.CLAUDE_CONFIG_DIR=$claudeProfile
@@ -269,11 +422,14 @@ function Get-DeckAntigravityAuthStatus([string]$SuiteRoot,[string]$Account) {
     if($identity.Harness -ne 'Antigravity'){throw 'Antigravity auth checks require an Antigravity account.'}
     $checkedAt=[DateTimeOffset]::UtcNow.ToString('o')
     if(-not (Test-DeckAntigravityFileAccount $identity)){
-        return [pscustomobject]@{CredentialsPresent=$null;Mode='Windows runner';Status='Runner profile';CheckedAt=$checkedAt}
+        $record=[pscustomobject]@{CredentialsPresent=$null;Mode='Windows runner';Status='Runner profile';CheckedAt=$checkedAt}
+        $cachePath=Join-Path $SuiteRoot 'deck/antigravity-auth-checks.json'
+        $cache=Read-DeckEnvironmentJson $cachePath
+        if(-not (Test-DeckAntigravityJsonObject $cache)){$cache=[pscustomobject]@{}}
+        $cache | Add-Member NoteProperty $Account $record -Force
+        Write-DeckEnvironmentJson $cachePath $cache
+        return $record
     }
-    $preferences=Get-DeckSettings (Join-Path $SuiteRoot 'deck')
-    $executable=Resolve-DeckHarnessExecutable $preferences 'Antigravity'
-    Assert-DeckAntigravityFileSupport $executable
     $directory=Get-DeckEntryDirectory $SuiteRoot $Account
     $tokenPath=Join-Path $directory 'antigravity/profile/.gemini/antigravity-cli/antigravity-oauth-token'
     Assert-DeckHarnessPath $directory $tokenPath
@@ -379,8 +535,9 @@ function ConvertTo-DeckHarnessArgument([AllowEmptyString()][string]$Value) {
     return $quoted.ToString()
 }
 
-function Invoke-DeckHarnessProcess([string]$Executable,[string[]]$Arguments) {
+function Invoke-DeckHarnessProcess([string]$Executable,[string[]]$Arguments,[switch]$CaptureOutput) {
     if([IO.Path]::GetExtension($Executable) -ne '.exe'){
+        if($CaptureOutput){throw 'Captured headless output requires the native executable.'}
         & $Executable @Arguments
         $global:LASTEXITCODE=$LASTEXITCODE
         return
@@ -388,8 +545,17 @@ function Invoke-DeckHarnessProcess([string]$Executable,[string[]]$Arguments) {
     $info=[Diagnostics.ProcessStartInfo]::new()
     $info.FileName=$Executable; $info.UseShellExecute=$false
     $info.Arguments=(@($Arguments | ForEach-Object {ConvertTo-DeckHarnessArgument ([string]$_)}) -join ' ')
+    if($CaptureOutput){$info.CreateNoWindow=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true;$info.StandardOutputEncoding=[Text.UTF8Encoding]::new($false);$info.StandardErrorEncoding=[Text.UTF8Encoding]::new($false)}
     $process=[Diagnostics.Process]::Start($info)
-    try{$process.WaitForExit();$global:LASTEXITCODE=$process.ExitCode}finally{$process.Dispose()}
+    try{
+        if($CaptureOutput){
+            $stdoutTask=$process.StandardOutput.ReadToEndAsync();$stderrTask=$process.StandardError.ReadToEndAsync()
+            $process.WaitForExit();$stdout=$stdoutTask.GetAwaiter().GetResult();$stderr=$stderrTask.GetAwaiter().GetResult()
+            $global:LASTEXITCODE=$process.ExitCode
+            return @{ExitCode=$process.ExitCode;StandardOutput=$stdout;StandardError=$stderr}
+        }
+        $process.WaitForExit();$global:LASTEXITCODE=$process.ExitCode
+    }finally{$process.Dispose()}
 }
 function Invoke-DeckHarnessInstallerScript([string]$Path,[string[]]$Arguments,[string]$Label) {
     $powershell=Join-Path $PSHOME 'powershell.exe'
@@ -418,7 +584,7 @@ function Invoke-DeckHarnessInstallerScript([string]$Path,[string[]]$Arguments,[s
         foreach($line in ($stdout -split "`r?`n" | Where-Object {$_})){Write-Output $line}
     }finally{$process.Dispose()}
 }
-function Invoke-DeckHarnessAccount([string]$SuiteRoot,[string]$Account,[string[]]$Arguments,[switch]$ConfigureRunner) {
+function Invoke-DeckHarnessAccountOnce([string]$SuiteRoot,[string]$Account,[string[]]$Arguments,[switch]$ConfigureRunner,[switch]$CaptureHeadlessOutput) {
     $identity=Get-DeckAccountIdentity $SuiteRoot $Account
     if($identity.Harness -eq 'Codex'){throw 'Use the Codex launch path for ChatGPT accounts.'}
     if($identity.Harness -eq 'Antigravity'){
@@ -432,6 +598,7 @@ function Invoke-DeckHarnessAccount([string]$SuiteRoot,[string]$Account,[string[]
     $claudeTemporaryFiles=@()
     try{
         if($identity.Harness -eq 'Antigravity' -and -not (Test-DeckAntigravityFileAccount $identity)){
+            if($CaptureHeadlessOutput){throw 'Headless failover requires isolated Antigravity file profiles, not a Windows runner profile.'}
             if(-not (Test-Path -LiteralPath $credentialPath)){throw 'Restore this account runner: codex-auth <name> -ConfigureRunner.'}
             Assert-DeckHarnessPath $launch.Directory $credentialPath
             $credential=Import-Clixml -LiteralPath $credentialPath
@@ -483,13 +650,44 @@ function Invoke-DeckHarnessAccount([string]$SuiteRoot,[string]$Account,[string[]
             $nativeArguments=@($claudeLaunch.Arguments)
             $claudeTemporaryFiles=@($claudeLaunch.TemporaryFiles)
         }
-        Invoke-DeckHarnessProcess $launch.Executable $nativeArguments
+        $captured=$null
+        if($CaptureHeadlessOutput){$captured=Invoke-DeckHarnessProcess $launch.Executable $nativeArguments -CaptureOutput}
+        else{Invoke-DeckHarnessProcess $launch.Executable $nativeArguments}
         if($identity.Harness -eq 'Claude' -and $launch.Arguments.Count -ge 2 -and $launch.Arguments[0] -eq 'auth' -and $launch.Arguments[1] -in @('login','logout')){Clear-DeckClaudeAuthStatus $SuiteRoot $Account}
         if($identity.Harness -eq 'Antigravity' -and $Arguments -contains 'login'){Clear-DeckAntigravityAuthStatus $SuiteRoot $Account}
+        if($CaptureHeadlessOutput){return $captured}
     }finally{
         foreach($temporaryFile in $claudeTemporaryFiles){if(Test-Path -LiteralPath $temporaryFile -PathType Leaf){[IO.File]::Delete($temporaryFile)}}
         foreach($key in $previous.Keys){[Environment]::SetEnvironmentVariable($key,$previous[$key],'Process')}
         if(Test-Path -LiteralPath $session){[IO.File]::Delete($session)}
+    }
+}
+function Invoke-DeckHarnessAccount([string]$SuiteRoot,[string]$Account,[string[]]$Arguments,[switch]$ConfigureRunner,[switch]$EnableHeadlessFailover,[string]$FailoverPool,[switch]$RequireFailoverPool) {
+    $identity=Get-DeckAccountIdentity $SuiteRoot $Account
+    if($identity.Harness -ne 'Antigravity' -or -not (Test-DeckAntigravityHeadlessPrompt $Arguments) -or $ConfigureRunner){
+        Invoke-DeckHarnessAccountOnce $SuiteRoot $Account $Arguments -ConfigureRunner:$ConfigureRunner
+        return
+    }
+    if(-not $EnableHeadlessFailover){Invoke-DeckHarnessAccountOnce $SuiteRoot $Account $Arguments;return}
+    if(-not (Test-DeckAntigravityFileAccount $identity)){
+        if($RequireFailoverPool){throw 'AGY headless failover requires isolated file profiles; Windows runner accounts cannot be retried.'}
+        Invoke-DeckHarnessAccountOnce $SuiteRoot $Account $Arguments
+        return
+    }
+    if(-not $FailoverPool){$FailoverPool=[string](Get-DeckSettings (Join-Path $SuiteRoot 'deck')).HarnessAntigravityFailoverAccounts}
+    $pool=@(Resolve-DeckAntigravityFailoverPool $SuiteRoot $FailoverPool $Account -RequireStartCredential:$RequireFailoverPool)
+    if($pool.Count -le 1){Invoke-DeckHarnessAccountOnce $SuiteRoot $Account $Arguments;return}
+    $machine=Get-DeckAntigravityMachineArguments $Arguments
+    for($index=0;$index -lt $pool.Count;$index++){
+        $candidate=$pool[$index]
+        $captured=Invoke-DeckHarnessAccountOnce $SuiteRoot $candidate $machine.Arguments -CaptureHeadlessOutput
+        $parsed=Read-DeckAntigravityStream ([string]$captured.StandardOutput)
+        $effectiveExit=[int]$captured.ExitCode
+        if($effectiveExit -eq 0 -and $parsed.Result -and $parsed.Result.status -ne 'SUCCESS'){$effectiveExit=1}
+        $canRetry=$index -lt ($pool.Count-1) -and (Test-DeckAntigravityProviderFailure $effectiveExit ([string]$captured.StandardError) ([bool]$parsed.ToolExecuted))
+        if($canRetry){[Console]::Error.WriteLine(("[Codex Deck] AGY profile {0} returned a quota/provider error before any tools ran; retrying with {1}." -f $candidate,$pool[$index+1]));continue}
+        Write-DeckAntigravityCapturedResult $captured $parsed $machine.RequestedFormat
+        return
     }
 }
 function Install-DeckHarness([string]$Harness) {

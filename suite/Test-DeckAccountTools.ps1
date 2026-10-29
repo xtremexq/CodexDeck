@@ -33,6 +33,8 @@ $lock=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileS
 try { Assert (@(Get-DeckSessionHistory $fixture).Count -eq 1) 'Active session could not be read' } finally { $lock.Dispose() }
 
 Write-DeckJson (Join-Path $fixture 'deck/settings.json') @{WarmupAccounts='old,other';DefaultFolder='unchanged'}
+Write-DeckEnvironmentJson (Join-Path $fixture 'accounts/old/deck-account.json') @{Version=1;Harness='Antigravity';Provider='Gemini'}
+$settingsForRename=Read-DeckJson (Join-Path $fixture 'deck/settings.json');$settingsForRename | Add-Member NoteProperty HarnessAntigravityFailoverAccounts 'old,other' -Force;Write-DeckJson (Join-Path $fixture 'deck/settings.json') $settingsForRename
 Write-DeckJson (Join-Path $fixture 'deck/pins.json') @('old','other')
 Write-DeckJson (Join-Path $fixture 'deck/warmup.json') @(@{Account='old';Reset=123})
 Write-DeckJson (Join-Path $fixture 'deck/cache.json') @(@{Account='old';Status='available'})
@@ -47,12 +49,14 @@ try {
 Rename-DeckAccount $fixture 'old' 'renamed' | Out-Null
 Assert (Test-Path (Join-Path $fixture 'accounts/renamed/sessions/2026/09/08/rollout-example.jsonl')) 'Rename lost session data'
 Assert ((Read-DeckJson (Join-Path $fixture 'deck/settings.json')).WarmupAccounts -eq 'renamed,other') 'Warm-up selection not renamed'
+Assert ((Read-DeckJson (Join-Path $fixture 'deck/settings.json')).HarnessAntigravityFailoverAccounts -eq 'renamed,other') 'AGY failover profile not renamed'
 Assert ('renamed' -in (Read-DeckJson (Join-Path $fixture 'deck/pins.json'))) 'Pin not renamed'
 Assert ((Read-DeckJson (Join-Path $fixture 'deck/cache.json')).Account -eq 'renamed') 'Cache not renamed'
 Assert ((@(Get-DeckSessionHistory $fixture))[0].Account -eq 'renamed') 'History retained old profile identity'
 $session=Register-DeckSession (Join-Path $fixture 'deck') 'renamed' $fixture
 $failed=$false;try{Rename-DeckAccount $fixture 'renamed' 'busy' | Out-Null}catch{$failed=$true};Assert $failed 'Connected account renamed'
 Remove-Item -LiteralPath $session
+$failed=$false;try{Move-DeckAccountToRecovery $fixture 'renamed'}catch{$failed=$true};Assert $failed 'Account referenced by AGY headless failover could be moved to recovery'
 # A failed state write must restore both the folder and every previous state file.
 function Write-DeckJson { throw 'Synthetic state write failure' }
 $failed=$false;try{Rename-DeckAccount $fixture 'renamed' 'rolledback' | Out-Null}catch{$failed=$true}
