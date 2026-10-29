@@ -89,6 +89,8 @@ public static class FakeDeckHarness {
     foreach($id in @('Codex','Claude','Antigravity','OpenCode')){
         $sessionArguments=@(Get-DeckHarnessSessionArguments (Get-DeckSettings (Join-Path $fixture 'deck')) $id @())
         Assert (($sessionArguments -join '|') -eq $expectedPermissionFlags[$id]) "$id install-wide dangerous mode was not added to interactive launches"
+        $nullArgumentSession=@(Get-DeckHarnessSessionArguments (Get-DeckSettings (Join-Path $fixture 'deck')) $id @($null))
+        Assert (($nullArgumentSession -join '|') -eq $expectedPermissionFlags[$id]) "$id null argument crashed or leaked through the install-wide permission mode"
         $adminArguments=@(Get-DeckHarnessSessionArguments $preferences $id @('login'))
         Assert (($adminArguments -join '|') -eq 'login') "$id dangerous mode leaked into login/admin commands"
     }
@@ -99,6 +101,10 @@ public static class FakeDeckHarness {
     Assert (($a.Arguments -join '|') -eq 'auth|login') 'Claude login translation failed'
     Assert (($b.Arguments -join '|') -eq 'auth|logout') 'Claude logout translation failed'
     Assert ($a.Environment.CLAUDE_CONFIG_DIR -ne $b.Environment.CLAUDE_CONFIG_DIR) 'Claude accounts share config/credentials'
+    $claudeNoArgs=Get-DeckHarnessLaunch $fixture claudeA @($null)
+    Assert ($claudeNoArgs.Arguments -contains '--dangerously-skip-permissions' -and @($claudeNoArgs.Arguments | Where-Object {$null -eq $_}).Count -eq 0) 'Claude dashboard launch with an empty argument passed a null to the CLI'
+    $agyNoArgs=Get-DeckHarnessLaunch $fixture googleA @($null)
+    Assert ($agyNoArgs.Arguments -contains '--dangerously-skip-permissions' -and @($agyNoArgs.Arguments | Where-Object {$null -eq $_}).Count -eq 0) 'AGY dashboard launch with an empty argument passed a null to the CLI'
     $a=Get-DeckHarnessLaunch $fixture openA @('login')
     $b=Get-DeckHarnessLaunch $fixture openB @('login')
     Assert (($a.Arguments -join '|') -eq 'auth|login|--provider|openai') 'OpenCode ChatGPT login did not select OpenAI'

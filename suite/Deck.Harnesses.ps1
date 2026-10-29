@@ -64,7 +64,9 @@ function Test-DeckHarnessInteractiveSession([string]$Harness,[string[]]$Argument
     return $false
 }
 function Get-DeckHarnessSessionArguments($Settings,[string]$Harness,[string[]]$Arguments) {
-    $result=@($Arguments)
+    # A missing [string[]] argument binds as $null; wrapping that with @()
+    # preserves one null element, which can reach the mode-flag StartsWith check.
+    $result=@(foreach($argument in $Arguments){if($null -ne $argument){[string]$argument}})
     if(-not (Test-DeckHarnessInteractiveSession $Harness $result)){return $result}
     $permissionArgs=@(Get-DeckHarnessFullPermissionArguments $Settings $Harness)
     if(-not $permissionArgs.Count){return $result}
@@ -76,7 +78,9 @@ function Get-DeckHarnessSessionArguments($Settings,[string]$Harness,[string[]]$A
         'OpenCode' {@('--auto')}
     }
     foreach($argument in $result){
-        if($argument -in $modeFlags -or @($modeFlags | Where-Object {$argument.StartsWith($_+'=',[StringComparison]::Ordinal)}).Count){return $result}
+        foreach($modeFlag in $modeFlags){
+            if($argument -eq $modeFlag -or $argument.StartsWith([string]$modeFlag+'=',[StringComparison]::Ordinal)){return $result}
+        }
     }
     return @($permissionArgs)+$result
 }
