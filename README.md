@@ -16,9 +16,9 @@ A Windows terminal dashboard and desktop companion for an existing Codex CLI ins
 
 ## What Deck adds
 
-- **Choose your coding harness.** Settings → Harnesses manages Codex CLI, Antigravity, Claude Code and OpenCode, with install/update, usage help and native settings. Add isolated accounts from either dashboard. [Harness setup and provider support](docs/HARNESSES.md).
+- **Choose your coding harness.** Settings → Harnesses manages Codex CLI, Antigravity, Claude Code and OpenCode, with detected install/update state, usage help and native settings. `claude-auth` and `agy-auth` open isolated profile dashboards with account creation and sign-in checks. Antigravity profiles use separate file-backed OAuth homes without extra Windows users. [Harness setup and provider support](docs/HARNESSES.md).
 - **Connect AIDeck Router when you need desktop routing.** Settings → AI Router installs and manages its optional local server, pairing approval and Windows sign-in startup. The Chrome extension also works standalone. [AI Router setup](docs/AI-ROUTER.md).
-- **See usage without hopping between accounts.** `codex-auth` opens a keyboard-driven dashboard with cached quota, reset, and session data. `codex-deck` opens a desktop panel or floating widget. Refresh on demand, or opt into desktop polling.
+- **See usage without hopping between accounts.** `codex-auth` opens a keyboard-driven dashboard with cached quota, reset, and session data. `claude-auth` checks native sign-in and edits Claude-only defaults; `agy-auth` manages isolated Antigravity profiles and checks local credentials. Claude and Antigravity quota remain in each CLI's `/usage` view. `codex-deck` opens a desktop panel or floating widget. Refresh on demand, or opt into desktop polling.
 - **Keep accounts separate.** Each profile gets its own Codex home, sign-in, configuration, and history. A pool can use quotas from accounts you choose while keeping one environment; sharing skills, memories, instructions, or MCP definitions is explicit.
 - **Stay in control when a limit is reached.** Use `!account` to change the active account during a conversation. Optional automatic failover retries supported quota-rejected requests with another account in your selected pool. [How failover works and where it stops](docs/ACCOUNT-TOOLS.md#live-failover-opt-in).
 - **Manage the conversation as it runs.** Optional live context inspection lets you review and edit the next request. Auto-compaction, local efficiency analytics, and `!delay` / `!schedule` are available when you need them.
@@ -85,7 +85,7 @@ For optional skills, **Settings → Integrations** can install the Agentic Aweso
 | --- | --- |
 | **↑ / ↓** | Select an account |
 | **Page Up / Page Down**, **Home / End** | Navigate a longer list |
-| **Enter** | Launch Codex; return to the dashboard when it exits |
+| **Enter** | Launch Codex, or start sign-in when the selected account needs authentication |
 | **B** | Select the best account with recently checked usable quota |
 | **C** | Toggle auto-compaction; hold **C** to adjust its threshold with ↑/↓ and Enter |
 | **R** | Refresh the selected account |
@@ -100,6 +100,7 @@ For optional skills, **Settings → Integrations** can install the Agentic Aweso
 | **Y** | Open Analytics |
 | **U / T / W / P** | Run a warm-up, set daily times, select an account, or pause warm-ups |
 | **G** | Edit rules that apply globally |
+| **V** | Edit the separate automatic reauthentication helper list |
 | **I** | Read or edit the selected account or pool's global `AGENTS.md` instructions |
 | **E** | Read or edit the selected account or pool's memory files |
 | **K** | Open the selected account or pool's skills folder |
@@ -108,6 +109,10 @@ For optional skills, **Settings → Integrations** can install the Agentic Aweso
 | **Q** | Quit the dashboard |
 
 Cached usage appears immediately and opening the dashboard performs no account checks. Press **R** to refresh the selected signed-in account or **A** to queue all signed-in accounts, with up to three checks running at once. Run `codex-auth -a` to open the dashboard and queue that same all-account refresh immediately; `-a` is only accepted with the otherwise plain command. Checks stay in the background and do not block navigation. Opening the dashboard also does not send a warm-up prompt.
+
+Deck leaves ordinary token renewal to Codex's existing auth session. For explicit expired, invalid, or revoked OAuth-token 401/403 errors, the routing proxy identifies the exact token and account that received the rejection, even after an in-conversation `!account` switch. It matches that profile's email against the separate helper list and starts OAuth only when that email has a saved helper entry. Recovery uses the browser harness to enter credentials and TOTP in a new background tab in the already open Chrome window. If the token was refreshed during the request, or the helper finishes successfully, the proxy retries that rejected request once so the conversation can continue. Usage-limit errors never start token revalidation; they rotate only when automatic failover has another available configured account. Matching auth failures from usage checks start the same helper in the background. If no email matches or sign-in cannot finish, Deck leaves the account marked **Sign in again**. Edit the separate list through **Configs → Auth Helper**, `codex-auth -AuthHelper`, or **V** in the terminal dashboard; use one `email|password|TOTP-secret` entry per line. Deck encrypts the saved list with Windows DPAPI for the current user. The helper requires Python with Playwright; automatic recovery also requires the browser-harness command. Install Playwright with `py -3 -m pip install playwright` if needed. The helper is not the Codex Deck account list, and credentials are not copied into account profiles.
+
+To sign in several newly created, unsigned profiles with that same OAuth and Playwright flow, run `codex-auth -LoginAll -LoginAccounts account51,account52,...,account61`. The helper assigns credentials that are not already represented by a signed-in profile, in the order they appear in the encrypted helper list, and runs up to three minimized, off-screen Edge workers at once. Omit `-LoginAccounts` to target every unsigned profile. Progress is kept in `.codex-loop/deck/auth-helper/status/` and the batch summary is `.codex-loop/deck/auth-helper/batch.json`; the command returns immediately and the dashboard can remain open.
 
 **Settings → Appearance → Codex-auth dashboard theme** offers five layouts. **Default** keeps the original dashboard; **Focus** emphasizes the selected account; **Cards** shows compact quota cards; **Ledger** compares accounts in a table; **Split** places the account roster beside its details. The four additional layouts group shortcuts by task. Changing the setting updates an open dashboard after its next settings refresh.
 

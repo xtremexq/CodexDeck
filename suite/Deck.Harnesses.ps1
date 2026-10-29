@@ -24,6 +24,20 @@ function Get-DeckAccountIdentity([string]$SuiteRoot,[string]$Account) {
 function Test-DeckCodexAccount([string]$SuiteRoot,[string]$Account) {
     return (Get-DeckAccountIdentity $SuiteRoot $Account).Harness -eq 'Codex'
 }
+function Resolve-DeckHarnessScopedAccountName([string]$SuiteRoot,[string]$Account,[string]$Harness) {
+    Assert-DeckEntryName $Account
+    [void](Get-DeckHarness $Harness)
+    if($Harness -eq 'Codex'){return $Account}
+    $prefix=$Harness.ToLowerInvariant()+'-'
+    if($Account.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){return $Account}
+    $plainPath=Join-Path $SuiteRoot "accounts/$Account"
+    if(Test-Path -LiteralPath $plainPath -PathType Container){
+        if((Get-DeckAccountIdentity $SuiteRoot $Account).Harness -eq $Harness){return $Account}
+    }
+    $scoped=$prefix+$Account
+    Assert-DeckEntryName $scoped
+    return $scoped
+}
 function Test-DeckHarnessEnabled($Settings,[string]$Harness) {
     [void](Get-DeckHarness $Harness)
     return $Harness -eq 'Codex' -or [bool]$Settings[('Harness'+$Harness+'Enabled')]
@@ -63,9 +77,14 @@ function Test-DeckAntigravityFileAccount($Identity) {
 }
 function Assert-DeckAntigravityFileSupport([string]$Executable) {
     if(-not ('DeckAntigravityIsolation' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'Deck.Antigravity.Isolation.cs')}
+    $file=Get-Item -LiteralPath $Executable -ErrorAction Stop
+    $cacheKey=([IO.Path]::GetFullPath($Executable).ToLowerInvariant()+'|'+$file.Length+'|'+$file.LastWriteTimeUtc.Ticks)
+    if($script:DeckAntigravitySupportCache -and $script:DeckAntigravitySupportCache.ContainsKey($cacheKey)){return}
     if(-not [DeckAntigravityIsolation]::SupportsFileIsolation($Executable)){
         throw 'This AGY binary does not pass the isolated file-login compatibility check. Update AGY, choose a compatible native binary, or configure the Windows runner fallback. No login was launched.'
     }
+    if(-not $script:DeckAntigravitySupportCache){$script:DeckAntigravitySupportCache=@{}}
+    $script:DeckAntigravitySupportCache[$cacheKey]=$true
 }
 function Get-DeckHarnessConfigPath([string]$SuiteRoot,[string]$Account) {
     $identity=Get-DeckAccountIdentity $SuiteRoot $Account
@@ -153,8 +172,13 @@ function Get-DeckHarnessLaunch([string]$SuiteRoot,[string]$Account,[string[]]$Ar
     $directory=Get-DeckEntryDirectory $SuiteRoot $Account
     $environment=@{}; $remove=@(); $argsList=@($Arguments)
     if($identity.Harness -eq 'Claude'){
-        $environment.CLAUDE_CONFIG_DIR=Join-Path $directory 'claude'
-        $remove=@('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY')
+        $claudeProfile=Join-Path $directory 'claude'
+        $environment.CLAUDE_CONFIG_DIR=$claudeProfile
+        $environment.USERPROFILE=$claudeProfile
+        $environment.HOME=$claudeProfile
+        $environment.APPDATA=Join-Path $claudeProfile 'AppData/Roaming'
+        $environment.LOCALAPPDATA=Join-Path $claudeProfile 'AppData/Local'
+        $remove=@('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_PROFILE','ANTHROPIC_BASE_URL','ANTHROPIC_MODEL','CLAUDE_CODE_OAUTH_TOKEN','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY','AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN','AWS_PROFILE','AWS_BEARER_TOKEN_BEDROCK','ANTHROPIC_BEDROCK_BASE_URL','ANTHROPIC_VERTEX_PROJECT_ID','ANTHROPIC_VERTEX_REGION','GOOGLE_APPLICATION_CREDENTIALS','CLOUD_ML_REGION','CLOUD_ML_PROJECT_ID')
         if($argsList -and $argsList[0] -eq 'login'){$argsList=@('auth','login')+@($argsList | Select-Object -Skip 1)}
         if($argsList -and $argsList[0] -eq 'logout'){$argsList=@('auth','logout')+@($argsList | Select-Object -Skip 1)}
     }elseif(Test-DeckAntigravityFileAccount $identity){
@@ -179,8 +203,159 @@ function Get-DeckHarnessLaunch([string]$SuiteRoot,[string]$Account,[string[]]$Ar
             $argsList+=@('--provider',$providerId)
         }
     }
+    $claudeDefaults=$null;$claudeSessionSettings=$null;$claudeSettingsWereExplicit=$false
+    if($identity.Harness -eq 'Claude' -and (Test-DeckClaudeSessionLaunch $argsList)){
+        $claudeDefaults=Get-DeckClaudeDefaultSettings $SuiteRoot
+        if(@($claudeDefaults.PSObject.Properties).Count){
+            $explicitSettings=Get-DeckClaudeSettingsArgument $argsList
+            $claudeSessionSettings=$explicitSettings.Settings
+            $claudeSettingsWereExplicit=$explicitSettings.Found
+            if($explicitSettings.Found){$argsList=@($explicitSettings.Arguments)}
+        }else{$claudeDefaults=$null}
+    }else{$claudeDefaults=$null}
     foreach($key in $environment.Keys){if($key -notin @('SSH_CONNECTION','AGY_ADC_AUTH')){Assert-DeckHarnessPath $directory $environment[$key]}}
-    return @{Identity=$identity;Executable=(Resolve-DeckHarnessExecutable $preferences $identity.Harness);Environment=$environment;Remove=$remove;Arguments=$argsList;Directory=$directory}
+    $instructionsPath=$null
+    if($identity.Harness -eq 'Claude' -and (Test-DeckClaudeSessionLaunch $argsList)){
+        $candidate=Get-DeckClaudeGlobalInstructionsPath $SuiteRoot
+        if((Test-Path -LiteralPath $candidate -PathType Leaf) -and -not [string]::IsNullOrWhiteSpace([IO.File]::ReadAllText($candidate))){$instructionsPath=$candidate}
+    }
+    return @{Identity=$identity;Executable=(Resolve-DeckHarnessExecutable $preferences $identity.Harness);Environment=$environment;Remove=$remove;Arguments=$argsList;Directory=$directory;ClaudeDefaults=$claudeDefaults;ClaudeSessionSettings=$claudeSessionSettings;ClaudeSettingsWereExplicit=$claudeSettingsWereExplicit;ClaudeGlobalInstructionsPath=$instructionsPath}
+}
+
+function Get-DeckClaudeAuthStatus([string]$SuiteRoot,[string]$Account) {
+    if((Get-DeckAccountIdentity $SuiteRoot $Account).Harness -ne 'Claude'){throw 'Authentication status checks require a Claude account.'}
+    $launch=Get-DeckHarnessLaunch $SuiteRoot $Account @('auth','status')
+    foreach($key in @('USERPROFILE','APPDATA','LOCALAPPDATA')){if($launch.Environment[$key]){[void][IO.Directory]::CreateDirectory($launch.Environment[$key])}}
+    $previous=@{}
+    try{
+        foreach($key in @($launch.Environment.Keys)+@($launch.Remove)){
+            $previous[$key]=[Environment]::GetEnvironmentVariable($key,'Process')
+            [Environment]::SetEnvironmentVariable($key,$launch.Environment[$key],'Process')
+        }
+        $statusArguments=@($launch.Arguments)
+        $output=@(& $launch.Executable @statusArguments 2>&1)
+        $exitCode=$LASTEXITCODE
+    }finally{
+        foreach($key in $previous.Keys){[Environment]::SetEnvironmentVariable($key,$previous[$key],'Process')}
+    }
+    $raw=($output | ForEach-Object {[string]$_}) -join "`n"
+    try{$status=$raw | ConvertFrom-Json -ErrorAction Stop}catch{throw 'Claude auth status did not return valid JSON.'}
+    if($exitCode -notin @(0,1)){throw "Claude auth status failed (exit $exitCode)."}
+    if($status.PSObject.Properties['configDirectory'] -and $status.configDirectory){
+        $expected=[IO.Path]::GetFullPath([string]$launch.Environment.CLAUDE_CONFIG_DIR).TrimEnd('\')
+        $reported=[IO.Path]::GetFullPath([string]$status.configDirectory).TrimEnd('\')
+        if(-not [string]::Equals($expected,$reported,[StringComparison]::OrdinalIgnoreCase)){throw 'Claude reported a different config directory. Check stopped to protect account isolation.'}
+    }
+    if(-not $status.PSObject.Properties['loggedIn']){throw 'Claude auth status did not include a login state.'}
+    $record=[pscustomobject]@{LoggedIn=[bool]$status.loggedIn;AuthMethod=if($status.authMethod){[string]$status.authMethod}else{$null};CheckedAt=[DateTimeOffset]::UtcNow.ToString('o')}
+    $cachePath=Join-Path $SuiteRoot 'deck/claude-auth-checks.json'
+    $cache=Read-DeckEnvironmentJson $cachePath
+    if(-not (Test-DeckClaudeJsonObject $cache)){$cache=[pscustomobject]@{}}
+    $cache | Add-Member -MemberType NoteProperty -Name $Account -Value $record -Force
+    Write-DeckEnvironmentJson $cachePath $cache
+    return $record
+}
+
+function Clear-DeckClaudeAuthStatus([string]$SuiteRoot,[string]$Account) {
+    $cachePath=Join-Path $SuiteRoot 'deck/claude-auth-checks.json'
+    $cache=Read-DeckEnvironmentJson $cachePath
+    if(-not (Test-DeckClaudeJsonObject $cache) -or -not $cache.PSObject.Properties[$Account]){return}
+    $cache.PSObject.Properties.Remove($Account)
+    if(@($cache.PSObject.Properties).Count){Write-DeckEnvironmentJson $cachePath $cache}else{Remove-Item -LiteralPath $cachePath -ErrorAction SilentlyContinue}
+}
+
+function Get-DeckAntigravityAuthStatus([string]$SuiteRoot,[string]$Account) {
+    $identity=Get-DeckAccountIdentity $SuiteRoot $Account
+    if($identity.Harness -ne 'Antigravity'){throw 'Antigravity auth checks require an Antigravity account.'}
+    $checkedAt=[DateTimeOffset]::UtcNow.ToString('o')
+    if(-not (Test-DeckAntigravityFileAccount $identity)){
+        return [pscustomobject]@{CredentialsPresent=$null;Mode='Windows runner';Status='Runner profile';CheckedAt=$checkedAt}
+    }
+    $preferences=Get-DeckSettings (Join-Path $SuiteRoot 'deck')
+    $executable=Resolve-DeckHarnessExecutable $preferences 'Antigravity'
+    Assert-DeckAntigravityFileSupport $executable
+    $directory=Get-DeckEntryDirectory $SuiteRoot $Account
+    $tokenPath=Join-Path $directory 'antigravity/profile/.gemini/antigravity-cli/antigravity-oauth-token'
+    Assert-DeckHarnessPath $directory $tokenPath
+    $present=$false
+    if(Test-Path -LiteralPath $tokenPath){
+        $item=Get-Item -LiteralPath $tokenPath -Force
+        if($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Antigravity credentials must be a regular file inside this isolated account.'}
+        $present=$item.Length -gt 0
+    }
+    $record=[pscustomobject]@{CredentialsPresent=$present;Mode='Isolated file profile';Status=if($present){'Credentials stored'}else{'Sign-in required'};CheckedAt=$checkedAt}
+    $cachePath=Join-Path $SuiteRoot 'deck/antigravity-auth-checks.json'
+    $cache=Read-DeckEnvironmentJson $cachePath
+    if(-not (Test-DeckAntigravityJsonObject $cache)){$cache=[pscustomobject]@{}}
+    $cache | Add-Member NoteProperty $Account $record -Force
+    Write-DeckEnvironmentJson $cachePath $cache
+    return $record
+}
+
+function Clear-DeckAntigravityAuthStatus([string]$SuiteRoot,[string]$Account) {
+    $cachePath=Join-Path $SuiteRoot 'deck/antigravity-auth-checks.json'
+    $cache=Read-DeckEnvironmentJson $cachePath
+    if(-not (Test-DeckAntigravityJsonObject $cache) -or -not $cache.PSObject.Properties[$Account]){return}
+    $cache.PSObject.Properties.Remove($Account)
+    if(@($cache.PSObject.Properties).Count){Write-DeckEnvironmentJson $cachePath $cache}else{Remove-Item -LiteralPath $cachePath -ErrorAction SilentlyContinue}
+}
+
+function New-DeckClaudeSessionArguments([string]$SuiteRoot,[string]$Account,$Launch) {
+    $arguments=[Collections.Generic.List[string]]::new();foreach($argument in $Launch.Arguments){$arguments.Add([string]$argument)}
+    $temporaryFiles=[Collections.Generic.List[string]]::new()
+    try{
+        if($Launch.ClaudeDefaults){
+            $settingsPath=Get-DeckHarnessConfigPath $SuiteRoot $Account
+            $accountSettings=Read-DeckClaudeSettingsFile $settingsPath 'Claude account settings'
+            $settings=Merge-DeckClaudeSettings $Launch.ClaudeDefaults $accountSettings $Launch.ClaudeSessionSettings
+            $settingsFile=Join-Path $Launch.Environment.CLAUDE_CONFIG_DIR ('.codexdeck-settings-'+[guid]::NewGuid().ToString('N')+'.json')
+            Assert-DeckHarnessPath $Launch.Directory $settingsFile
+            $temporaryFiles.Add($settingsFile)
+            [IO.File]::WriteAllText($settingsFile,(ConvertTo-Json -InputObject $settings -Compress -Depth 100),[Text.UTF8Encoding]::new($false))
+            $arguments.Insert(0,$settingsFile);$arguments.Insert(0,'--settings')
+        }
+        $hasGlobalInstructions=$Launch.ClaudeGlobalInstructionsPath -and (Test-Path -LiteralPath $Launch.ClaudeGlobalInstructionsPath -PathType Leaf)
+        $promptFlags=@('--append-system-prompt','--append-system-prompt-file')
+        $promptSections=[Collections.Generic.List[string]]::new()
+        if($hasGlobalInstructions){
+            $globalItem=Get-Item -LiteralPath $Launch.ClaudeGlobalInstructionsPath -Force
+            if($globalItem.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Claude global instructions must be a regular file.'}
+            $globalInstructions=[IO.File]::ReadAllText($Launch.ClaudeGlobalInstructionsPath)
+            if(-not [string]::IsNullOrWhiteSpace($globalInstructions)){$promptSections.Add($globalInstructions.Trim())}
+        }
+        $clean=[Collections.Generic.List[string]]::new()
+        for($i=0;$i -lt $arguments.Count;$i++){
+            $argument=$arguments[$i]
+            if($argument -in $promptFlags){
+                if($i+1 -ge $arguments.Count){throw "Missing value for $argument."}
+                $i++;$value=$arguments[$i]
+                if($argument -eq '--append-system-prompt-file'){
+                    if(-not (Test-Path -LiteralPath $value -PathType Leaf)){throw "Claude system prompt file not found: $value"}
+                    $item=Get-Item -LiteralPath $value -Force
+                    if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Claude system prompt files must be regular files.'}
+                    $promptSections.Add([IO.File]::ReadAllText($value).Trim())
+                }else{$promptSections.Add([string]$value)}
+            }elseif($argument.StartsWith('--append-system-prompt=',[StringComparison]::Ordinal)){$promptSections.Add($argument.Substring('--append-system-prompt='.Length))}
+            elseif($argument.StartsWith('--append-system-prompt-file=',[StringComparison]::Ordinal)){
+                $path=$argument.Substring('--append-system-prompt-file='.Length)
+                if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw "Claude system prompt file not found: $path"}
+                $item=Get-Item -LiteralPath $path -Force
+                if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Claude system prompt files must be regular files.'}
+                $promptSections.Add([IO.File]::ReadAllText($path).Trim())
+            }else{$clean.Add($argument)}
+        }
+        if(@($promptSections | Where-Object {-not [string]::IsNullOrWhiteSpace($_)}).Count){
+            $promptFile=Join-Path $Launch.Environment.CLAUDE_CONFIG_DIR ('.codexdeck-prompt-'+[guid]::NewGuid().ToString('N')+'.md')
+            Assert-DeckHarnessPath $Launch.Directory $promptFile
+            $temporaryFiles.Add($promptFile)
+            [IO.File]::WriteAllText($promptFile,($promptSections -join "`n`n"),[Text.UTF8Encoding]::new($false))
+            $clean.Add('--append-system-prompt-file');$clean.Add($promptFile)
+        }
+        return @{Arguments=$clean.ToArray();TemporaryFiles=$temporaryFiles.ToArray()}
+    }catch{
+        foreach($temporaryFile in $temporaryFiles){if(Test-Path -LiteralPath $temporaryFile -PathType Leaf){[IO.File]::Delete($temporaryFile)}}
+        throw
+    }
 }
 function ConvertTo-DeckHarnessArgument([AllowEmptyString()][string]$Value) {
     if ($null -eq $Value) { $Value = '' }
@@ -216,6 +391,33 @@ function Invoke-DeckHarnessProcess([string]$Executable,[string[]]$Arguments) {
     $process=[Diagnostics.Process]::Start($info)
     try{$process.WaitForExit();$global:LASTEXITCODE=$process.ExitCode}finally{$process.Dispose()}
 }
+function Invoke-DeckHarnessInstallerScript([string]$Path,[string[]]$Arguments,[string]$Label) {
+    $powershell=Join-Path $PSHOME 'powershell.exe'
+    if(-not (Test-Path -LiteralPath $powershell -PathType Leaf)){$powershell='powershell.exe'}
+    $info=[Diagnostics.ProcessStartInfo]::new()
+    $info.FileName=$powershell
+    $script="`$ErrorActionPreference='Stop';`$ProgressPreference='SilentlyContinue'; & '"+$Path.Replace("'","''")+"'"
+    foreach($argument in $Arguments){$script+=' '''+([string]$argument).Replace("'","''")+''''}
+    $script+='; exit $LASTEXITCODE'
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+    $info.Arguments=(@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded) | ForEach-Object {ConvertTo-DeckHarnessArgument ([string]$_)}) -join ' '
+    $info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
+    $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+    [void]$info.EnvironmentVariables.Remove('PSModulePath')
+    $process=[Diagnostics.Process]::Start($info)
+    try{
+        $stdoutTask=$process.StandardOutput.ReadToEndAsync()
+        $stderrTask=$process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdout=$stdoutTask.GetAwaiter().GetResult()
+        $stderr=$stderrTask.GetAwaiter().GetResult()
+        if($process.ExitCode -ne 0){
+            $detail=(($stderr+' '+$stdout) -split "`r?`n" | Where-Object {$_} | Select-Object -First 1)
+            throw "$Label failed (exit $($process.ExitCode))$(if($detail){': '+$detail.Trim()}else{'.'})"
+        }
+        foreach($line in ($stdout -split "`r?`n" | Where-Object {$_})){Write-Output $line}
+    }finally{$process.Dispose()}
+}
 function Invoke-DeckHarnessAccount([string]$SuiteRoot,[string]$Account,[string[]]$Arguments,[switch]$ConfigureRunner) {
     $identity=Get-DeckAccountIdentity $SuiteRoot $Account
     if($identity.Harness -eq 'Codex'){throw 'Use the Codex launch path for ChatGPT accounts.'}
@@ -227,6 +429,7 @@ function Invoke-DeckHarnessAccount([string]$SuiteRoot,[string]$Account,[string[]
     $launch=Get-DeckHarnessLaunch $SuiteRoot $Account $Arguments
     $session=Register-DeckSession (Join-Path $SuiteRoot 'deck') $Account (Get-Location).Path
     $previous=@{}
+    $claudeTemporaryFiles=@()
     try{
         if($identity.Harness -eq 'Antigravity' -and -not (Test-DeckAntigravityFileAccount $identity)){
             if(-not (Test-Path -LiteralPath $credentialPath)){throw 'Restore this account runner: codex-auth <name> -ConfigureRunner.'}
@@ -250,9 +453,19 @@ function Invoke-DeckHarnessAccount([string]$SuiteRoot,[string]$Account,[string[]
             $process=Start-Process powershell.exe -Credential $credential -LoadUserProfile -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded) -WorkingDirectory ([Environment]::GetFolderPath('CommonDocuments')) -PassThru
             try{$process.WaitForExit(); $global:LASTEXITCODE=$process.ExitCode}finally{$process.Dispose()};return
         }
-        if(Test-DeckAntigravityFileAccount $identity){Assert-DeckAntigravityFileSupport $launch.Executable}
+        if(Test-DeckAntigravityFileAccount $identity){
+            Assert-DeckAntigravityFileSupport $launch.Executable
+            if(-not (Get-Command Sync-DeckAntigravityProfile -ErrorAction SilentlyContinue)){
+                $defaultsModule=Join-Path $PSScriptRoot 'Deck.AntigravityDefaults.ps1'
+                if(Test-Path -LiteralPath $defaultsModule){. $defaultsModule}
+            }
+            if(Get-Command Sync-DeckAntigravityProfile -ErrorAction SilentlyContinue){Sync-DeckAntigravityProfile $SuiteRoot $Account}
+        }
         foreach($key in @($launch.Environment.Keys)+@($launch.Remove)){$previous[$key]=[Environment]::GetEnvironmentVariable($key,'Process');[Environment]::SetEnvironmentVariable($key,$launch.Environment[$key],'Process')}
         if(Test-DeckAntigravityFileAccount $identity){
+            foreach($key in @('USERPROFILE','APPDATA','LOCALAPPDATA')){[void][IO.Directory]::CreateDirectory($launch.Environment[$key])}
+        }
+        if($identity.Harness -eq 'Claude'){
             foreach($key in @('USERPROFILE','APPDATA','LOCALAPPDATA')){[void][IO.Directory]::CreateDirectory($launch.Environment[$key])}
         }
         $configPath=Get-DeckHarnessConfigPath $SuiteRoot $Account
@@ -263,16 +476,18 @@ function Invoke-DeckHarnessAccount([string]$SuiteRoot,[string]$Account,[string[]
             if($config -isnot [System.Management.Automation.PSCustomObject]){throw 'Claude settings must contain a JSON object.'}
             $config | Add-Member NoteProperty forceLoginMethod 'claudeai' -Force
             Write-DeckEnvironmentJson $configPath $config
-        }elseif(Test-DeckAntigravityFileAccount $identity){
-            $config=Read-DeckEnvironmentJson $configPath
-            if($config -isnot [System.Management.Automation.PSCustomObject]){throw 'Antigravity settings must contain a JSON object.'}
-            # API-key provider config must not replace this account's Google login.
-            $config.PSObject.Properties.Remove('modelProvider')
-            Write-DeckEnvironmentJson $configPath $config
         }
         $nativeArguments=@($launch.Arguments)
+        if($identity.Harness -eq 'Claude'){
+            $claudeLaunch=New-DeckClaudeSessionArguments $SuiteRoot $Account $launch
+            $nativeArguments=@($claudeLaunch.Arguments)
+            $claudeTemporaryFiles=@($claudeLaunch.TemporaryFiles)
+        }
         Invoke-DeckHarnessProcess $launch.Executable $nativeArguments
+        if($identity.Harness -eq 'Claude' -and $launch.Arguments.Count -ge 2 -and $launch.Arguments[0] -eq 'auth' -and $launch.Arguments[1] -in @('login','logout')){Clear-DeckClaudeAuthStatus $SuiteRoot $Account}
+        if($identity.Harness -eq 'Antigravity' -and $Arguments -contains 'login'){Clear-DeckAntigravityAuthStatus $SuiteRoot $Account}
     }finally{
+        foreach($temporaryFile in $claudeTemporaryFiles){if(Test-Path -LiteralPath $temporaryFile -PathType Leaf){[IO.File]::Delete($temporaryFile)}}
         foreach($key in $previous.Keys){[Environment]::SetEnvironmentVariable($key,$previous[$key],'Process')}
         if(Test-Path -LiteralPath $session){[IO.File]::Delete($session)}
     }
@@ -282,30 +497,65 @@ function Install-DeckHarness([string]$Harness) {
     switch($Harness){
         'Codex' {& npm.cmd install -g '@openai/codex@latest'; if($LASTEXITCODE){throw 'Codex CLI installation failed.'}}
         'OpenCode' {& npm.cmd install -g 'opencode-ai@latest'; if($LASTEXITCODE){throw 'OpenCode installation failed.'}}
-        {$_ -in @('Claude','Antigravity')} {
-            $uri=if($Harness -eq 'Claude'){'https://claude.ai/install.ps1'}else{'https://antigravity.google/cli/install.ps1'}
+        'Claude' {
+            $uri='https://claude.ai/install.ps1'
             $temporary=Join-Path ([IO.Path]::GetTempPath()) ('deck-harness-'+[guid]::NewGuid().ToString('N')+'.ps1')
             try{
                 Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $temporary
-                $installerCode="`$ErrorActionPreference='Stop'; & '"+$temporary.Replace("'","''")+"'"
-                $encodedInstaller=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($installerCode))
-                & powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedInstaller
-                if($LASTEXITCODE){throw "$Harness installation failed (exit $LASTEXITCODE)."}
+                if((Get-Item -LiteralPath $temporary).Length -lt 32){throw "$Harness installer download was empty or incomplete."}
+                # Run installers in a noninteractive child so `exit` in their script
+                # cannot terminate Deck's worker. The settings UI monitors that worker
+                # asynchronously and enforces a timeout.
+                $ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
+                Invoke-DeckHarnessInstallerScript $temporary @() $Harness
             }finally{if(Test-Path -LiteralPath $temporary){[IO.File]::Delete($temporary)}}
+        }
+        'Antigravity' {
+            $preferences=Get-DeckSettings (Join-Path $PSScriptRoot 'deck')
+            $override=[string]$preferences.HarnessAntigravityPath
+            $existing=$null
+            if($override){
+                if(-not (Test-Path -LiteralPath $override -PathType Leaf)){throw 'The configured Antigravity executable path does not exist.'}
+                $existing=$override
+            }else{
+                $local=Join-Path $env:LOCALAPPDATA 'agy/bin/agy.exe'
+                $shared=Join-Path ([Environment]::GetFolderPath('CommonDocuments') | Split-Path -Parent) 'CodexDeck/harnesses/agy.exe'
+                if(Test-Path -LiteralPath $local -PathType Leaf){$existing=$local}
+                elseif(Test-Path -LiteralPath $shared -PathType Leaf){$existing=$shared}
+                else{
+                    $command=Get-Command agy.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if($command){$existing=$command.Source}
+                }
+            }
+            if($existing){
+                # Google's bootstrap installer intentionally leaves an existing
+                # CLI alone. Use its supported updater for upgrades instead.
+                $LASTEXITCODE=0
+                & $existing update
+                if($LASTEXITCODE){throw "Antigravity update failed (exit $LASTEXITCODE)."}
+            }else{
+                $temporary=Join-Path ([IO.Path]::GetTempPath()) ('deck-harness-'+[guid]::NewGuid().ToString('N')+'.ps1')
+                try{
+                    Invoke-WebRequest -UseBasicParsing -Uri 'https://antigravity.google/cli/install.ps1' -OutFile $temporary
+                    if((Get-Item -LiteralPath $temporary).Length -lt 32){throw 'Antigravity installer download was empty or incomplete.'}
+                    $ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
+                    Invoke-DeckHarnessInstallerScript $temporary @('--skip-path','--skip-aliases') 'Antigravity installation'
+                }finally{if(Test-Path -LiteralPath $temporary){[IO.File]::Delete($temporary)}}
+            }
         }
         default {throw 'Unknown harness.'}
     }
     # Installers may update the user's PATH after this worker started.
     $env:PATH=[Environment]::GetEnvironmentVariable('Path','User')+';'+[Environment]::GetEnvironmentVariable('Path','Machine')+';'+$env:PATH
-    if($Harness -eq 'Antigravity'){
+    if($Harness -eq 'Antigravity' -and -not (Get-DeckSettings (Join-Path $PSScriptRoot 'deck')).HarnessAntigravityPath){
         # Keep a binary readable by separate runner users. Do not overwrite GeminiLoop's install.
         $installed=Join-Path $env:LOCALAPPDATA 'agy/bin/agy.exe'
         if(-not (Test-Path -LiteralPath $installed -PathType Leaf)){
-            $installed=(Get-Command agy.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+            $installed=Join-Path ([Environment]::GetFolderPath('CommonDocuments') | Split-Path -Parent) 'CodexDeck/harnesses/agy.exe'
         }
         $shared=Join-Path ([Environment]::GetFolderPath('CommonDocuments') | Split-Path -Parent) 'CodexDeck/harnesses/agy.exe'
         [void][IO.Directory]::CreateDirectory((Split-Path -Parent $shared))
-        Copy-Item -LiteralPath $installed -Destination $shared -Force
+        if([IO.Path]::GetFullPath($installed) -ne [IO.Path]::GetFullPath($shared)){Copy-Item -LiteralPath $installed -Destination $shared -Force}
     }
     $executable=Resolve-DeckHarnessExecutable (Get-DeckDefaults) $Harness
     Write-Output "Installed / updated $Harness at $executable"

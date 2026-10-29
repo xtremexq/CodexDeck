@@ -6,10 +6,21 @@ const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { once } = require('node:events');
-const { createProxy, rank, quotaRejected, contextEntries, projectContext } = require('./Deck.Failover.cjs');
+const { createProxy, rank, quotaRejected, credentials, contextEntries, projectContext } = require('./Deck.Failover.cjs');
 const quota = JSON.stringify({error:{type:'usage_limit_reached'}});
 const row = (pct, age = 0) => ({Status:'available', CheckedAt:new Date(Date.now()-age).toISOString(), Windows:[{RemainingPct:pct}]});
 async function main() {
+  // Auth mode casing varies by writer; only the token shape decides pool eligibility.
+  const authRoot=fs.mkdtempSync(path.join(os.tmpdir(),'deck-auth-mode-'));
+  try {
+    for(const [name,mode] of [['upper','Chatgpt'],['lower','chatgpt'],['key','apikey']]) {
+      fs.mkdirSync(path.join(authRoot,'accounts',name),{recursive:true});
+      fs.writeFileSync(path.join(authRoot,'accounts',name,'auth.json'),JSON.stringify({auth_mode:mode,tokens:{access_token:'synthetic',account_id:name}}));
+    }
+    assert.deepEqual(credentials(authRoot,'upper'),{token:'synthetic',id:'upper'});
+    assert.deepEqual(credentials(authRoot,'lower'),{token:'synthetic',id:'lower'});
+    assert.throws(()=>credentials(authRoot,'key'),/Pool account key needs a file-based ChatGPT login/);
+  } finally { fs.rmSync(authRoot,{recursive:true,force:true}); }
   const realShape={instructions:'Follow the system rules',tools:[{type:'custom',name:'exec',description:'Run code'}],input:[
     {type:'custom_tool_call',name:'exec',call_id:'call-real',input:'const result = await tools.exec_command({cmd:"rg TODO"});'},
     {type:'custom_tool_call_output',call_id:'call-real',output:[{type:'input_text',text:'Ran rg TODO'},{type:'input_text',text:'match one\nmatch two'}]},

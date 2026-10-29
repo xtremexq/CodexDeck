@@ -315,9 +315,9 @@ function New-DeckHealthSummary([string]$Name,$Record,[int]$Size=10,$Existing=$nu
     $text=if($Existing){$Existing}else{New-DeckText '' '#929CA4' $Size}
     $text.Inlines.Clear()
     $text.TextWrapping='NoWrap'; $text.VerticalAlignment='Center'
-    $health=if($profiles[$Name].Harness -and $profiles[$Name].Harness -ne 'Codex'){(Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage'}else{Get-DeckHealth $Record}
+    $health=if($profiles[$Name].AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}elseif($profiles[$Name].Harness -and $profiles[$Name].Harness -ne 'Codex'){(Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage'}else{Get-DeckHealth $Record}
     $text.ToolTip=$health
-    $color=switch($health){'Ready'{'#69DEC0'} 'Low'{'#DCB675'} 'Exhausted'{'#F17D8D'} 'Limit reached'{'#F17D8D'} default{'#929CA4'}}
+    $color=switch($health){'Ready'{'#69DEC0'} 'Low'{'#DCB675'} 'Exhausted'{'#F17D8D'} 'Limit reached'{'#F17D8D'} 'Sign in again'{'#F17D8D'} default{'#929CA4'}}
     $quotas=@(if($settings.ShowQuota){$Record.Windows | Where-Object {$null -ne $_}})
     if(-not $quotas.Count){$run=[Windows.Documents.Run]::new($health); $run.Foreground=$color; [void]$text.Inlines.Add($run)}
     if($quotas.Count){foreach($quota in $quotas){
@@ -328,13 +328,14 @@ function New-DeckHealthSummary([string]$Name,$Record,[int]$Size=10,$Existing=$nu
         $run=[Windows.Documents.Run]::new($prefix+(Get-DeckQuotaLabel $quota)+' '+$pct+$(if($expired){'*'}else{''})+$reset)
         $run.Foreground=Get-DeckQuotaColor $quota; [void]$text.Inlines.Add($run)
     }}
-    $suffix=if($tasks.ContainsKey($Name) -or $manualChecks.ContainsKey($Name)){' · checking'}elseif($Record.Error){' · check failed'}else{''}
+    $suffix=if($tasks.ContainsKey($Name) -or $manualChecks.ContainsKey($Name)){' · checking'}elseif($profiles[$Name].AuthIssue -in @('token_revoked','oauth_invalid')){' · sign in again'}elseif($Record.Error){' · check failed'}else{''}
     $suffixRun=[Windows.Documents.Run]::new($suffix); [void]$text.Inlines.Add($suffixRun); $text.Tag=$suffixRun
     return $text
 }
 function New-DeckPanelUsage([string]$Name,$Record) {
     $usage=[Windows.Controls.Grid]::new(); $usage.VerticalAlignment='Center'; $usage.HorizontalAlignment='Left'
-    $usage.ToolTip=(Get-DeckHealth $Record)+$(if($tasks.ContainsKey($Name) -or $manualChecks.ContainsKey($Name)){' · checking'}elseif($Record.Error){' · check failed'}else{''})
+    $health=if($profiles[$Name].AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}else{Get-DeckHealth $Record}
+    $usage.ToolTip=$health+$(if($tasks.ContainsKey($Name) -or $manualChecks.ContainsKey($Name)){' · checking'}elseif($profiles[$Name].AuthIssue -in @('token_revoked','oauth_invalid')){' · use Log in to reconnect'}elseif($Record.Error){' · check failed'}else{''})
     if($profiles[$Name].Harness -and $profiles[$Name].Harness -ne 'Codex'){[void]$usage.Children.Add((New-DeckText ((Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage') '#929CA4' 10));return $usage}
     $windows=@(if($settings.ShowQuota){$Record.Windows | Where-Object { $null -ne $_ }})
     for($i=0;$i -lt $windows.Count;$i++){
@@ -355,8 +356,8 @@ function New-DeckPanelUsage([string]$Name,$Record) {
         [void]$usage.Children.Add($cell)
     }
     if(-not $windows.Count){
-        $health=if($profiles[$Name].Harness -and $profiles[$Name].Harness -ne 'Codex'){(Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage'}else{Get-DeckHealth $Record}
-        $healthText=New-DeckText $health $(switch($health){'Ready'{'#69DEC0'} 'Low'{'#DCB675'} 'Exhausted'{'#F17D8D'} default{'#929CA4'}}) 11
+        $health=if($profiles[$Name].AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}elseif($profiles[$Name].Harness -and $profiles[$Name].Harness -ne 'Codex'){(Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage'}else{Get-DeckHealth $Record}
+        $healthText=New-DeckText $health $(switch($health){'Ready'{'#69DEC0'} 'Low'{'#DCB675'} 'Exhausted'{'#F17D8D'} 'Sign in again'{'#F17D8D'} default{'#929CA4'}}) 11
         $healthText.TextWrapping='NoWrap'; [void]$usage.Children.Add($healthText)
     }
     return $usage
@@ -378,7 +379,8 @@ function New-DeckWidgetDetails([string]$Name) {
         if($email){[void]$stack.Children.Add((New-DeckText $email '#8C9DB4' 10))}
     }
     $color='#69DEC0'
-    [void]$stack.Children.Add((New-DeckText ((Get-DeckHealth $Row)+' · percentages remaining; * reset passed, check again') '#929CA4' 10))
+    $health=if($Profile.AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}else{Get-DeckHealth $Row}
+    [void]$stack.Children.Add((New-DeckText ($health+' · percentages remaining; * reset passed, check again') '#929CA4' 10))
     if($Row.Error){[void]$stack.Children.Add((New-DeckText ('Last check failed: '+$Row.Error) '#DCB675' 10))}
     if($settings.ShowQuota){
         foreach($quota in $Row.Windows){[void]$stack.Children.Add((New-DeckQuotaTrack $quota $color ([bool]($settings.ShowResets -and $settings.WidgetShowResets))))}
@@ -583,8 +585,13 @@ function Update-DeckPicker([switch]$Force) {
     foreach($name in $names){
         if($SmokeTest -or $Demo){continue}
         $folder=Join-Path $suite "accounts/$name"
-        $stamp=([IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'auth.json')).Ticks.ToString())+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'config.toml')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-entry.json')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-account.json')).Ticks.ToString()
-        if($profileStamps[$name] -ne $stamp){$profiles[$name]=Get-DeckProfile $suite $name; $profileStamps[$name]=$stamp; $script:lastRender=''}
+        $authIssuePath=Join-Path $suite "deck/auth-issues/$name.json"
+        $authIssueStamp=if(Test-Path -LiteralPath $authIssuePath -PathType Leaf){[IO.File]::GetLastWriteTimeUtc($authIssuePath).Ticks.ToString()}else{'0'}
+        $stamp=([IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'auth.json')).Ticks.ToString())+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'config.toml')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-entry.json')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-account.json')).Ticks.ToString()+'/'+$authIssueStamp
+        if($profileStamps[$name] -ne $stamp){
+            $profiles[$name]=Get-DeckProfile $suite $name; $profileStamps[$name]=$stamp; $script:lastRender=''
+            if(Clear-DeckStaleRevokedAuth $suite $name $cache[$name]){$nextCheck[$name]=[DateTimeOffset]::UtcNow;$script:cacheVersion++;Save-DeckDesktopUsageCache}
+        }
     }
     Set-DeckPickerNames $names
     # The account picker is an internal, collapsed identity control. Building
@@ -1258,7 +1265,7 @@ function New-DeckPanelDetails([string]$Name) {
     $row=$cache[$Name]; $profile=$profiles[$Name]; $connected=@($sessions | Where-Object Account -eq $Name)
     $plan=if($row.PlanType){$row.PlanType}else{$profile.PlanType}
     $displayEmail=if($row.Email){$row.Email}else{$profile.Email}
-    $status=Get-DeckHealth $row; $quotaColor='#69DEC0'
+    $status=if($profile.AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}else{Get-DeckHealth $row}; $quotaColor='#69DEC0'
         $detailPanel=[Windows.Controls.StackPanel]::new(); $detailPanel.Margin='12,2,12,6'
         $divider=[Windows.Controls.Border]::new(); $divider.Height=1; $divider.Background='#30343A'; $divider.Margin='0,0,0,10'; [void]$detailPanel.Children.Add($divider)
         if($settings.ShowQuota){foreach($w in $row.Windows){[void]$detailPanel.Children.Add((New-DeckQuotaTrack $w $quotaColor ([bool]$settings.ShowResets)))}}
@@ -1275,7 +1282,7 @@ function New-DeckPanelDetails([string]$Name) {
         if($settings.ShowSource){$fields['Source']=if($row.Source){$row.Source}else{'Not checked'}}
         if($settings.ShowProcessIds){$fields['Process IDs']=($connected | ForEach-Object ProcessId)-join ', '}
         if($settings.ShowFolder){$fields['Folders']=($connected | ForEach-Object Folder | Select-Object -Unique)-join "`n"}
-        if($settings.ShowWarmup -or (Test-DeckWarmupSelected $settings $name $plan)){$fields['Warm-up']=Get-DeckWarmupStatus $settings $(if($row){$row}else{@{Account=$name;PlanType=$plan}}) $history[$name]}
+        if($settings.ShowWarmup -or (Test-DeckWarmupSelected $settings $name $plan)){$fields['Warm-up']=if($profile.AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}else{Get-DeckWarmupStatus $settings $(if($row){$row}else{@{Account=$name;PlanType=$plan}}) $history[$name]}}
         if($settings.ShowCredits){$fields['Credits']=if($null -ne $row.Credits){($row.Credits.PSObject.Properties | ForEach-Object { $_.Name+': '+$_.Value }) -join ' · '}else{'Not provided by Codex'}}
         if($row.Error){$fields['Check error']=$row.Error}
         foreach($key in @($fields.Keys)){
@@ -1368,6 +1375,7 @@ function Render-Deck {
     $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + '/' + $accountFilter + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
     if ($signature -eq $lastRender) { return }
     $script:lastRender=$signature
+    $sessionIndex=New-DeckSessionIndex $sessions
     $style=(@('FontSize','WidgetOneLine','MaskEmail','ShowEmail','ShowPlan','ShowQuota','ShowResets','ShowSessionCount','ShowUptime','ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCheckedAt','ShowCredits','ShowResetCredits','ShowWarmup','WidgetShowEmail','WidgetShowResets','WarmupEnabled','WarmupSchedulingEnabled','WarmupPlanTypes','WarmupAccounts','WarmupGraceSeconds') | ForEach-Object {[string]$settings[$_]}) -join '/'; $style+='/'+$widget
     if($style -ne $rowStyle){
         $poolKey=[string]$widget; $pool=$rowPools[$poolKey]
@@ -1382,11 +1390,11 @@ function Render-Deck {
         [void]$Cards.Children.Add((New-DeckText $emptyText '#9BB5D9' 14)); Update-DeckWidgetHeight; return
     }
     foreach ($name in $names) {
-        $connected=@($sessions | Where-Object Account -eq $name); $row=$cache[$name]
+        $connected=@(Get-DeckIndexedSessions $sessionIndex $name); $row=$cache[$name]
         $profile=$profiles[$name]
         $minuteKey=if($expandedRows[$name] -and $settings.ShowUptime -and $connected.Count){[DateTimeOffset]::Now.ToString('yyyyMMddHHmm')}else{''}
-        $rowKey=($connected.ProcessId -join ',')+'/'+($connected.Folder -join ',')+'/'+$profileStamps[$name]+'/'+($name -in $pins)+'/'+$minuteKey+'/'+$row.Error+'/'+$row.CheckedAt+'/'+$history[$name].Outcome+'/'+$nameColumnWidth
-        $healthKey=[string]$tasks.ContainsKey($name)+'/'+$manualChecks.ContainsKey($name)
+        $rowKey=($connected.ProcessId -join ',')+'/'+($connected.Folder -join ',')+'/'+$profileStamps[$name]+'/'+[string]$profile.AuthIssue+'/'+($name -in $pins)+'/'+$minuteKey+'/'+$row.Error+'/'+$row.CheckedAt+'/'+$history[$name].Outcome+'/'+$nameColumnWidth
+        $healthKey=[string]$tasks.ContainsKey($name)+'/'+$manualChecks.ContainsKey($name)+'/'+[string]$profile.AuthIssue
         $saved=$rowControls[$name]
         if($saved){
             if($saved.Key -ne $rowKey -or -not [object]::ReferenceEquals($saved.Record,$row)){
@@ -1407,7 +1415,7 @@ function Render-Deck {
             }
             $saved.Card.Child.IsExpanded=[bool]$expandedRows[$name]
             if($saved.HealthKey -ne $healthKey){
-                if($widget){$health=$saved.Card.Resources['HealthSummary']; $health.Tag.Text=if($tasks.ContainsKey($name) -or $manualChecks.ContainsKey($name)){' · checking'}elseif($row.Error){' · check failed'}else{''}}
+                if($widget){$health=$saved.Card.Resources['HealthSummary']; $health.Tag.Text=if($tasks.ContainsKey($name) -or $manualChecks.ContainsKey($name)){' · checking'}elseif($profile.AuthIssue -in @('token_revoked','oauth_invalid')){' · sign in again'}elseif($row.Error){' · check failed'}else{''}}
                 else{Set-DeckPanelCardUsage $saved.Card $name $row}
                 $saved.HealthKey=$healthKey
             }
@@ -1524,7 +1532,7 @@ function Invoke-DeckTick {
             if($task.Kind -eq 'Check'){
                 try{
                     if($task.StartError){throw $task.StartError}
-                    if(-not $success){throw 'Check process failed or timed out.'}
+                    if(-not $success){throw (Get-DeckTaskFailureMessage $task)}
                     $records=@(Expand-DeckCheckRecords ($task.Out.Result | ConvertFrom-Json))
                     if($records.Count -ne 1){throw 'Expected exactly one account result.'}
                     $result=$records[0]
@@ -1541,8 +1549,17 @@ function Invoke-DeckTick {
                     $cacheDirty=$true
                     $script:notice="Updated $account at $($now.ToLocalTime().ToString('HH:mm'))"
                 }catch{
-                    $nextCheck[$account]=$now.AddMinutes(20); $script:notice="Check failed: $account (20m backoff)"
-                    if($cache[$account]){$cache[$account] | Add-Member NoteProperty Error $_.Exception.Message -Force}else{$cache[$account]=[pscustomobject]@{Account=$account;Status='error';Windows=@();Error=$_.Exception.Message}}
+                    $failureMessage=[string]$_.Exception.Message
+                    $revoked=Test-DeckInvalidAuthMessage $failureMessage
+                    $nextCheck[$account]=$now.AddMinutes(20)
+                    if($revoked){
+                        [void](Set-DeckAuthIssue $suite $account $failureMessage)
+                        $profiles[$account]=Get-DeckProfile $suite $account
+                        $script:notice="$account needs sign-in. Use Log in to reconnect."
+                    }else{$script:notice="Check failed: $account (20m backoff)"}
+                    $savedError=if($revoked){'OAuth token revoked; sign in again.'}else{$failureMessage}
+                    if($cache[$account]){$cache[$account] | Add-Member NoteProperty Error $savedError -Force}else{$cache[$account]=[pscustomobject]@{Account=$account;Status='error';Windows=@();Error=$savedError}}
+                    if($revoked){$cache[$account] | Add-Member NoteProperty AuthFileStamp (Get-DeckAuthFileStamp $suite $account) -Force}
                     $script:cacheVersion++; $cacheDirty=$true
                 }
             }else{
@@ -1558,10 +1575,11 @@ function Invoke-DeckTick {
     }
     if($tasks.Count -lt 8 -and ($settings.AutoCheck -or $manualChecks.Count)){
         if($tasks.Count -lt 8){
-            $automatic=@(); if($settings.AutoCheck -and $now -ge $autoCheckReadyAt){$automatic=@(Get-DeckVisibleAccounts | Where-Object {Test-DeckCodexAccount $suite $_})}
+            $automatic=@(); if($settings.AutoCheck -and $now -ge $autoCheckReadyAt){$automatic=@(Get-DeckVisibleAccounts | Where-Object {(Test-DeckCodexAccount $suite $_) -and -not $profiles[$_].AuthIssue})}
             $due=@(Get-DeckDueAccounts $automatic $manualChecks $nextCheck $now)
             foreach($account in $due){
                 if (Get-DeckPoolEntry $suite $account) { $manualChecks.Remove($account); continue }
+                if ($profiles[$account].AuthIssue) { $manualChecks.Remove($account); $nextCheck[$account]=$now.AddHours(6); continue }
                 if($tasks.Count -ge 8){break}; if($tasks.ContainsKey($account)){continue}
                 if($window -and $tickWatch.ElapsedMilliseconds -ge 35){$yieldTick=$true; break}
                 try{
@@ -1637,7 +1655,10 @@ $configMenu.Resources=$window.Resources
 $accountConfigItem=[Windows.Controls.MenuItem]::new(); $accountConfigItem.Header='Account config'
 $defaultsItem=[Windows.Controls.MenuItem]::new(); $defaultsItem.Header='Global defaults'; $defaultsItem.ToolTip='Template for new accounts; not the selected account.'
 [void]$configMenu.Items.Add($accountConfigItem); [void]$configMenu.Items.Add($defaultsItem)
-$globalRulesItem=[Windows.Controls.MenuItem]::new();$globalRulesItem.Header='Global Rules';$globalRulesItem.Add_Click({Show-DeckGlobalRules $suite $window});[void]$configMenu.Items.Add($globalRulesItem)
+$globalRulesItem=[Windows.Controls.MenuItem]::new();$globalRulesItem.Header='Codex Global Rules';$globalRulesItem.Add_Click({Show-DeckGlobalRules $suite $window});[void]$configMenu.Items.Add($globalRulesItem)
+$claudeDefaultsItem=[Windows.Controls.MenuItem]::new();$claudeDefaultsItem.Header='Claude Global Defaults';$claudeDefaultsItem.Add_Click({Show-DeckClaudeDefaults $suite $window});[void]$configMenu.Items.Add($claudeDefaultsItem)
+$antigravityDefaultsItem=[Windows.Controls.MenuItem]::new();$antigravityDefaultsItem.Header='Antigravity Global Defaults';$antigravityDefaultsItem.Add_Click({Show-DeckAntigravityDefaults $suite $window});[void]$configMenu.Items.Add($antigravityDefaultsItem)
+$authHelperItem=[Windows.Controls.MenuItem]::new();$authHelperItem.Header='Auth Helper';$authHelperItem.ToolTip='Edit credentials for automatic background reauthentication.';$authHelperItem.Add_Click({Open-DeckAuthHelper $suite});[void]$configMenu.Items.Add($authHelperItem)
 $bestItem=[Windows.Controls.MenuItem]::new(); $bestItem.Header='Recommend best account'
 $bestItem.Add_Click({
     $names=@(Get-DeckAccounts)
@@ -2040,7 +2061,7 @@ try{
         if($menuSurface -isnot [Windows.Controls.Border] -or $menuSurface.Background.ToString() -ne '#FF141619'){throw 'Configs menu background template failed.'}
         if(-not $window.Icon -or -not $settingsUI.Dialog.Icon){throw 'Application window icon missing.'}
         if($window.FindName('StudioBar') -or $window.FindName('LaunchButton') -or $window.FindName('TrajectoryButton')){throw 'Obsolete second-row panel controls remain.'}
-        if($configMenu.Items.Count -ne 4 -or $globalRulesItem.Header -ne 'Global Rules' -or $ConfigButton.Content -ne 'Configs' -or [Windows.Controls.Grid]::GetColumn($NewButton) -ne 0 -or [Windows.Controls.Grid]::GetColumn($EfficiencyButton) -ne 1 -or [Windows.Controls.Grid]::GetColumn($AutoCompactButton) -ne 2 -or [Windows.Controls.Grid]::GetColumn($ConfigButton) -ne 3){throw 'Single-row account controls layout failed.'}
+        if($configMenu.Items.Count -ne 7 -or $globalRulesItem.Header -ne 'Codex Global Rules' -or $claudeDefaultsItem.Header -ne 'Claude Global Defaults' -or $antigravityDefaultsItem.Header -ne 'Antigravity Global Defaults' -or $authHelperItem.Header -ne 'Auth Helper' -or $ConfigButton.Content -ne 'Configs' -or [Windows.Controls.Grid]::GetColumn($NewButton) -ne 0 -or [Windows.Controls.Grid]::GetColumn($EfficiencyButton) -ne 1 -or [Windows.Controls.Grid]::GetColumn($AutoCompactButton) -ne 2 -or [Windows.Controls.Grid]::GetColumn($ConfigButton) -ne 3){throw 'Single-row account controls layout failed.'}
 
         if($chrome.CaptionHeight -ne 62){throw 'Panel caption does not cover top padding.'}
         foreach($button in @($MinimizeButton,$ModeButton,$SettingsButton,$CloseButton)) {

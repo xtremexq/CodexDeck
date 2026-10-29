@@ -14,7 +14,9 @@ if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Environments.ps1')) { 
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.BundledSkills.ps1')) { . (Join-Path $PSScriptRoot 'Deck.BundledSkills.ps1') }
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.SkillCatalog.ps1')) { . (Join-Path $PSScriptRoot 'Deck.SkillCatalog.ps1') }
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.PluginManagement.ps1')) { . (Join-Path $PSScriptRoot 'Deck.PluginManagement.ps1') }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.ClaudeDefaults.ps1')) { . (Join-Path $PSScriptRoot 'Deck.ClaudeDefaults.ps1') }
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Harnesses.ps1')) { . (Join-Path $PSScriptRoot 'Deck.Harnesses.ps1') }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.AntigravityDefaults.ps1')) { . (Join-Path $PSScriptRoot 'Deck.AntigravityDefaults.ps1') }
 if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'Deck.Router.ps1')){. (Join-Path $PSScriptRoot 'Deck.Router.ps1')}
 # Codex Deck - local state and scheduling. No credentials are written to Deck state.
 function Get-DeckDueAccounts($Automatic, $Manual, $NextCheck, [DateTimeOffset]$Now) {
@@ -56,9 +58,34 @@ function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
     $identity=Get-DeckAccountIdentity $SuiteRoot $Account
     if($identity.Harness -ne 'Codex'){
         $definition=Get-DeckHarness $identity.Harness
-        return @{Email=$null;PlanType=$identity.Provider;Model=$definition.Name+' default';Effort='default';Harness=$identity.Harness;Provider=$identity.Provider}
+        $authStatus=$null
+        $authCheckedAt=$null
+        if($identity.Harness -eq 'Claude'){
+            $authStatus=if(Test-Path -LiteralPath (Join-Path $folder 'claude/.credentials.json') -PathType Leaf){'Credentials present'}else{'Sign in required'}
+            $authCache=Read-DeckEnvironmentJson (Join-Path $SuiteRoot 'deck/claude-auth-checks.json')
+            $record=$authCache.PSObject.Properties[$Account].Value
+            if($record){
+                $authCheckedAt=[string]$record.CheckedAt
+                if($record.Error){$authStatus='Check failed'}
+                elseif($record.LoggedIn){$authStatus='Signed in'}
+                else{$authStatus='Sign in required'}
+            }
+        }elseif($identity.Harness -eq 'Antigravity'){
+            if(Test-DeckAntigravityFileAccount $identity){
+                $tokenPath=Join-Path $folder 'antigravity/profile/.gemini/antigravity-cli/antigravity-oauth-token'
+                $authStatus=if((Test-Path -LiteralPath $tokenPath -PathType Leaf) -and (Get-Item -LiteralPath $tokenPath -Force).Length -gt 0){'Credentials stored'}else{'Sign in required'}
+            }else{$authStatus='Runner profile'}
+            $authCache=Read-DeckEnvironmentJson (Join-Path $SuiteRoot 'deck/antigravity-auth-checks.json')
+            $record=$authCache.PSObject.Properties[$Account].Value
+            if($record){
+                $authCheckedAt=[string]$record.CheckedAt
+                if($record.Error){$authStatus='Check failed'}
+                elseif($record.CredentialsPresent -eq ($authStatus -eq 'Credentials stored')){$authStatus=[string]$record.Status}
+            }
+        }
+        return @{Email=$null;PlanType=$identity.Provider;Model=$definition.Name+' default';Effort='default';Harness=$identity.Harness;Provider=$identity.Provider;AuthStatus=$authStatus;AuthCheckedAt=$authCheckedAt}
     }
-    $profile=@{Email=$null; PlanType=$null; Model='Codex default'; Effort='default'}
+    $profile=@{Email=$null; PlanType=$null; Model='Codex default'; Effort='default'; AuthIssue=$null}
     $auth=Read-DeckJson (Join-Path $folder 'auth.json')
     foreach($token in @($auth.tokens.id_token,$auth.tokens.access_token)){
         try{
@@ -78,6 +105,7 @@ function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
         if($top -match '(?m)^model_reasoning_effort\s*=\s*"([^"]+)"'){$profile.Effort=$Matches[1]}
     }
     if ((Get-Command Get-DeckPoolEntry -ErrorAction SilentlyContinue) -and (Get-DeckPoolEntry $SuiteRoot $Account)) { $profile.PlanType='pool'; $profile.Email='Shared environment / selectable quota accounts' }
+    $profile.AuthIssue=Get-DeckAuthIssue $SuiteRoot $Account
     return $profile
 }
 function Get-DeckNextCheck($Settings, $Record, [DateTimeOffset]$CheckedAt) {
@@ -291,6 +319,20 @@ function Get-DeckSessions([string]$Root) {
         if ($valid) { $entry }
         else { try { [IO.File]::Delete($path) } catch { } }
     }
+}
+function New-DeckSessionIndex($Sessions) {
+    $index=@{}
+    foreach($session in @($Sessions)){
+        $account=[string]$session.Account
+        if(-not $account){continue}
+        if(-not $index.ContainsKey($account)){$index[$account]=[Collections.Generic.List[object]]::new()}
+        $index[$account].Add($session)
+    }
+    return $index
+}
+function Get-DeckIndexedSessions($Index,[string]$Account) {
+    if($Index -and $Index.ContainsKey($Account)){return @($Index[$Account].ToArray())}
+    return @()
 }
 function Start-DeckSessionRead([string]$Root) {
     $reader=[PowerShell]::Create()
@@ -661,6 +703,7 @@ function Dispose-DeckTask($Task) {
 }
 function Get-DeckTaskFailureMessage($Task) {
     $errorText=[string]$Task.Err.Result
+    $outputText=if($Task.Out){[string]$Task.Out.Result}else{''}
     if($errorText -match '^#< CLIXML\s*') {
         try {
             $xml=[xml]($errorText -replace '^#< CLIXML\s*','')
@@ -668,6 +711,7 @@ function Get-DeckTaskFailureMessage($Task) {
             $errorText=if($errorNode){$errorNode.InnerText -replace '_x000D__x000A_',' '}else{''}
         } catch {$errorText=''}
     }
+    if(Test-DeckInvalidAuthMessage ($errorText+' '+$outputText)){return 'OAuth token expired or invalid; sign in again.'}
     $message=($errorText -split "`r?`n" | Where-Object {$_ -and $_ -notmatch '^#< CLIXML$'} | Select-Object -First 1)
     if($message){return $message.Trim()}
     return "Worker exited with code $($Task.Process.ExitCode)."
@@ -818,7 +862,7 @@ function Get-DeckWarmupStatus($Settings, $Record, $History, [long]$Now = ([DateT
     if (-not $Settings.WarmupSchedulingEnabled) { return 'Background scheduling off' }
     if ($Settings.WarmupTimedEnabled -and -not $Settings.WarmupResetEnabled) { return 'Daily ' + $Settings.WarmupTimes + ' (local)' }
     if ($Record.PlanType -and -not (Test-DeckWarmupPlanSupported $Record.PlanType)) { return 'Unsupported account plan' }
-    if ($Record.Error -match '(?i)token_revoked|invalidated oauth token') { return 'Sign in again' }
+    if (Test-DeckInvalidAuthMessage ([string]$Record.Error)) { return 'Sign in again' }
     if ($History -and $Now - [long]$History.AttemptAt -lt 14400) { return $History.Outcome }
     if (-not $Record.CheckedAt -or $Record.Error -or $Record.Status -ne 'available') { return 'Waiting for fresh quota' }
     if (@($Record.Windows | Where-Object { $_.Dead -or ($null -ne $_.UsedPct -and $_.UsedPct -ge 99.5) }).Count) { return 'Waiting for quota reset' }
@@ -914,8 +958,90 @@ function Get-DeckAuthFileStamp([string]$SuiteRoot,[string]$Account) {
         return '{0}:{1}' -f $file.Length,$file.LastWriteTimeUtc.Ticks
     } catch { return '' }
 }
+function Test-DeckInvalidAuthMessage([string]$Message) {
+    return $Message -match '(?i)(?:\btoken\b.{0,60}\b(?:revoked|expired|invalid|invalidated|no longer valid|not valid)\b|\b(?:revoked|expired|invalid|invalidated)\b.{0,60}\btoken\b|invalidated oauth token|(?:oauth|access|bearer|refresh)[_ -]token.{0,60}(?:revoked|expired|invalid|invalidated)|refresh[_ -]token.{0,40}(?:revoked|expired|invalid)|invalid[_ -]grant|invalid[_ -]token|session.{0,40}(?:expired|revoked|invalid)|(?:expired|revoked|invalid).{0,40}session)'
+}
+function Get-DeckAuthIssue([string]$SuiteRoot,[string]$Account) {
+    if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){return $null}
+    $issue=Read-DeckJson (Join-Path $SuiteRoot "deck/auth-issues/$Account.json")
+    if(-not $issue -or $issue.Account -ne $Account -or $issue.Code -notin @('token_revoked','oauth_invalid')){return $null}
+    if([string]$issue.AuthFileStamp -ne (Get-DeckAuthFileStamp $SuiteRoot $Account)){return $null}
+    return [string]$issue.Code
+}
+function Get-DeckAuthIssuesStamp([string]$SuiteRoot) {
+    $directory=Join-Path $SuiteRoot 'deck/auth-issues'
+    if(-not [IO.Directory]::Exists($directory)){return ''}
+    try{return (@([IO.Directory]::EnumerateFiles($directory,'*.json') | ForEach-Object {$file=Get-Item -LiteralPath $_ -ErrorAction SilentlyContinue;if($file){$file.Name+':'+$file.Length+':'+$file.LastWriteTimeUtc.Ticks}} | Sort-Object) -join '|')}catch{return ''}
+}
+function Test-DeckAuthHelperEmail([string]$SuiteRoot,[string]$Email) {
+    if([string]::IsNullOrWhiteSpace($Email)){return $false}
+    try {
+        $path=Join-Path $SuiteRoot 'deck/auth-helper.dat'
+        if(-not (Test-Path -LiteralPath $path -PathType Leaf)){return $false}
+        Add-Type -AssemblyName System.Security
+        $cipher=[Convert]::FromBase64String([IO.File]::ReadAllText($path).Trim())
+        $plain=[Security.Cryptography.ProtectedData]::Unprotect($cipher,[Text.Encoding]::UTF8.GetBytes('CodexDeck/AuthHelper/1'),[Security.Cryptography.DataProtectionScope]::CurrentUser)
+        foreach($line in ([Text.Encoding]::UTF8.GetString($plain) -split "`r?`n")){
+            $parts=$line.Trim().Split('|',3)
+            if($parts.Count -eq 3 -and $parts[0].Trim() -ieq $Email -and $parts[1].Length -gt 0){return $true}
+        }
+    } catch {}
+    return $false
+}
+function Set-DeckAuthIssue([string]$SuiteRoot,[string]$Account,[string]$Message) {
+    if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or -not (Test-DeckInvalidAuthMessage $Message)){return $false}
+    $stamp=Get-DeckAuthFileStamp $SuiteRoot $Account
+    if(-not $stamp){return $false}
+    Write-DeckJson (Join-Path $SuiteRoot "deck/auth-issues/$Account.json") @{Version=1;Account=$Account;Code='oauth_invalid';DetectedAt=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=$stamp}
+    $email=(Get-DeckProfile $SuiteRoot $Account).Email
+    if($email -and (Test-DeckAuthHelperEmail $SuiteRoot $email)){[void](Start-DeckAuthHelperRecoveryWorker $SuiteRoot $Account $email -Force)}
+    return $true
+}
+function Start-DeckAuthHelperRecoveryWorker([string]$SuiteRoot,[string]$Account,[string]$Email,[switch]$Force) {
+    if(-not $Email -or $Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){return $false}
+    if(-not (Test-DeckAuthHelperEmail $SuiteRoot $Email)){return $false}
+    $helper=Join-Path $SuiteRoot 'Deck.AuthHelper.ps1'
+    if(-not (Test-Path -LiteralPath $helper -PathType Leaf)){return $false}
+    try {
+        $authStamp=Get-DeckAuthFileStamp $SuiteRoot $Account
+        $helperFile=Join-Path $SuiteRoot 'deck/auth-helper.dat'
+        $helperStamp=if(Test-Path -LiteralPath $helperFile -PathType Leaf){(Get-Item -LiteralPath $helperFile).LastWriteTimeUtc.Ticks.ToString()}else{'0'}
+        $previous=Read-DeckJson (Join-Path $SuiteRoot "deck/auth-helper/status/$Account.json")
+        if($previous -and $previous.State -in @('queued','running')){
+            try {
+                $age=([DateTimeOffset]::UtcNow-[DateTimeOffset]::Parse([string]$previous.At)).TotalSeconds
+                $window=if($previous.State -eq 'queued'){30}else{360}
+                if($age -ge 0 -and $age -lt $window -and $previous.Email -ieq $Email -and [string]$previous.AuthFileStamp -eq $authStamp){return $false}
+            } catch {}
+        }
+        if(-not $Force -and $previous -and $previous.Email -ieq $Email -and [string]$previous.AuthFileStamp -eq $authStamp -and [string]$previous.HelperFileStamp -eq $helperStamp -and $previous.State -in @('unmatched','succeeded','failed')){return $false}
+        $attemptId=[guid]::NewGuid().ToString('N')
+        Write-DeckJson (Join-Path $SuiteRoot "deck/auth-helper/status/$Account.json") @{Version=1;Account=$Account;Email=$Email;State='queued';Message='Waiting for Deck Auth Helper.';At=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=$authStamp;HelperFileStamp=$helperStamp;AttemptId=$attemptId}
+        $process=Start-DeckBackgroundPowerShell $helper @('-Recover','-SuiteRoot',$SuiteRoot,'-Account',$Account,'-Email',$Email,'-BrowserHarness','-Force','-AttemptId',$attemptId)
+        $process.Dispose()
+        return $true
+    } catch {
+        try{Write-DeckJson (Join-Path $SuiteRoot "deck/auth-helper/status/$Account.json") @{Version=1;Account=$Account;Email=$Email;State='failed';Message='Could not start Deck Auth Helper.';At=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=$authStamp;HelperFileStamp=$helperStamp;AttemptId=$attemptId}}catch{}
+        return $false
+    }
+}
+function Open-DeckAuthHelper([string]$SuiteRoot) {
+    $helper=Join-Path $SuiteRoot 'Deck.AuthHelper.ps1'
+    if(-not (Test-Path -LiteralPath $helper -PathType Leaf)){throw 'Deck Auth Helper is missing. Reinstall Codex Deck.'}
+    $process=Start-DeckBackgroundPowerShell $helper @('-Edit','-SuiteRoot',$SuiteRoot) -Sta
+    $process.Dispose()
+}
+function Clear-DeckStaleRevokedAuth([string]$SuiteRoot,[string]$Account,$Record) {
+    if(-not $Record -or -not (Test-DeckInvalidAuthMessage ([string]$Record.Error))){return $false}
+    $stampProperty=$Record.PSObject.Properties['AuthFileStamp']
+    if(-not $stampProperty -or [string]$stampProperty.Value -eq (Get-DeckAuthFileStamp $SuiteRoot $Account)){return $false}
+    $Record.PSObject.Properties.Remove('Error'); $Record.PSObject.Properties.Remove('AuthFileStamp')
+    if([string]$Record.Status -eq 'error'){$Record.Status='unknown'}
+    return $true
+}
 function Test-DeckCachedRevokedAuth([string]$SuiteRoot,[string]$Account,$Record) {
-    if(-not $Record -or [string]$Record.Status -ne 'error' -or [string]$Record.Error -notmatch '(?i)token[_ ]revoked|refresh token.{0,40}revoked|invalidated oauth token'){return $false}
+    if(Get-DeckAuthIssue $SuiteRoot $Account){return $true}
+    if(-not $Record -or [string]$Record.Status -ne 'error' -or -not (Test-DeckInvalidAuthMessage ([string]$Record.Error))){return $false}
     $stampProperty=$Record.PSObject.Properties['AuthFileStamp']
     if(-not $stampProperty -or [string]::IsNullOrWhiteSpace([string]$stampProperty.Value)){return $false}
     return ([string]$stampProperty.Value -eq (Get-DeckAuthFileStamp $SuiteRoot $Account))

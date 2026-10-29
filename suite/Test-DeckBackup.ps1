@@ -10,6 +10,7 @@ Assert (([BitConverter]::ToString($cipher) -replace '-','').ToLowerInvariant() -
 Assert (([BitConverter]::ToString($tag) -replace '-','').ToLowerInvariant() -eq 'd0d1c8a799996bf0265b98b5d48ab919') 'AES-256-GCM authentication vector mismatch'
 $testRoot=Join-Path $env:TEMP ('deck-backup-test-'+[guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory((Join-Path $testRoot 'source/accounts/example'))
+[void][IO.Directory]::CreateDirectory((Join-Path $testRoot 'source/accounts/claude-example/claude'))
 $source=Join-Path $testRoot 'source'; $dest=Join-Path $testRoot 'restored'; $path=Join-Path $testRoot 'test.cdeck'
 $password=ConvertTo-SecureString 'Synthetic backup password 42!' -AsPlainText -Force
 try{
@@ -19,20 +20,28 @@ try{
     [IO.File]::WriteAllText((Join-Path $source 'accounts/example/.codexdeck-skills.json'),$skillOverrides)
     [void][IO.Directory]::CreateDirectory((Join-Path $source 'deck'))
     [IO.File]::WriteAllText((Join-Path $source 'deck/skill-defaults.json'),$skillOverrides)
+    [void][IO.Directory]::CreateDirectory((Join-Path $source 'deck/claude'))
+    [IO.File]::WriteAllText((Join-Path $source 'deck/claude/default-settings.json'),'{"model":"claude-sonnet"}')
+    [IO.File]::WriteAllText((Join-Path $source 'deck/claude/global-instructions.md'),'Claude global instructions')
+    [IO.File]::WriteAllText((Join-Path $source 'accounts/claude-example/deck-account.json'),'{"Version":1,"Harness":"Claude","Provider":"Claude"}')
+    [IO.File]::WriteAllText((Join-Path $source 'accounts/claude-example/claude/CLAUDE.md'),'Claude account instructions')
     [IO.File]::WriteAllText((Join-Path $source 'accounts/example/history.jsonl'),'excluded chat')
     [void][IO.Directory]::CreateDirectory((Join-Path $source 'accounts/pool'))
     $poolMetadata='{"Version":1,"Kind":"pool","Accounts":["*"],"Mode":"Ordered"}'
     [IO.File]::WriteAllText((Join-Path $source 'accounts/pool/deck-entry.json'),$poolMetadata)
     [IO.File]::WriteAllText((Join-Path $testRoot 'defaults.toml'),'synthetic defaults')
-    Assert ((Export-DeckBackup $source (Join-Path $testRoot 'defaults.toml') $path $password) -eq 2) 'Wrong export account count'
+    Assert ((Export-DeckBackup $source (Join-Path $testRoot 'defaults.toml') $path $password) -eq 3) 'Wrong export account count'
     Assert (-not ([IO.File]::ReadAllText($path).Contains('not-a-real-token'))) 'Plaintext credential leaked'
     $manifest=Read-DeckBackup $path $password
-    Assert (@($manifest.Files).Count -eq 6) 'Backup included runtime history or missed config'
-    Assert ((Import-DeckBackup $dest (Join-Path $testRoot 'restored-defaults.toml') $manifest -RestorePreferences) -eq 2) 'Import failed'
+    Assert (@($manifest.Files).Count -eq 10) 'Backup included runtime history or missed Claude or Codex config'
+    Assert ((Import-DeckBackup $dest (Join-Path $testRoot 'restored-defaults.toml') $manifest -RestorePreferences) -eq 3) 'Import failed'
     Assert ([IO.File]::ReadAllText((Join-Path $dest 'accounts/pool/deck-entry.json')) -eq $poolMetadata) 'Pool identity did not round-trip'
     Assert ([IO.File]::ReadAllText((Join-Path $dest 'accounts/example/auth.json')) -eq '{"synthetic":"not-a-real-token"}') 'Credentials did not round-trip'
     Assert ([IO.File]::ReadAllText((Join-Path $dest 'accounts/example/.codexdeck-skills.json')) -eq $skillOverrides) 'Deck skill overrides did not round-trip'
     Assert ([IO.File]::ReadAllText((Join-Path $dest 'deck/skill-defaults.json')) -eq $skillOverrides) 'Shared Deck skill selections did not round-trip'
+    Assert ([IO.File]::ReadAllText((Join-Path $dest 'deck/claude/default-settings.json')) -eq '{"model":"claude-sonnet"}') 'Claude global settings defaults did not round-trip'
+    Assert ([IO.File]::ReadAllText((Join-Path $dest 'deck/claude/global-instructions.md')) -eq 'Claude global instructions') 'Claude global instructions did not round-trip'
+    Assert ([IO.File]::ReadAllText((Join-Path $dest 'accounts/claude-example/claude/CLAUDE.md')) -eq 'Claude account instructions') 'Claude account instructions did not round-trip'
     Refuses {Import-DeckBackup $dest (Join-Path $testRoot 'restored-defaults.toml') $manifest} 'Import overwrote an existing account'
     Refuses {Read-DeckBackup $path (ConvertTo-SecureString 'Different password' -AsPlainText -Force)} 'Wrong password accepted'
     $envelope=[IO.File]::ReadAllText($path) | ConvertFrom-Json; $bytes=[Convert]::FromBase64String($envelope.Data); $bytes[0]=$bytes[0] -bxor 1; $envelope.Data=[Convert]::ToBase64String($bytes)

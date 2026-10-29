@@ -5,6 +5,7 @@ const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { spawn } = require('node:child_process');
 const { pipeline } = require('node:stream');
 const zlib = require('node:zlib');
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''));
@@ -37,16 +38,162 @@ function credentials(root, name) {
   const accounts = path.join(root, 'accounts'), dir = path.join(accounts, name), file = path.join(dir, 'auth.json');
   for (const p of [accounts, dir, file]) if (fs.lstatSync(p).isSymbolicLink()) throw Error('Linked account credentials are not supported.');
   const auth = readJson(file);
-  if (!auth.tokens?.access_token || !auth.tokens?.account_id || (auth.auth_mode && auth.auth_mode !== 'chatgpt')) throw Error('Every pool account needs a file-based ChatGPT login.');
-  return { token: auth.tokens.access_token, id: auth.tokens.account_id };
+  if (!auth.tokens?.access_token || !auth.tokens?.account_id || (auth.auth_mode && String(auth.auth_mode).toLowerCase() !== 'chatgpt')) throw Error(`Pool account ${name} needs a file-based ChatGPT login.`);
+  const result={token:auth.tokens.access_token,id:auth.tokens.account_id};
+  if(auth.tokens.id_token)result.idToken=auth.tokens.id_token;
+  return result;
 }
 function quotaRejected(status, body) {
   if (status !== 429) return false;
+  return quotaErrorBody(body);
+}
+function quotaErrorBody(body) {
+  const usageLimitText=/(?:usage.{0,40}(?:limit|exceed|reach|exhaust)|(?:limit|exceed|reach|exhaust).{0,40}usage|insufficient.{0,20}quota|quota.{0,40}(?:exceed|reach|limit|exhaust)|(?:exceed|reach|exhaust).{0,40}quota|rate[_ -]?limit[_ -]?exceeded)/i;
   try {
     const e = JSON.parse(body).error;
-    const kinds = ['usage_limit_reached','insufficient_quota','rate_limit_exceeded'];
-    return kinds.includes(e?.type) || kinds.includes(e?.code);
+    const kinds = ['usage_limit_reached','insufficient_quota','rate_limit_exceeded','billing_hard_limit_reached','quota_exceeded'];
+    if(kinds.includes(e?.type) || kinds.includes(e?.code))return true;
+    return usageLimitText.test([e?.message,e?.detail,e?.type,e?.code].filter(Boolean).join(' ')) || usageLimitText.test(body.toString('utf8'));
+  } catch { return usageLimitText.test(body.toString('utf8')); }
+}
+function isInvalidAuthBody(body) {
+  const text=body.toString('utf8');
+  const authFailure=/(?:\btoken\b.{0,60}\b(?:revoked|expired|invalid|invalidated|no longer valid|not valid)\b|\b(?:revoked|expired|invalid|invalidated)\b.{0,60}\btoken\b|invalidated oauth token|(?:oauth|access|bearer|refresh)[_ -]token.{0,60}(?:revoked|expired|invalid|invalidated)|refresh[_ -]token.{0,40}(?:revoked|expired|invalid)|invalid[_ -]grant|invalid[_ -]token|session.{0,40}(?:expired|revoked|invalid)|(?:expired|revoked|invalid).{0,40}session)/i;
+  if (authFailure.test(text)) return true;
+  try {
+    const error = JSON.parse(text).error || {};
+    return authFailure.test([error.code, error.type, error.message].filter(Boolean).join(' '));
+  } catch { return authFailure.test(text); }
+}
+function tokenEmail(token) {
+  try {
+    const part = String(token || '').split('.')[1];
+    if (!part) return null;
+    const claims = JSON.parse(Buffer.from(part.replace(/-/g,'+').replace(/_/g,'/'), 'base64').toString('utf8'));
+    return claims.email || claims['https://api.openai.com/profile']?.email || claims['https://api.openai.com/auth']?.email || null;
+  } catch { return null; }
+}
+function authEmail(auth) {
+  return tokenEmail(auth?.idToken) || tokenEmail(auth?.token);
+}
+function accountEmail(root, account) {
+  try {
+    const auth = readJson(path.join(root, 'accounts', account, 'auth.json'));
+    return tokenEmail(auth.tokens?.id_token) || tokenEmail(auth.tokens?.access_token);
+  } catch { return null; }
+}
+function recordRevokedAuth(root, account, rejectedEmail, rejectedToken) {
+  if (!root || !/^[a-z][a-z0-9_-]{0,39}$/i.test(account)) return null;
+  let email = rejectedEmail;
+  try {
+    const authPath = path.join(root, 'accounts', account, 'auth.json');
+    const current=readJson(authPath);
+    // The file may have been refreshed while the rejected request was in
+    // flight. Never mark a newer, different token as revoked.
+    if (!rejectedToken || current.tokens?.access_token !== rejectedToken) return null;
+    const stat = fs.statSync(authPath, { bigint:true });
+    const authStamp = authFileStamp(stat);
+    try {
+      const directory = path.join(root, 'deck', 'auth-issues');
+      fs.mkdirSync(directory, { recursive:true, mode:0o700 });
+      const file = path.join(directory, account + '.json');
+      let alreadyRecorded=false;
+      try {
+        const old = readJson(file);
+        alreadyRecorded=old.Account===account && ['token_revoked','oauth_invalid'].includes(old.Code) && old.AuthFileStamp===authStamp;
+      } catch { /* Write the first marker. */ }
+      if(!alreadyRecorded){
+        const temporary=file+'.'+process.pid+'.'+crypto.randomBytes(8).toString('hex')+'.tmp';
+        try{
+          fs.writeFileSync(temporary,JSON.stringify({Version:1,Account:account,Email:email,Code:'oauth_invalid',DetectedAt:new Date().toISOString(),AuthFileStamp:authStamp}),{flag:'wx',mode:0o600});
+          fs.renameSync(temporary,file);
+        }finally{try{fs.unlinkSync(temporary)}catch{}}
+      }
+    } catch { /* Dashboard auth status is best-effort. */ }
+    return {email,authStamp};
+  } catch { return null; }
+}
+function helperStatusPath(root, account) {
+  return path.join(root, 'deck', 'auth-helper', 'status', account + '.json');
+}
+function writeAuthHelperStatus(root, account, email, state, message, authStamp, attemptId) {
+  let temporary;
+  try {
+    const helperPath=path.join(root,'deck','auth-helper.dat');
+    const helperStamp=(()=>{try{const stat=fs.statSync(helperPath,{bigint:true});return (stat.mtimeNs/100n+621355968000000000n).toString()}catch{return '0'}})();
+    const file=helperStatusPath(root,account); temporary=file+'.'+process.pid+'.'+crypto.randomBytes(6).toString('hex')+'.tmp';
+    fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
+    fs.writeFileSync(temporary,JSON.stringify({Version:1,Account:account,Email:email,State:state,Message:message,At:new Date().toISOString(),AuthFileStamp:authStamp,HelperFileStamp:helperStamp,AttemptId:attemptId}),{flag:'wx',mode:0o600});
+    fs.renameSync(temporary,file);
+    return true;
   } catch { return false; }
+  finally { if(temporary)try{fs.unlinkSync(temporary)}catch{} }
+}
+function startAuthHelper(root, account, email, originalAuth, originalStamp, shouldStop = () => false) {
+  if (!root || !email || !originalStamp) return Promise.resolve(false);
+  const helper = path.join(root, 'Deck.AuthHelper.ps1');
+  if (!fs.existsSync(helper)) return Promise.resolve(false);
+  const attemptId=crypto.randomBytes(16).toString('hex');
+  const statusPath=helperStatusPath(root,account);
+  // Reuse a live J/dashboard recovery if one already owns this exact profile.
+  try {
+    const prior=readJson(statusPath);
+    const age=Date.now()-Date.parse(prior?.At || '');
+    const activeWindow=prior?.State==='queued' ? 30000 : 360000;
+    if(['queued','running'].includes(prior?.State) && String(prior.Email||'').toLowerCase()===String(email).toLowerCase() && prior.AuthFileStamp===originalStamp && Number.isFinite(age) && age>=0 && age<activeWindow){
+      return waitForAuthHelper(root,account,email,originalAuth,originalStamp,330000,shouldStop,null,prior.AttemptId,Date.parse(prior.At));
+    }
+  } catch { /* Start a new recovery if there is no readable live status. */ }
+  if(!writeAuthHelperStatus(root,account,email,'queued','Waiting for Deck Auth Helper.',originalStamp,attemptId)) return Promise.resolve(false);
+  let child;
+  try {
+    child = spawn('powershell.exe', [
+      '-NoLogo','-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass',
+      '-File',helper,'-Recover','-SuiteRoot',root,'-Account',account,'-Email',email,'-BrowserHarness','-Force','-AttemptId',attemptId
+    ], { detached:true, windowsHide:true, stdio:'ignore' });
+    child.once('error',()=>writeAuthHelperStatus(root,account,email,'failed','Could not start Deck Auth Helper.',originalStamp,attemptId));
+    child.unref();
+  } catch {
+    writeAuthHelperStatus(root,account,email,'failed','Could not start Deck Auth Helper.',originalStamp,attemptId);
+    return Promise.resolve(false);
+  }
+  return waitForAuthHelper(root,account,email,originalAuth,originalStamp,330000,shouldStop,child,attemptId,Date.now());
+}
+function authFileStamp(stat) {
+  return `${stat.size}:${(stat.mtimeNs / 100n + 621355968000000000n).toString()}`;
+}
+async function waitForAuthHelper(root, account, email, originalAuth, originalStamp, timeoutMs = 150000, shouldStop = () => false, child = null, attemptId = null, startedAt = 0) {
+  const authPath=path.join(root,'accounts',account,'auth.json');
+  const deadline=Date.now()+timeoutMs;
+  while(Date.now()<deadline && !shouldStop()){
+    try {
+      const stat=fs.statSync(authPath,{bigint:true});
+      if(authFileStamp(stat)!==originalStamp){
+        const renewed=readJson(authPath);
+        if(renewed.tokens?.account_id &&
+          renewed.tokens?.access_token && renewed.tokens.access_token!==originalAuth.token &&
+          String(accountEmail(root,account)||'').toLowerCase()===String(email).toLowerCase()) return true;
+      }
+    } catch { /* Login is writing credentials or has not started. */ }
+    try {
+      const state=readJson(helperStatusPath(root,account));
+      const belongsToAttempt=attemptId ? state.AttemptId===attemptId : Date.parse(state.At)>=startedAt;
+      if(belongsToAttempt && state.AuthFileStamp===originalStamp && ['unmatched','failed'].includes(state.State)) return false;
+      const stateAge=Date.now()-Date.parse(state.At);
+      if(!child && Number.isFinite(stateAge) && ((state.State==='queued' && stateAge>30000) || (state.State==='running' && stateAge>330000))) return false;
+    } catch { /* The worker has not written status yet. */ }
+    if(child?.exitCode!=null || child?.signalCode){
+      // Check the auth file and status once more before treating an early exit
+      // as a failed launch; the helper writes credentials immediately before exit.
+      try {
+        const renewed=readJson(authPath);
+        if(renewed.tokens?.account_id && renewed.tokens?.access_token && renewed.tokens.access_token!==originalAuth.token && String(accountEmail(root,account)||'').toLowerCase()===String(email).toLowerCase()) return true;
+      } catch { }
+      return false;
+    }
+    await new Promise(resolve=>setTimeout(resolve,250));
+  }
+  return false;
 }
 function quotaRetryAt(incoming, body, row, now = Date.now()) {
   const future = value => {
@@ -271,6 +418,7 @@ async function createProxy(config, dependencies = {}) {
   const excluded = new Set();
   const retryAt = new Map();
   const resetProbes = new Set();
+  const authRecoveries = new Map();
   const refreshExcluded = () => {
     const timestamp = now();
     for (const name of excluded) if ((retryAt.get(name) || 0) <= timestamp) {
@@ -399,7 +547,7 @@ async function createProxy(config, dependencies = {}) {
       // Let the active account validate server-stored references it owns. A 429
       // proves the request was rejected, so portable full/encrypted history can
       // be retried without duplicating an accepted response.
-      let attempts = 0, maxAttempts = conversation && automatic ? pool.length : 1;
+      let attempts = 0, maxAttempts = conversation && automatic ? pool.length : 1, authRecoveryRetried=false, forcedAuthRecoveryAccount=null;
       while (!res.destroyed && attempts++ < maxAttempts) {
         refreshExcluded();
         if (excluded.has(current)) {
@@ -417,7 +565,9 @@ async function createProxy(config, dependencies = {}) {
             resetProbes.add(current);
           }
         }
-        const used = current, auth = getCredentials(used);
+        const used = forcedAuthRecoveryAccount || current;
+        forcedAuthRecoveryAccount=null;
+        const auth = getCredentials(used);
         lastRequestAccount = used;
         lastRequestRoute = routePath;
         const headers = {};
@@ -443,26 +593,78 @@ async function createProxy(config, dependencies = {}) {
           outbound.setTimeout(120000, () => outbound.destroy(Error('Upstream timeout.')));
           outbound.on('error', reject); outbound.end(body);
         });
-        if (conversation && incoming.statusCode === 429) {
-          const rejected = await collect(incoming, 1024 * 1024);
-          if (quotaRejected(429, rejected)) {
+        const responseHeaders = { 'cache-control':'no-store' };
+        const blockedResponseHeaders = new Set(['connection','proxy-connection','transfer-encoding','upgrade','set-cookie']);
+        for (const [name,value] of Object.entries(incoming.headers)) if (!blockedResponseHeaders.has(name) && name !== 'cache-control' && value != null) responseHeaders[name] = value;
+        if (conversation && [401,403,429].includes(incoming.statusCode)) {
+          let rejected;
+          try { rejected=await collect(incoming,1024*1024); }
+          catch { return reply(res,incoming.statusCode,'Upstream request was rejected.'); }
+          if ((incoming.statusCode===403 || incoming.statusCode===429) && quotaErrorBody(rejected)) {
             excluded.add(used);
             resetProbes.delete(used);
             const rows = getRows();
             retryAt.set(used, quotaRetryAt(incoming, rejected, rowFor(rows, used), now()));
-            // A manual selection may arrive while this accepted response is
-            // streaming (for example from the Pool skill's local tool call).
-            // Preserve it for the next request unless that same account failed.
+            // Usage limits belong to quota routing and never start OAuth
+            // recovery. Rotate only when automatic failover has a candidate.
             const next = automatic ? (current !== used && !excluded.has(current) ? current : choices()[0]) : null;
             if (next && !bound && !res.destroyed) { current = next; report(current); continue; }
             if (automatic && bound && next) return reply(res, 409, 'Quota reached, but this request contains account-scoped history. Start a new session to change accounts.');
+            res.writeHead(incoming.statusCode,responseHeaders); res.end(rejected); return;
           }
-          res.writeHead(429, { 'content-type':'application/json', 'cache-control':'no-store' }); res.end(rejected); return;
+          // Rate limits without a recognized quota body stay errors; they do
+          // not get mistaken for expired credentials.
+          if(incoming.statusCode===429){res.writeHead(429,responseHeaders);res.end(rejected);return}
+          resetProbes.delete(used);
+          if ((incoming.statusCode===401 || incoming.statusCode===403) && !quotaErrorBody(rejected) && !authRecoveryRetried && isInvalidAuthBody(rejected)) {
+            const email = authEmail(auth);
+            if(email){
+              let currentAuth=null;
+              try{currentAuth=getCredentials(used)}catch{}
+              const currentEmail=authEmail(currentAuth);
+              if(currentAuth && currentAuth.token!==auth.token && String(currentAuth.id)===String(auth.id) && String(currentEmail||'').toLowerCase()===String(email).toLowerCase()){
+                // J, Codex's native refresh, or another already-running helper
+                // may have replaced this same account's token in flight.
+                authRecoveryRetried=true;
+                attempts--;
+                forcedAuthRecoveryAccount=used;
+                continue;
+              }
+              const revoked=recordRevokedAuth(config.root,used,email,auth.token);
+              if(revoked){
+                let recovery=authRecoveries.get(used.toLowerCase());
+                if(!recovery){
+                  recovery=startAuthHelper(config.root,used,email,auth,revoked.authStamp);
+                  authRecoveries.set(used.toLowerCase(),recovery);
+                  recovery.then(()=>{if(authRecoveries.get(used.toLowerCase())===recovery)authRecoveries.delete(used.toLowerCase())},()=>{if(authRecoveries.get(used.toLowerCase())===recovery)authRecoveries.delete(used.toLowerCase())});
+                }
+                if(await recovery){
+                  authRecoveryRetried=true;
+                  attempts--;
+                  forcedAuthRecoveryAccount=used;
+                  continue;
+                }
+              }else{
+                // Close the narrow race between checking the profile above
+                // and reading it for the revoked marker.
+                try{
+                  currentAuth=getCredentials(used);
+                  if(currentAuth.token!==auth.token && String(currentAuth.id)===String(auth.id) && String(authEmail(currentAuth)||'').toLowerCase()===String(email).toLowerCase()){
+                    authRecoveryRetried=true;
+                    attempts--;
+                    forcedAuthRecoveryAccount=used;
+                    continue;
+                  }
+                }catch{}
+              }
+            }
+          }
+          if(res.destroyed)return;
+          res.writeHead(incoming.statusCode,responseHeaders);
+          res.end(rejected);
+          return;
         }
         resetProbes.delete(used);
-        const responseHeaders = { 'cache-control':'no-store' };
-        const blockedResponseHeaders = new Set(['connection','proxy-connection','transfer-encoding','upgrade','set-cookie']);
-        for (const [name,value] of Object.entries(incoming.headers)) if (!blockedResponseHeaders.has(name) && name !== 'cache-control' && value != null) responseHeaders[name] = value;
         res.writeHead(incoming.statusCode, responseHeaders);
         res.flushHeaders();
         // Once accepted, stream directly with backpressure. Never replay even if the stream fails.

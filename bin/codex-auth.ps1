@@ -21,6 +21,11 @@ param(
     [string]$ResumePrompt,
     [string]$ResumePromptEnvironment,
     [switch]$GlobalRules,
+    [switch]$ClaudeDefaults,
+    [switch]$AntigravityDefaults,
+    [switch]$AuthHelper,
+    [switch]$LoginAll,
+    [string[]]$LoginAccounts,
     [string]$Category,
     [string]$Risk,
     [string]$RenameTo,
@@ -50,13 +55,47 @@ if($Account -eq 'skills'){
     if($LASTEXITCODE){exit $LASTEXITCODE}
     exit 0
 }
-if($GlobalRules){
-    $rulesSuite=Split-Path -Parent $accountsRoot
-    . (Join-Path $rulesSuite 'Deck.GlobalRules.ps1')
-    Open-DeckGlobalRules $rulesSuite
+if($AuthHelper){
+    if($CodexArgs){throw 'Auth Helper does not accept Codex arguments.'}
+    $helperSuite=Split-Path -Parent $accountsRoot
+    . (Join-Path $helperSuite 'Deck.Core.ps1')
+    Open-DeckAuthHelper $helperSuite
     exit 0
 }
-
+if($LoginAll){
+    if($CodexArgs){throw '-LoginAll does not accept Codex arguments.'}
+    $helperSuite=Split-Path -Parent $accountsRoot
+    . (Join-Path $helperSuite 'Deck.Core.ps1')
+    . (Join-Path $helperSuite 'Deck.AuthHelper.ps1')
+    Start-DeckAuthHelperBatch $helperSuite $LoginAccounts 2
+    exit 0
+}
+if($GlobalRules){
+    $rulesSuite=Split-Path -Parent $accountsRoot
+    if($env:CODEXDECK_DEFAULT_HARNESS -eq 'Antigravity' -or $Harness -eq 'Antigravity'){
+        . (Join-Path $rulesSuite 'Deck.AntigravityDefaults.ps1')
+        Open-DeckAntigravityDefaults $rulesSuite
+    }elseif($env:CODEXDECK_DEFAULT_HARNESS -eq 'Claude' -or $Harness -eq 'Claude'){
+        . (Join-Path $rulesSuite 'Deck.ClaudeDefaults.ps1')
+        Open-DeckClaudeDefaults $rulesSuite
+    }else{
+        . (Join-Path $rulesSuite 'Deck.GlobalRules.ps1')
+        Open-DeckGlobalRules $rulesSuite
+    }
+    exit 0
+}
+if($ClaudeDefaults){
+    $claudeSuite=Split-Path -Parent $accountsRoot
+    . (Join-Path $claudeSuite 'Deck.ClaudeDefaults.ps1')
+    Open-DeckClaudeDefaults $claudeSuite
+    exit 0
+}
+if($AntigravityDefaults){
+    $agySuite=Split-Path -Parent $accountsRoot
+    . (Join-Path $agySuite 'Deck.AntigravityDefaults.ps1')
+    Open-DeckAntigravityDefaults $agySuite
+    exit 0
+}
 function Remove-CodexAccount {
     param([string]$Name)
     # Only an existing direct child may be removed, including old typo names.
@@ -673,6 +712,21 @@ function Initialize-AccountDirectory {
 }
 
 function Show-Usage {
+    if($env:CODEXDECK_DEFAULT_HARNESS -eq 'Claude'){
+        Write-Host 'Usage: claude-auth [dashboard|accountN|N|list] [Claude Code args...]'
+        Write-Host '  claude-auth                 Claude-only account dashboard'
+        Write-Host '  claude-auth account1        Create an isolated profile and sign in on first use'
+        Write-Host '  claude-auth account1 login  Sign in to that profile'
+        Write-Host '  claude-auth account2        Open a second isolated profile'
+        Write-Host '  claude-auth account1 check  Refresh that profile''s native sign-in status'
+        Write-Host '  claude-auth -a              Check sign-in status for every Claude profile'
+        Write-Host '  claude-auth -GlobalRules    Edit Claude instructions and global settings defaults'
+        Write-Host '  claude-auth -ClaudeDefaults Open the same Claude-only defaults editor'
+        Write-Host '  claude-auth list            List Claude profiles'
+        Write-Host '  claude-auth account1 -del   Move a profile to recovery'
+        Write-Host '  Profile names use a claude- prefix internally to avoid Codex name collisions.'
+        return
+    }
     Write-Host "Usage: codex-auth [dashboard|status|resume|accountN|N|list] [codex args...]"
     Write-Host "  codex-auth          Interactive account dashboard"
     Write-Host "  codex-auth -a       Open the dashboard and queue checks for every signed-in account"
@@ -680,6 +734,8 @@ function Show-Usage {
     Write-Host "  codex-auth -Best    Launch the recommended fresh account"
     Write-Host "  codex-auth pool -Pool -PoolAccounts '*'  Configure the pooled environment"
     Write-Host "  codex-auth pool -UseAccount account2   Choose a starting member"
+    Write-Host "  codex-auth -GlobalRules                 Edit Codex Global Rules (Claude harness opens Claude defaults)"
+    Write-Host "  codex-auth -ClaudeDefaults              Edit Claude global instructions and settings defaults"
     Write-Host "  codex-auth share -Source pool -Targets account1,account2 -Resources skills,memories,mcp:github"
     Write-Host "  codex-auth unshare -Targets account1 -Resources skills   Restore private resources"
     Write-Host "  codex-auth sharing   Show explicit sharing"
@@ -689,6 +745,8 @@ function Show-Usage {
     Write-Host "  codex-auth account1 -Resume <conversation-id>   Resume one conversation"
     Write-Host "  codex-auth resume <conversation-id>   Find its account and resume through Deck"
     Write-Host "  codex-auth -GlobalRules       Edit rules for every account and pool"
+    Write-Host "  codex-auth -AuthHelper        Edit automatic reauthentication credentials"
+    Write-Host "  codex-auth -LoginAll -LoginAccounts account51,account52  Log in unsigned profiles in the background"
     Write-Host "  codex-auth old -RenameTo new  Rename an inactive account"
     Write-Host "  codex-auth -Failover Ordered -FailoverAccounts account1,account2"
     Write-Host "  codex-auth -Failover Best -FailoverAccounts account1,account2"
@@ -701,6 +759,9 @@ function Show-Usage {
     Write-Host "Examples:"
     Write-Host '  codex-auth work -NewAccount -Harness Claude -Provider Claude'
     Write-Host '  codex-auth google -NewAccount -Harness Antigravity -Provider Gemini'
+    Write-Host '  agy-auth account1 login     Create and sign in to an isolated Antigravity profile'
+    Write-Host '  agy-auth account1 check    Check for saved profile credentials (use /usage for live limits)'
+    Write-Host '  agy-auth -GlobalRules      Edit Antigravity global rules and settings defaults'
     Write-Host '  codex-auth open -NewAccount -Harness OpenCode -Provider Custom'
     Write-Host '  codex-auth google -ConfigureRunner  Configure an isolated Windows runner'
     Write-Host "  codex-auth account1"
@@ -710,8 +771,10 @@ function Show-Usage {
     Write-Host "  codex-auth account3 -del   (remove account; keep a recovery copy)"
 }
 
-function Show-Accounts {
-    $directories = Get-AccountDirectories
+function Show-Accounts([string]$Harness) {
+    $directories = @(Get-AccountDirectories | Where-Object {
+        -not $Harness -or (Get-DeckAccountIdentity (Split-Path -Parent $accountsRoot) $_.Name).Harness -eq $Harness
+    })
 
     if ($directories.Count -eq 0) {
         Write-Host "No accounts found under $accountsRoot"
@@ -719,13 +782,20 @@ function Show-Accounts {
     }
 
     foreach ($directory in $directories) {
-        $hasAuth = Test-Path -LiteralPath (Join-Path $directory.FullName "auth.json") -PathType Leaf
+        $identity=Get-DeckAccountIdentity (Split-Path -Parent $accountsRoot) $directory.Name
+        $authPath=switch($identity.Harness){
+            'Claude' {Join-Path $directory.FullName 'claude/.credentials.json'}
+            'Antigravity' {Join-Path $directory.FullName 'antigravity/profile/.gemini/antigravity-cli/antigravity-oauth-token'}
+            default {Join-Path $directory.FullName 'auth.json'}
+        }
+        $hasAuth = Test-Path -LiteralPath $authPath -PathType Leaf
         $marker = if (Get-DeckPoolEntry (Split-Path -Parent $accountsRoot) $directory.Name) { "POOL" } elseif ($hasAuth) { "*" } else { "-" }
-        Write-Host ("{0} {1}" -f $marker, $directory.Name)
+        $displayName=if($Harness -in @('Claude','Antigravity') -and $directory.Name.StartsWith($Harness.ToLowerInvariant()+'-',[StringComparison]::OrdinalIgnoreCase)){$directory.Name.Substring($Harness.Length+1)}else{$directory.Name}
+        Write-Host ("{0} {1}" -f $marker, $displayName)
     }
 
     Write-Host ""
-    Write-Host "* = auth.json present"
+    Write-Host "* = native credentials file present"
 }
 
 function Use-CodexNodePath {
@@ -1028,11 +1098,19 @@ $coreModule=Join-Path $runtimeRoot 'Deck.Core.ps1'
 if(-not (Test-Path -LiteralPath $coreModule)){$coreModule=Join-Path $PSScriptRoot '../suite/Deck.Core.ps1'}
 if(Test-Path -LiteralPath $coreModule){. $coreModule}
 if(-not (Get-Command Get-DeckAccountIdentity -ErrorAction SilentlyContinue)){. (Join-Path $PSScriptRoot '../suite/Deck.Harnesses.ps1')}
+$defaultHarness=$null
+if(-not [string]::IsNullOrWhiteSpace($env:CODEXDECK_DEFAULT_HARNESS)){$defaultHarness=Get-DeckHarness $env:CODEXDECK_DEFAULT_HARNESS}
 if($Harness -or $Provider -or $ConfigureRunner){
     if(-not $Account -or $Account -in @('dashboard','status','list','--list','-l','help','plugin','resume','share','unshare','sharing') -or $Pool -or $Best -or $CheckAll){throw 'Harness options require one named account.'}
 }
 if($Account -and $Account -notin @('dashboard','status','list','--list','-l','help','--help','-h','plugin','resume','share','unshare','sharing')){
     $harnessAccount=Normalize-AccountName $Account
+    if($defaultHarness){
+        if($Harness -and $Harness -ne $defaultHarness.Id){throw "This command is scoped to $($defaultHarness.Name)."}
+        $Harness=$defaultHarness.Id
+        $harnessAccount=Resolve-DeckHarnessScopedAccountName $runtimeRoot $harnessAccount $defaultHarness.Id
+        $Account=$harnessAccount
+    }
     Assert-DeckEntryName $harnessAccount
     $identity=Get-DeckAccountIdentity $runtimeRoot $harnessAccount
     $exists=Test-Path -LiteralPath (Join-Path $accountsRoot $harnessAccount) -PathType Container
@@ -1044,12 +1122,29 @@ if($Account -and $Account -notin @('dashboard','status','list','--list','-l','he
     if($selectedHarness -ne 'Codex'){
         if($Pool -or $InheritFrom -or $UseAccount -or $Source -or $Targets -or $Resources -or $Direct -or $AutoCompact -or $Best -or $History -or $Resume -or $ResumePrompt -or $ResumePromptEnvironment -or $FailoverAccounts -or $PSBoundParameters.ContainsKey('Failover')){throw 'Codex pools, inheritance, history, compaction and failover options apply to ChatGPT accounts. Use native harness commands for this account.'}
         if(-not $Del -and -not $RenameTo){
+            if($selectedHarness -eq 'Claude' -and $CodexArgs.Count -eq 1 -and $CodexArgs[0] -eq 'check'){
+                if(-not $exists){throw 'Create this Claude profile first, then run claude-auth <account> check.'}
+                $status=Get-DeckClaudeAuthStatus $runtimeRoot $harnessAccount
+                if($status.LoggedIn){Write-Host ('Signed in ('+$status.AuthMethod+').');exit 0}
+                Write-Host 'Sign in required. Run claude-auth <account> login.'
+                exit 1
+            }
+            if($selectedHarness -eq 'Antigravity' -and $CodexArgs.Count -eq 1 -and $CodexArgs[0] -eq 'check'){
+                if(-not $exists){throw 'Create this Antigravity profile first, then run agy-auth <account> check.'}
+                $status=Get-DeckAntigravityAuthStatus $runtimeRoot $harnessAccount
+                if($status.Mode -eq 'Windows runner'){Write-Host 'This account uses the legacy Windows runner; open it to check sign-in.';exit 0}
+                if($status.CredentialsPresent){Write-Host 'Antigravity profile credential file is present. Run /usage in this profile to refresh service authentication and view limits.';exit 0}
+                Write-Host 'Sign-in required. Run agy-auth <account> login.'
+                exit 1
+            }
             if(-not $exists){
-                if(-not $NewAccount){throw 'Create this harness account explicitly with -NewAccount -Harness.'}
+                $automaticClaudeLogin=$defaultHarness -and $defaultHarness.Id -eq 'Claude' -and (-not $CodexArgs -or $CodexArgs[0] -eq 'login' -or ($CodexArgs.Count -gt 1 -and $CodexArgs[0] -eq 'auth' -and $CodexArgs[1] -eq 'login'))
+                $automaticAntigravityLogin=$defaultHarness -and $defaultHarness.Id -eq 'Antigravity' -and (-not $CodexArgs -or $CodexArgs[0] -eq 'login')
+                if(-not $NewAccount -and -not $automaticClaudeLogin -and -not $automaticAntigravityLogin){throw 'Create this harness account explicitly with -NewAccount -Harness, or use its harness-specific auth command.'}
                 [void](New-DeckHarnessAccount $runtimeRoot $harnessAccount $selectedHarness $selectedProvider)
             }elseif($NewAccount){throw 'That account already exists.'}
             $nativeArgs=@($CodexArgs)
-            if($NewAccount -and -not $nativeArgs){$nativeArgs=@('login')}
+            if(($NewAccount -or $automaticClaudeLogin -or $automaticAntigravityLogin) -and -not $nativeArgs){$nativeArgs=@('login')}
             Invoke-DeckHarnessAccount $runtimeRoot $harnessAccount $nativeArgs -ConfigureRunner:$ConfigureRunner
             exit $LASTEXITCODE
         }
@@ -1180,14 +1275,15 @@ if ([string]::IsNullOrWhiteSpace($Account) -or $Account -in @('dashboard', 'stat
     # Runtime data always belongs to the installed accounts root.
     $runtimeRoot = Split-Path -Parent $accountsRoot
     if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'Deck.Core.ps1'))) { throw 'Codex Deck core missing. Run Install-CodexDeck.ps1 first.' }
-    Show-DeckTerminal -SuiteRoot $runtimeRoot -AuthScript $PSCommandPath -Snapshot:($Account -eq 'status') -CheckAll:$CheckAll
+    $terminalHarness=if($defaultHarness){$defaultHarness.Id}else{$null}
+    Show-DeckTerminal -SuiteRoot $runtimeRoot -AuthScript $PSCommandPath -Snapshot:($Account -eq 'status') -CheckAll:$CheckAll -Harness $terminalHarness
     exit 0
 }
 
 if ($Account -in @("list", "--list", "-l")) {
     Show-Usage
     Write-Host ""
-    Show-Accounts
+    Show-Accounts $(if($defaultHarness){$defaultHarness.Id}else{$null})
     exit 0
 }
 
@@ -1505,6 +1601,12 @@ try {
     foreach ($marker in $failoverSessions) { Remove-Item -LiteralPath $marker -ErrorAction SilentlyContinue }
     if ($deckSession -and (Test-Path -LiteralPath $deckSession)) {
         Remove-Item -LiteralPath $deckSession -ErrorAction SilentlyContinue
+    }
+}
+if($env:CODEX_DECK_REAUTH_ATTEMPT -ne '1' -and $codexExitCode -eq 0 -and $CodexArgs -and $CodexArgs[0] -eq 'login' -and (Get-Command Get-DeckAuthIssue -ErrorAction SilentlyContinue)){
+    $authIssueFile=Join-Path $suiteRoot "deck/auth-issues/$accountName.json"
+    if((Test-Path -LiteralPath $authIssueFile -PathType Leaf) -and -not (Get-DeckAuthIssue $suiteRoot $accountName)){
+        Remove-Item -LiteralPath $authIssueFile -ErrorAction SilentlyContinue
     }
 }
 # Login may have identified a newly created account's plan for the first time.

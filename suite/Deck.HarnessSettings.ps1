@@ -37,14 +37,17 @@ foreach($definition in @(Get-DeckHarnessCatalog)){
     $runner=$null
     if($id -eq 'Antigravity'){$runner=[Windows.Controls.Button]::new();$runner.Content='Configure runner (optional)';$runner.ToolTip='New accounts use isolated file login. Configure an existing Windows user only for the runner fallback.';$runner.IsEnabled=$accounts.Items.Count -gt 0;[void]$configActions.Children.Add($runner)}
     $empty=New-DeckText 'Add an account to edit its isolated native settings. Use the native settings command or file shown in its documentation.' '#929CA4'; $empty.Margin='0,6,0,0'; $empty.Visibility=if($accounts.Items.Count){'Collapsed'}else{'Visible'}; [void]$details.Children.Add($empty)
-    $card=@{Id=$id;Definition=$definition;Enabled=$enabled;Details=$details;Path=$path;Status=$status;Install=$install;Info=$info;Docs=$docs;Accounts=$accounts;Edit=$edit;Runner=$runner;Task=$null;Timer=$null;Context=$harnessContext;Commands=$harnessCommands}
+    $card=@{Id=$id;Definition=$definition;Enabled=$enabled;Details=$details;Path=$path;Status=$status;Install=$install;Info=$info;Docs=$docs;Accounts=$accounts;Edit=$edit;Runner=$runner;Task=$null;Timer=$null;Installed=$false;Context=$harnessContext;Commands=$harnessCommands}
     $harnessUI[$id]=$card
     $refresh={
         $card.Details.Visibility=if($card.Enabled.IsChecked){'Visible'}else{'Collapsed'}
         $preferences=& $card.Commands['Get-DeckDefaults']; $preferences[('Harness'+$card.Id+'Path')]=$card.Path.Text.Trim()
-        try{$executable=& $card.Commands['Resolve-DeckHarnessExecutable'] $preferences $card.Id; $card.Status.Text='Installed: '+$executable}
-        catch{$card.Status.Text=$_.Exception.Message}
+        try{
+            $executable=& $card.Commands['Resolve-DeckHarnessExecutable'] $preferences $card.Id
+            $card.Installed=$true;$card.Install.Content='Update CLI';$card.Status.Text='Installed: '+$executable
+        }catch{$card.Installed=$false;$card.Install.Content='Install CLI';$card.Status.Text=$_.Exception.Message}
     }.GetNewClosure()
+    $card.Refresh=$refresh
     $enabled.Add_Click($refresh); $path.Add_LostFocus($refresh); & $refresh
     $docs.Add_Click({Start-Process $card.Definition.Docs}.GetNewClosure())
     $info.Add_Click({
@@ -52,7 +55,11 @@ foreach($definition in @(Get-DeckHarnessCatalog)){
         $scroll=[Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility='Auto'; $help.Content=$scroll
         $body=[Windows.Controls.TextBox]::new(); $body.IsReadOnly=$true; $body.TextWrapping='Wrap'; $body.AcceptsReturn=$true; $body.Margin='20'; $body.Background='#101315'; $body.Foreground='#EAF0FA'; $body.BorderThickness='0'
         $provider=$card.Definition.Providers[0]
-        $body.Text=$card.Definition.Name+"`n`nAdd and log in:`ncodex-auth my-account -NewAccount -Harness "+$card.Id+' -Provider '+$provider+"`n`nOpen:`ncodex-auth my-account`n`nLog in again:`ncodex-auth my-account login`n`n"+$card.Definition.Help+"`n`nAccount sign-in and request routing are separate. Codex ChatGPT failover is available today. Cross-provider conversation routing and ChatGPT / Claude / Gemini web adapters are planned and are not active controls. Native provider settings remain available inside each harness."
+        $command=switch($card.Id){'Claude'{'claude-auth'} 'Antigravity'{'agy-auth'} default{'codex-auth'}}
+        $sample=if($card.Id -in @('Claude','Antigravity')){'account1'}else{'my-account'}
+        $create=if($card.Id -in @('Claude','Antigravity')){$command+' '+$sample+' login'}else{'codex-auth '+$sample+' -NewAccount -Harness '+$card.Id+' -Provider '+$provider}
+        $check=if($card.Id -eq 'Claude'){$command+' '+$sample+' check'}elseif($card.Id -eq 'Antigravity'){$command+' '+$sample+' check (local credential-file check; use /usage for live limits)'}else{''}
+        $body.Text=$card.Definition.Name+"`n`nCreate and sign in:`n"+$create+"`n`nOpen the dashboard:`n"+$command+"`n`nLog in again:`n"+$command+' '+$sample+" login`n"+$(if($check){"`nCheck sign-in:`n$check`n"}else{''})+"`n"+$card.Definition.Help+"`n`nAccount sign-in and request routing are separate. Codex ChatGPT failover is available today. Cross-provider conversation routing and ChatGPT / Claude / Gemini web adapters are planned and are not active controls. Native provider settings remain available inside each harness."
         $scroll.Content=$body; [void]$help.ShowDialog()
     }.GetNewClosure())
     if($runner){$runner.Add_Click({
@@ -72,21 +79,52 @@ foreach($definition in @(Get-DeckHarnessCatalog)){
             $module=(Join-Path $card.Context.Suite 'Deck.Core.ps1').Replace("'","''")
             $code="`$ErrorActionPreference='Stop'; . '$module'; Install-DeckHarness '"+$card.Id+"'"
             $card.Task=& $card.Commands['Start-DeckTask'] $code 'harness-install' $card.Id
-            $card.Install.IsEnabled=$false; $card.Install.Content='Installing...'; $card.Status.Text='Downloading and installing '+$card.Definition.Name+'...'
+            $operation=if($card.Installed){'Updating'}else{'Installing'}
+            $card.Install.IsEnabled=$false; $card.Install.Content=$operation+'...'; $card.Status.Text=$operation+' '+$card.Definition.Name+' in the background. Settings remain responsive.'
             $timer=[Windows.Threading.DispatcherTimer]::new(); $timer.Interval=[TimeSpan]::FromMilliseconds(250); $card.Timer=$timer
             $timer.Add_Tick({
                 $task=$card.Task
                 if(-not $task){$card.Timer.Stop();return}
-                if(([DateTimeOffset]::UtcNow-$task.Started).TotalMinutes -gt 10){& $card.Commands['Stop-DeckTask'] $task; $card.Timer.Stop(); $card.Status.Text='Installation timed out. See the documentation to install manually.'}
-                elseif(-not (& $card.Commands['Test-DeckTaskReady'] $task)){return}
-                else{
-                    $card.Timer.Stop()
-                    if($task.Process.ExitCode -eq 0){$card.Status.Text=($task.Out.Result -split "`r?`n" | Where-Object {$_} | Select-Object -Last 1)}else{$card.Status.Text='Install failed: '+(& $card.Commands['Get-DeckTaskFailureMessage'] $task)}
+                $finished=$false
+                try{
+                    $elapsed=([DateTimeOffset]::UtcNow-$task.Started)
+                    if($elapsed.TotalMinutes -gt 10){
+                        & $card.Commands['Stop-DeckTask'] $task
+                        $card.Status.Text='Installation timed out after 10 minutes. The worker was stopped; see the documentation to install manually.'
+                        $finished=$true
+                    }elseif(-not (& $card.Commands['Test-DeckTaskReady'] $task)){
+                        $seconds=[int][Math]::Floor($elapsed.TotalSeconds)
+                        if($seconds -gt 0 -and $seconds % 5 -eq 0){$card.Status.Text=$operation+' '+$card.Definition.Name+' in the background ('+$seconds+' seconds). Settings remain responsive.'}
+                        return
+                    }else{
+                        $finished=$true
+                        if($task.StartError){$card.Status.Text='Install failed: '+$task.StartError}
+                        elseif($task.Process.ExitCode -eq 0){
+                            $result=($task.Out.Result -split "`r?`n" | Where-Object {$_} | Select-Object -Last 1)
+                            & $card.Refresh
+                            if($card.Installed){$card.Status.Text=$result}else{$card.Status.Text='Installer completed, but Deck could not locate the CLI. Set its executable path or check the install output: '+$result}
+                        }else{$card.Status.Text='Install failed: '+(& $card.Commands['Get-DeckTaskFailureMessage'] $task)}
+                    }
+                }catch{$finished=$true;$card.Status.Text='Install failed: '+$_.Exception.Message}
+                finally{
+                    if($finished){
+                        $card.Timer.Stop()
+                        try{& $card.Commands['Dispose-DeckTask'] $task}catch{}
+                        $card.Task=$null;$card.Install.IsEnabled=$true
+                        if($card.Installed){$card.Install.Content='Update CLI'}else{$card.Install.Content='Install CLI'}
+                    }
                 }
-                & $card.Commands['Dispose-DeckTask'] $task; $card.Task=$null; $card.Install.IsEnabled=$true; $card.Install.Content='Install / update'
             }.GetNewClosure())
             $timer.Start()
-        }catch{$card.Status.Text=$_.Exception.Message; $card.Install.IsEnabled=$true; $card.Install.Content='Install / update'}
+        }catch{
+            $message=$_.Exception.Message
+            if($card.Timer){try{$card.Timer.Stop()}catch{};$card.Timer=$null}
+            if($card.Task){try{& $card.Commands['Stop-DeckTask'] $card.Task}catch{};try{& $card.Commands['Dispose-DeckTask'] $card.Task}catch{};$card.Task=$null}
+            try{& $card.Refresh}catch{}
+            $card.Status.Text='Install failed: '+$message
+            $card.Install.IsEnabled=$true
+            $card.Install.Content=if($card.Installed){'Update CLI'}else{'Install CLI'}
+        }
     }.GetNewClosure())
 }
 $dialog.Add_Closed({

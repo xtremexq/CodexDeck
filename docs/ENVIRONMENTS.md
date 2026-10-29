@@ -76,6 +76,8 @@ Every conversation launched through Deck or `codex-auth` loads these rules as st
 
 This uses [Codex's developer instructions setting](https://learn.chatgpt.com/docs/config-file/config-reference). Global rules are separate from account configuration backups; back up `deck/global-rules.md` if needed.
 
+Claude has a separate **Claude Global Defaults** editor and files under `deck/claude/`. They apply only to Claude sessions and are included in encrypted configuration backups. Open it from **Configs → Claude Global Defaults**, the Claude dashboard's **G** shortcut, or `claude-auth -GlobalRules`. Claude account `CLAUDE.md` instructions live inside that account's isolated Claude profile. See [Claude account sign-in and defaults](HARNESSES.md#harnesses-and-account-sign-in).
+
 ## Backups and removal
 
 Encrypted configuration backups include pooled-entry membership metadata and per-environment Deck-skill overrides. They do not include shared directories, sharing bindings, catalog skill contents, or private-resource backups. Back up user-owned resources separately and reapply sharing explicitly after restore. An exported instruction copy is restored as private instructions.

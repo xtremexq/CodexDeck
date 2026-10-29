@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Fixed Harnesses install/update state, background progress, timeout and cleanup behavior. Added `agy-auth` with isolated Antigravity profiles, local credential checks, account/global rules and settings defaults, native skills paths, and no additional Windows-user requirement for new profiles.
+- Added `claude-auth`, a Claude-only account dashboard and launcher. It creates isolated local profiles on first use, maps `accountX` to `claude-accountX` to avoid colliding with Codex profiles, shows profile credential status, and opens Claude's native sign-in flow.
+- Added separate Claude global instructions and settings defaults, per-profile `claude auth status` checks, account `CLAUDE.md` editing, isolated home-level config, and encrypted backup support. Claude plan quota stays in `/usage`; Claude warm-ups are not run because they consume plan usage.
+- Added a separate DPAPI-protected Auth Helper list. On an explicit expired, invalid, or revoked OAuth-token error, Deck matches the actually routed profile by email, runs its own background OAuth flow, and retries the same explicitly rejected request once after successful reauthentication; quota checks use the same recovery worker.
+- Fixed Auth Helper recovery races: each worker run has a unique status ID, stale failures cannot cancel a new sign-in, parallel requests reuse the same recovery, and a token refreshed while its request was in flight is retried immediately.
+- Kept usage-limit handling separate from OAuth recovery: recognized quota errors never start token revalidation and rotate only when automatic failover has another available configured account.
+- Fixed failover refusing to start after Auth Helper logins: the helper wrote `auth_mode` as `Chatgpt`, which the proxy rejected as a non-ChatGPT login. The helper now writes `chatgpt`, the proxy accepts either casing, and the error names the offending pool account.
+- Indexed active sessions once per dashboard render so account rows do not rescan every terminal session.
+
 ## 1.8.8 - 2026-10-18
 
 - Avoided Windows `File.Replace` when detaching legacy shared account instructions; rename the hard link with recovery so a ReplaceFile failure cannot abort resume.

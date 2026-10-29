@@ -34,6 +34,22 @@ $empty = @(Get-DeckTerminalFrame @() @{} @{} @() @{} 0 60 25 '' 'Ready')
 $compactFrame = @(Get-DeckTerminalFrame $names @{} $profiles @() @{} 0 100 25 '' 'Ready' $true $null @{} $true 72)
 Assert (($compactFrame.Text -join "`n") -match 'C compact \[x\] Native 72%') 'Auto-compact selected state or configured threshold missing'
 Assert (($empty.Text -join "`n") -match 'No matching accounts') 'Missing empty state'
+$claudeProfiles=@{
+    'claude-account1'=@{Harness='Claude';Provider='Claude';PlanType='Claude';AuthStatus='Signed in';AuthCheckedAt=[DateTimeOffset]::UtcNow.ToString('o');Model='Claude Code default';Effort='default'}
+    'claude-account2'=@{Harness='Claude';Provider='Claude';PlanType='Claude';AuthStatus='Sign in required';Model='Claude Code default';Effort='default'}
+}
+$claudeFrame=@(Get-DeckTerminalFrame @('claude-account1','claude-account2') @{} $claudeProfiles @() @{} 0 110 25 '' 'Ready' -Harness Claude)
+$claudeText=$claudeFrame.Text -join "`n"
+Assert ($claudeText -match 'R check sign-in' -and $claudeText -match 'A all') 'Claude dashboard sign-in checks are missing.'
+Assert ($claudeText -match 'G defaults' -and $claudeText -match 'Claude /usage shows plan limits') 'Claude dashboard global defaults or native usage guidance is missing.'
+Assert ($claudeText -match 'Signed in' -and $claudeText -match 'Sign in required') 'Claude dashboard did not render native auth state.'
+Assert ($claudeText -notmatch 'WARM-?UP|PRIMARY|WEEKLY|NEXT RESET|5H|quota') 'Claude dashboard displayed unsupported quota or warm-up state.'
+foreach($theme in @('Focus','Cards','Ledger','Split')){
+    $themedClaude=@(Get-DeckTerminalFrame @('claude-account1','claude-account2') @{} $claudeProfiles @() @{} 0 110 25 '' 'Ready' -Theme $theme -Harness Claude)
+    $themedClaudeText=$themedClaude.Text -join "`n"
+    Assert ($themedClaude.Count -le 24 -and $themedClaudeText -match 'R selected sign-in' -and $themedClaudeText -match 'G defaults') "$theme Claude dashboard lost check/defaults shortcuts or overflowed."
+    Assert ($themedClaudeText -notmatch 'WARM-?UP|PRIMARY|WEEKLY|NEXT RESET|5H|quota') "$theme Claude dashboard displayed unsupported quota or warm-up state."
+}
 $lastConversation=[pscustomobject]@{Account='account40';Id='12345678-1234-1234-1234-123456789abc'}
 $lastFrame=@(Get-DeckTerminalFrame $names @{} $profiles @() @{} 39 100 25 '' 'Returned' $true $null @{} $false 55 $false 'Native' 'Default' $lastConversation)
 $lastText=$lastFrame.Text -join "`n"
@@ -45,6 +61,14 @@ $fixture = Join-Path ([IO.Path]::GetTempPath()) ('deck-terminal-' + [guid]::NewG
 $memoryRoot=Join-Path $fixture 'accounts/account1/memories';[void][IO.Directory]::CreateDirectory($memoryRoot)
 $instructionsPath=Get-DeckAccountInstructionsPath $fixture account1
 Assert ($instructionsPath -eq (Join-Path $fixture 'accounts/account1/AGENTS.md')) 'Account instructions path incorrect'
+[void][IO.Directory]::CreateDirectory((Join-Path $fixture 'accounts/claude-account1/claude'))
+Write-DeckEnvironmentJson (Join-Path $fixture 'accounts/claude-account1/deck-account.json') @{Version=1;Harness='Claude';Provider='Claude'}
+$claudeInstructionsPath=Get-DeckAccountInstructionsPath $fixture 'claude-account1'
+Assert ($claudeInstructionsPath -eq (Join-Path $fixture 'accounts/claude-account1/claude/CLAUDE.md')) 'Claude account instructions were not stored inside its isolated profile.'
+$claudeSkillsPath=Get-DeckSkillsDirectory $fixture 'claude-account1' -Create
+$claudeMemoryPath=Get-DeckClaudeMemoryDirectory $fixture 'claude-account1' -Create
+Assert ($claudeSkillsPath -eq (Join-Path $fixture 'accounts/claude-account1/claude/skills') -and (Test-Path $claudeSkillsPath -PathType Container)) 'Claude skills shortcut did not target its native isolated skills directory.'
+Assert ($claudeMemoryPath -eq (Join-Path $fixture 'accounts/claude-account1/claude/projects') -and (Test-Path $claudeMemoryPath -PathType Container)) 'Claude auto-memory shortcut did not target its native isolated projects directory.'
 $skillsPath=Get-DeckSkillsDirectory $fixture account1 -Create
 Assert ((Test-Path -LiteralPath $skillsPath -PathType Container) -and $skillsPath -eq (Join-Path $fixture 'accounts/account1/skills')) 'Skills directory path incorrect'
 [IO.File]::WriteAllText((Join-Path $fixture 'accounts/account1/auth.json'),'{}',[Text.UTF8Encoding]::new($false))
@@ -68,7 +92,7 @@ foreach($unsafeMemory in @('../outside.md','C:\outside.md','notes.exe','con.md')
     $rejected=$false;try{[void](Get-DeckMemoryPath $memoryRoot $unsafeMemory)}catch{$rejected=$true}
     Assert $rejected "Unsafe memory path accepted: $unsafeMemory"
 }
-foreach($file in 'Deck.Core.ps1','Deck.Harnesses.ps1','Deck.Environments.ps1','Deck.AccountTools.ps1'){Copy-Item (Join-Path $PSScriptRoot $file) (Join-Path $fixture $file)}
+foreach($file in 'Deck.Core.ps1','Deck.Harnesses.ps1','Deck.ClaudeDefaults.ps1','Deck.Environments.ps1','Deck.AccountTools.ps1'){Copy-Item (Join-Path $PSScriptRoot $file) (Join-Path $fixture $file)}
 Write-DeckJson (Join-Path $fixture 'deck/cache.json') @(@{Account='account1';CheckedAt='2026-01-01T00:00:00Z';Status='available'})
 Write-DeckJson (Join-Path $fixture 'deck/terminal-cache.json') @(@{Account='account1';CheckedAt='2026-01-02T00:00:00Z';Status='blocked'})
 Assert ((Get-DeckTerminalCache (Join-Path $fixture 'deck')).account1.Status -eq 'blocked') 'Newest cache not selected'
