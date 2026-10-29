@@ -22,7 +22,7 @@ function Add-DeckEnvironmentLabel([string]$Text) {
 [void]$environmentPanel.Children.Add((New-DeckText 'Pooled environment' '#EDF1F7' 18))
 Add-DeckEnvironmentLabel 'Environment'
 $poolNameBox=[Windows.Controls.ComboBox]::new(); $poolNameBox.IsEditable=$true; $poolNameBox.ToolTip='Choose an environment or type a new name.'
-$environmentNames=if($SmokeTest){@('pool','account1','account2')}else{@($settingsAccountNames)}
+$environmentNames=if($SmokeTest){@('pool','account1','account2')}else{@($settingsLazyState.AccountNames)}
 foreach($entryName in $environmentNames) {
     if (($SmokeTest -and $entryName -eq 'pool') -or (-not $SmokeTest -and $settingsAccountSnapshot[$entryName].IsPool)) { [void]$poolNameBox.Items.Add($entryName) }
 }

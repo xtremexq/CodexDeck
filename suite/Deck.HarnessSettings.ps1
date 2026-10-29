@@ -38,7 +38,7 @@ foreach($definition in @(Get-DeckHarnessCatalog)){
     $configActions=[Windows.Controls.WrapPanel]::new(); $configActions.Margin='0,5,0,0'; [void]$details.Children.Add($configActions)
     $accounts=[Windows.Controls.ComboBox]::new(); $accounts.MinWidth=180; $accounts.MaxWidth=300; $accounts.Margin='0,0,8,0'; [void]$configActions.Children.Add($accounts)
     if($id -eq 'Codex'){[void]$accounts.Items.Add('(new-account defaults)')}
-    foreach($accountName in @(if($harnessContext.Demo){@()}else{$settingsAccountNames})){
+    foreach($accountName in @(if($harnessContext.Demo){@()}else{$settingsLazyState.AccountNames})){
         $identity=if($settingsAccountSnapshot.ContainsKey($accountName)){$settingsAccountSnapshot[$accountName].Identity}else{& $harnessCommands['Get-DeckAccountIdentity'] $suite $accountName}
         if($identity.Harness -eq $id){[void]$accounts.Items.Add($accountName)}
     }
