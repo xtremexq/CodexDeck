@@ -125,7 +125,7 @@ function Get-DeckTerminalShortcutTable([string]$Harness,[int]$Width,[bool]$Theme
         }else{
             $rows.Add(@{Label='LAUNCH';Text='Enter launch | / search | B best | Q quit'})
             $rows.Add(@{Label='MANAGE';Text='R check | A all | J auto-login | H history'})
-            $rows.Add(@{Label='ACCOUNTS';Text='F2 rename | L login | N new | O new helper | Del | M mask'})
+            $rows.Add(@{Label='ACCOUNTS';Text='F2 rename | L login | N new | X helper | O new helper | Del | M mask'})
             $rows.Add(@{Label='OPEN';Text='D desktop | S settings | Y Analytics'})
             $rows.Add(@{Label='FILES';Text='G global | V auth helper | I instructions | E memories | K skills'})
             $rows.Add(@{Label='WARM-UP';Text='U run now | T daily times | W select account | P pause/resume'})
@@ -152,7 +152,7 @@ function Get-DeckTerminalShortcutTable([string]$Harness,[int]$Width,[bool]$Theme
     }else{
         $rows.Add(@{Label='LAUNCH';Text='Enter sign in | / search | B best | Q quit'})
         $rows.Add(@{Label='MANAGE';Text='R refresh | A all | J auto-login | H history'})
-        $rows.Add(@{Label='ACCOUNTS';Text='F2 rename | L login | N new | O new helper | Del | M mask'})
+        $rows.Add(@{Label='ACCOUNTS';Text='F2 rename | L login | N new | X helper | O new helper | Del | M mask'})
         $rows.Add(@{Label='OPEN';Text='D desktop | S settings | Y Analytics'})
         $rows.Add(@{Label='FILES';Text='G global | V auth helper | I instructions | E memories | K skills'})
         $rows.Add(@{Label='WARMUP';Text='U run now | T daily times | W select account | P pause/resume'})
@@ -491,7 +491,7 @@ function Show-DeckTerminal {
     $terminalCacheStamp=Get-DeckTerminalCacheStamp $root
     $cache = Get-DeckTerminalCache $root
     $profiles = @{}; $tasks = @{}; $pending = [Collections.Generic.Queue[string]]::new(); $authHelperStamps=@{}; $authHelperStatuses=@{}
-    $names=@(); $sessions=@(); $sessionIndex=@{}; $sessionRead=$null; $lastSessionRead=[DateTimeOffset]::MinValue; $warmHistory=@{}; $stateRefreshAt=[DateTimeOffset]::MinValue; $authIssuesStamp=''
+    $names=@(); $sessions=@(); $sessionIndex=@{}; $sessionRead=$null; $lastSessionRead=[DateTimeOffset]::MinValue; $warmHistory=@{}; $stateRefreshAt=[DateTimeOffset]::MinValue; $authHelperRepairAt=[DateTimeOffset]::MinValue; $authIssuesStamp=''
     $selected = 0; $filter = ''; $notice = ''; $mask = $true; $autoCompact = [bool]$warmSettings.AutoCompactLaunchEnabled; $showShortcuts=$false; $showExtendedInfo=$false; $controlWasDown=$false; $altWasDown=$false
     $dashboardState=@{LastConversation=$null}
     $compactAdjusting=$false; $compactDraft=[int]$warmSettings.AutoCompactThresholdPercent
@@ -518,6 +518,7 @@ function Show-DeckTerminal {
             }
             if($loopNow -ge $stateRefreshAt){
                 $warmSettings=Get-DeckSettings $root
+                if($loopNow -ge $authHelperRepairAt){try{Repair-DeckAuthHelperState $SuiteRoot}catch{};$authHelperRepairAt=$loopNow.AddSeconds(10)}
                 $autoCompact=[bool]$warmSettings.AutoCompactLaunchEnabled
                 $warmHistory=@{}; foreach($entry in @(Expand-DeckCheckRecords (Read-DeckJson (Join-Path $root 'warmup.json')))){if($entry.Account){$warmHistory[$entry.Account]=$entry}}
                 # Refresh disk-backed state at a human-scale cadence; worker
@@ -805,6 +806,29 @@ function Show-DeckTerminal {
                         if(-not (Start-DeckAuthHelperNewAccountLogin $SuiteRoot $newName $chosenEntry.Line $chosenEntry.Email)){throw 'Could not start Auth Helper sign-in.'}
                         $notice="Created $newName; Auth Helper sign-in is running in the background."
                         [void]$profiles.Remove($newName);$stateRefreshAt=[DateTimeOffset]::MinValue
+                    } catch {$notice=$_.Exception.Message}
+                    finally {[Console]::CursorVisible=$false;Clear-Host;$lastFrame=''}
+                }
+                'X' {
+                    if($Harness){$notice='Selected-profile Auth Helper sign-in is available for Codex accounts.';continue}
+                    if(-not $name){$notice='Select an unsigned Codex account first.';continue}
+                    if(-not (Test-DeckCodexAccount $SuiteRoot $name) -or $profiles[$name].PlanType -eq 'pool'){$notice='Select a regular Codex account profile first.';continue}
+                    if(Test-Path -LiteralPath (Join-Path $accountRoot "$name/auth.json") -PathType Leaf){$notice="$name already has credentials. Use L to run Codex sign-in.";continue}
+                    [Console]::CursorVisible=$true;Clear-Host
+                    try {
+                        . (Join-Path $SuiteRoot 'Deck.AuthHelper.ps1')
+                        $helperEntries=@(Get-DeckAuthHelperEntries $SuiteRoot)
+                        if(-not $helperEntries.Count){throw 'The encrypted Auth Helper list is empty. Add account combinations in Auth Helper settings first.'}
+                        Write-Host ('Selected unsigned Codex profile: '+$name)
+                        Write-Host 'Choose a saved Auth Helper account (passwords are not displayed):'
+                        for($entryIndex=0;$entryIndex -lt $helperEntries.Count;$entryIndex++){Write-Host ('  {0}. {1}' -f ($entryIndex+1),$helperEntries[$entryIndex].Email)}
+                        $entryChoice=Read-DeckTerminalInput 'Account number (empty cancels)' 8
+                        if(-not $entryChoice){$notice="$name helper sign-in cancelled.";continue}
+                        if($entryChoice -notmatch '^\d+$' -or [int]$entryChoice -lt 1 -or [int]$entryChoice -gt $helperEntries.Count){throw 'Choose one of the listed Auth Helper account numbers.'}
+                        $chosenEntry=$helperEntries[[int]$entryChoice-1]
+                        if(-not (Start-DeckAuthHelperAccountLogin $SuiteRoot $name $chosenEntry.Line $chosenEntry.Email)){throw 'Could not start Auth Helper sign-in.'}
+                        $notice="$name Auth Helper sign-in is running in the background."
+                        $stateRefreshAt=[DateTimeOffset]::MinValue
                     } catch {$notice=$_.Exception.Message}
                     finally {[Console]::CursorVisible=$false;Clear-Host;$lastFrame=''}
                 }

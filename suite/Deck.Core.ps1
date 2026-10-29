@@ -48,7 +48,7 @@ function Get-DeckDefaults {
         WarmupResetEnabled=$true; WarmupTimedEnabled=$false; WarmupTimes=''
         WarmupStartAtLogin=$true
         FailoverEnabled=$false; FailoverMode='Ordered'; FailoverAccounts=''
-        TerminalScrollbackEnabled=$true
+        TerminalScrollbackEnabled=$true; ClaudeTerminalScrollbackEnabled=$true
         AutoCompactLaunchEnabled=$false; AutoCompactMode='Native'; AutoCompactThresholdPercent=55
         AutoCompactHandoffPrompt='Context is nearing the configured limit. At the next safe point, write a visible task-state handoff beginning with DECK_HANDOFF: with what you''re currently doing, objective, work completed, verified findings, decisions and constraints, unresolved questions, and next steps. Be concise while preserving important information. Also list all references, paths, function names, etc. that will "definitely" be useful/necessary for continuing, as to avoid the need for re-investigation. If the objective, goals, and all remaining tasks or steps are already finished, do not write a handoff. Instead, provide the final answer or summary beginning with CODEX_FINISHED:'
         ContextOptimizer='Off'; CodeGraphEnabled=$false; CodeGraphProjects=''; CodeGraphProfile='core'; BrowserHarnessEnabled=$false
@@ -1028,13 +1028,64 @@ function Start-DeckAuthHelperRecoveryWorker([string]$SuiteRoot,[string]$Account,
         }
         if(-not $Force -and $previous -and $previous.Email -ieq $Email -and [string]$previous.AuthFileStamp -eq $authStamp -and [string]$previous.HelperFileStamp -eq $helperStamp -and $previous.State -in @('unmatched','succeeded','failed')){return $false}
         $attemptId=[guid]::NewGuid().ToString('N')
-        Write-DeckJson (Join-Path $SuiteRoot "deck/auth-helper/status/$Account.json") @{Version=1;Account=$Account;Email=$Email;State='queued';Message='Waiting for Deck Auth Helper.';At=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=$authStamp;HelperFileStamp=$helperStamp;AttemptId=$attemptId}
+        Write-DeckJson (Join-Path $SuiteRoot "deck/auth-helper/status/$Account.json") @{Version=1;Account=$Account;Email=$Email;State='queued';Message='Waiting for Deck Auth Helper.';At=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=$authStamp;HelperFileStamp=$helperStamp;AttemptId=$attemptId;ProcessId=0}
         $process=Start-DeckBackgroundPowerShell $helper @('-Recover','-SuiteRoot',$SuiteRoot,'-Account',$Account,'-Email',$Email,'-BrowserHarness','-Force','-AttemptId',$attemptId)
+        $queued=Read-DeckJson (Join-Path $SuiteRoot "deck/auth-helper/status/$Account.json")
+        if($queued -and $queued.AttemptId -eq $attemptId -and $queued.State -eq 'queued'){$queued.ProcessId=$process.Id;Write-DeckJson (Join-Path $SuiteRoot "deck/auth-helper/status/$Account.json") $queued}
         $process.Dispose()
         return $true
     } catch {
-        try{Write-DeckJson (Join-Path $SuiteRoot "deck/auth-helper/status/$Account.json") @{Version=1;Account=$Account;Email=$Email;State='failed';Message='Could not start Deck Auth Helper.';At=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=$authStamp;HelperFileStamp=$helperStamp;AttemptId=$attemptId}}catch{}
+        try{Write-DeckJson (Join-Path $SuiteRoot "deck/auth-helper/status/$Account.json") @{Version=1;Account=$Account;Email=$Email;State='failed';Message='Could not start Deck Auth Helper.';At=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=$authStamp;HelperFileStamp=$helperStamp;AttemptId=$attemptId;ProcessId=0}}catch{}
         return $false
+    }
+}
+function Repair-DeckAuthHelperState([string]$SuiteRoot) {
+    $accountRoot=Join-Path $SuiteRoot 'accounts'
+    $statusRoot=Join-Path $SuiteRoot 'deck/auth-helper/status'
+    if(-not (Test-Path -LiteralPath $statusRoot -PathType Container)){return}
+    $now=[DateTimeOffset]::UtcNow
+    foreach($file in @(Get-ChildItem -LiteralPath $statusRoot -Filter '*.json' -File -ErrorAction SilentlyContinue)){
+        $account=$file.BaseName
+        if(-not (Test-Path -LiteralPath (Join-Path $accountRoot $account) -PathType Container)){
+            Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+            continue
+        }
+        $status=Read-DeckJson $file.FullName
+        if(-not $status -or $status.State -notin @('queued','running')){continue}
+        try{$age=($now-[DateTimeOffset]::Parse([string]$status.At)).TotalSeconds}catch{continue}
+        $staleAfter=if($status.State -eq 'queued'){120}else{480}
+        if($age -lt $staleAfter){continue}
+        $processId=0
+        try{$processId=[int]$status.ProcessId}catch{}
+        $worker=$null
+        if($processId -gt 0){try{$worker=Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue}catch{}}
+        $commandLine=if($worker){[string]$worker.CommandLine}else{''}
+        $scriptPattern=[regex]::Escape((Join-Path $SuiteRoot 'Deck.AuthHelper.ps1'))
+        $accountPattern='(?i)(?:^|\s)-Account(?:\s+|:)\s*["'']?'+[regex]::Escape($account)+'["'']?(?:\s|$)'
+        $isHelperWorker=$commandLine -match $scriptPattern -and $commandLine -match $accountPattern
+        if(-not $isHelperWorker -and $age -ge 600){
+            $worker=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {$_.CommandLine -match $scriptPattern -and $_.CommandLine -match $accountPattern} | Select-Object -First 1
+            if($worker){$processId=[int]$worker.ProcessId;$isHelperWorker=$true}
+        }
+        if($isHelperWorker -and $age -lt 600){continue}
+        if($isHelperWorker){try{& taskkill.exe /PID $processId /T /F *> $null}catch{}}
+        $lockPath=Join-Path $SuiteRoot "deck/auth-helper/$account.lock"
+        try{$lock=[IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None);$lock.Dispose()}catch{continue}
+        $status.State='failed'
+        $status.Message='Auth Helper stopped before reporting an outcome. Press X to retry this profile.'
+        $status.At=$now.ToString('o')
+        $status.ProcessId=0
+        Write-DeckJson $file.FullName $status
+    }
+    $batchPath=Join-Path $SuiteRoot 'deck/auth-helper/batch.json'
+    $batch=Read-DeckJson $batchPath
+    if($batch -and $batch.State -eq 'started'){
+        try{$batchAge=($now-[DateTimeOffset]::Parse([string]$batch.At)).TotalSeconds}catch{$batchAge=0}
+        if($batchAge -ge 60){
+            $batchProcess=$null
+            try{if([int]$batch.ProcessId -gt 0){$batchProcess=Get-Process -Id ([int]$batch.ProcessId) -ErrorAction SilentlyContinue}}catch{}
+            if(-not $batchProcess){$batch.State='failed';$batch.Message='Batch login stopped before its workers finished.';$batch.ProcessId=0;$batch.At=$now.ToString('o');Write-DeckJson $batchPath $batch}
+        }
     }
 }
 function Open-DeckAuthHelper([string]$SuiteRoot) {

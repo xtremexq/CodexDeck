@@ -39,11 +39,13 @@ function Write-DeckAuthHelperText([string]$Root,[string]$Text) {
 function Get-DeckAuthHelperStatusPath([string]$Root,[string]$Account) {
     return Join-Path $Root "deck/auth-helper/status/$Account.json"
 }
-function Set-DeckAuthHelperStatus([string]$Root,[string]$Account,[string]$Email,[string]$State,[string]$Message='',[string]$AuthFileStamp,[string]$AttemptId=$script:AttemptId) {
+function Set-DeckAuthHelperStatus([string]$Root,[string]$Account,[string]$Email,[string]$State,[string]$Message='',[string]$AuthFileStamp,[string]$AttemptId=$script:AttemptId,[int]$ProcessId=$PID) {
     try {
         $path=Get-DeckAuthHelperStatusPath $Root $Account
+        $effectiveAttemptId=[string]$AttemptId
+        if($effectiveAttemptId){$current=Read-DeckJson $path;if($current -and $current.AttemptId -and [string]$current.AttemptId -ne $effectiveAttemptId){return}}
         if(-not $PSBoundParameters.ContainsKey('AuthFileStamp')){$AuthFileStamp=Get-DeckAuthFileStamp $Root $Account}
-        Write-DeckJson $path @{Version=1;Account=$Account;Email=$Email;State=$State;Message=$Message;At=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=$AuthFileStamp;HelperFileStamp=$(try{(Get-Item -LiteralPath (Get-DeckAuthHelperPath $Root) -ErrorAction Stop).LastWriteTimeUtc.Ticks.ToString()}catch{'0'});AttemptId=$AttemptId}
+        Write-DeckJson $path @{Version=1;Account=$Account;Email=$Email;State=$State;Message=$Message;At=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=$AuthFileStamp;HelperFileStamp=$(try{(Get-Item -LiteralPath (Get-DeckAuthHelperPath $Root) -ErrorAction Stop).LastWriteTimeUtc.Ticks.ToString()}catch{'0'});AttemptId=$AttemptId;ProcessId=$ProcessId}
     } catch {}
 }
 function Get-DeckAuthHelperEntries([string]$Root) {
@@ -131,21 +133,32 @@ function Start-DeckAuthHelperNewAccountLogin([string]$Root,[string]$Account,[int
     $accountDirectory=Join-Path $Root ('accounts/'+$Account)
     if(-not (Test-Path -LiteralPath $accountDirectory -PathType Container)){throw 'Prepare a new Codex account profile before starting Auth Helper sign-in.'}
     if(Test-Path -LiteralPath (Join-Path $accountDirectory 'auth.json') -PathType Leaf){throw 'This Codex account already has sign-in credentials.'}
+    $lockPath=Join-Path $Root "deck/auth-helper/$Account.lock"
+    try{$lockProbe=[IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None);$lockProbe.Dispose()}catch{throw 'An Auth Helper sign-in is already running for this profile.'}
     $entry=Get-DeckAuthHelperEntryByLine $Root $EntryLine $Email
     $helper=Join-Path $Root 'Deck.AuthHelper.ps1'
     if(-not (Test-Path -LiteralPath $helper -PathType Leaf)){throw 'Deck Auth Helper is missing. Reinstall Codex Deck.'}
     if(-not (Get-Command Start-DeckBackgroundPowerShell -ErrorAction SilentlyContinue)){. (Join-Path $Root 'Deck.Core.ps1')}
     $attemptId=[guid]::NewGuid().ToString('N')
     Remove-Item -LiteralPath (Get-DeckAuthHelperStatusPath $Root $Account) -ErrorAction SilentlyContinue
-    Set-DeckAuthHelperStatus $Root $Account $entry.Email 'queued' 'Starting a new Codex profile sign-in.' -AttemptId $attemptId
+    Set-DeckAuthHelperStatus $Root $Account $entry.Email 'queued' 'Starting a new Codex profile sign-in.' -AttemptId $attemptId -ProcessId 0
     try {
         $process=Start-DeckBackgroundPowerShell $helper @('-Recover','-SuiteRoot',$Root,'-Account',$Account,'-Email',$entry.Email,'-EntryLine',$EntryLine,'-BrowserHarness','-NewAccountLogin','-Force','-AttemptId',$attemptId)
+        $queued=Read-DeckJson (Get-DeckAuthHelperStatusPath $Root $Account)
+        if($queued -and $queued.AttemptId -eq $attemptId -and $queued.State -eq 'queued'){Set-DeckAuthHelperStatus $Root $Account $entry.Email 'queued' 'Starting a new Codex profile sign-in.' -AttemptId $attemptId -ProcessId $process.Id}
         $process.Dispose()
         return $true
     } catch {
-        Set-DeckAuthHelperStatus $Root $Account $entry.Email 'failed' 'Could not start Auth Helper sign-in.'
+        Set-DeckAuthHelperStatus $Root $Account $entry.Email 'failed' 'Could not start Auth Helper sign-in.' -AttemptId $attemptId -ProcessId 0
         throw
     }
+}
+function Start-DeckAuthHelperAccountLogin([string]$Root,[string]$Account,[int]$EntryLine,[string]$Email) {
+    if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){throw 'Invalid Codex account name.'}
+    $accountDirectory=Join-Path $Root ('accounts/'+$Account)
+    if(-not (Test-Path -LiteralPath $accountDirectory -PathType Container)){throw 'The selected Codex account profile no longer exists.'}
+    if(Test-Path -LiteralPath (Join-Path $accountDirectory 'auth.json') -PathType Leaf){throw 'This Codex profile already has credentials. Use its regular login action to change the signed-in identity.'}
+    return Start-DeckAuthHelperNewAccountLogin $Root $Account $EntryLine $Email
 }
 function Invoke-DeckAuthHelperBatch([string]$Root,[string[]]$RequestedAccounts,[int]$Limit=2,[switch]$BrowserHarness) {
     $targets=Get-DeckAuthHelperBatchTargets $Root $RequestedAccounts
@@ -160,33 +173,47 @@ function Invoke-DeckAuthHelperBatch([string]$Root,[string[]]$RequestedAccounts,[
     $scriptPath=Join-Path $Root 'Deck.AuthHelper.ps1'
     $running=New-Object System.Collections.ArrayList
     $mapped=@()
+    $batchHadFailures=$false
+    $workerTimeout=[TimeSpan]::FromMinutes(8)
     $entryIndex=0
     foreach($account in $targets){
         $entry=if($entryIndex -lt $available.Count){$available[$entryIndex]}else{$null}
         $entryIndex++
         if(-not $entry){
             Set-DeckAuthHelperStatus $Root $account '' 'unmatched' 'No unused helper credential remains for this account.'
+            $batchHadFailures=$true
             continue
         }
         Remove-Item -LiteralPath (Get-DeckAuthHelperStatusPath $Root $account) -ErrorAction SilentlyContinue
-        Set-DeckAuthHelperStatus $Root $account $entry.Email 'queued' 'Queued by Deck batch login.'
+        $attemptId=[guid]::NewGuid().ToString('N')
+        Set-DeckAuthHelperStatus $Root $account $entry.Email 'queued' 'Queued by Deck batch login.' -AttemptId $attemptId -ProcessId 0
         while($running.Count -ge [Math]::Max(1,[Math]::Min(8,$Limit))){
             foreach($slot in @($running | ForEach-Object {$_})){
-                if($slot.Process.HasExited){try{$slot.Process.Dispose()}catch{};[void]$running.Remove($slot)}
+                $expired=([DateTimeOffset]::UtcNow-$slot.StartedAt) -ge $workerTimeout
+                if($slot.Process.HasExited -or $expired){
+                    if($expired -and -not $slot.Process.HasExited){try{Stop-Process -Id $slot.Process.Id -Force -ErrorAction SilentlyContinue}catch{};Set-DeckAuthHelperStatus $Root $slot.Account '' 'failed' 'Auth Helper worker timed out; retry this profile from the dashboard.' -AttemptId $slot.AttemptId -ProcessId 0;$batchHadFailures=$true}
+                    elseif($slot.Process.HasExited){$status=Read-DeckJson (Get-DeckAuthHelperStatusPath $Root $slot.Account);if($status -and $status.AttemptId -eq $slot.AttemptId -and $status.State -in @('queued','running')){Set-DeckAuthHelperStatus $Root $slot.Account ([string]$status.Email) 'failed' 'Auth Helper worker exited before reporting an outcome.' -AttemptId $slot.AttemptId -ProcessId 0;$batchHadFailures=$true}elseif($status.State -in @('failed','unmatched')){$batchHadFailures=$true}}
+                    try{$slot.Process.Dispose()}catch{};[void]$running.Remove($slot)
+                }
             }
             if($running.Count -ge [Math]::Max(1,[Math]::Min(8,$Limit))){Start-Sleep -Milliseconds 250}
         }
-        $childArgs=@('-Recover','-SuiteRoot',$Root,'-Account',$account,'-Email',$entry.Email)
+        $childArgs=@('-Recover','-SuiteRoot',$Root,'-Account',$account,'-Email',$entry.Email,'-AttemptId',$attemptId)
         if($BrowserHarness){$childArgs+=@('-BrowserHarness')}
-        try{$child=Start-DeckBackgroundPowerShell $scriptPath $childArgs;[void]$running.Add([pscustomobject]@{Account=$account;Process=$child});$mapped+=[pscustomobject]@{Account=$account;Email=$entry.Email}}catch{Set-DeckAuthHelperStatus $Root $account $entry.Email 'failed' $_.Exception.Message}
+        try{$child=Start-DeckBackgroundPowerShell $scriptPath $childArgs;$queued=Read-DeckJson (Get-DeckAuthHelperStatusPath $Root $account);if($queued -and $queued.AttemptId -eq $attemptId -and $queued.State -eq 'queued'){Set-DeckAuthHelperStatus $Root $account $entry.Email 'queued' 'Queued by Deck batch login.' -AttemptId $attemptId -ProcessId $child.Id};[void]$running.Add([pscustomobject]@{Account=$account;Process=$child;AttemptId=$attemptId;StartedAt=[DateTimeOffset]::UtcNow});$mapped+=[pscustomobject]@{Account=$account;Email=$entry.Email}}catch{Set-DeckAuthHelperStatus $Root $account $entry.Email 'failed' $_.Exception.Message -AttemptId $attemptId -ProcessId 0;$batchHadFailures=$true}
     }
     while($running.Count){
         foreach($slot in @($running | ForEach-Object {$_})){
-            if($slot.Process.HasExited){try{$slot.Process.Dispose()}catch{};[void]$running.Remove($slot)}
+            $expired=([DateTimeOffset]::UtcNow-$slot.StartedAt) -ge $workerTimeout
+            if($slot.Process.HasExited -or $expired){
+                if($expired -and -not $slot.Process.HasExited){try{Stop-Process -Id $slot.Process.Id -Force -ErrorAction SilentlyContinue}catch{};Set-DeckAuthHelperStatus $Root $slot.Account '' 'failed' 'Auth Helper worker timed out; retry this profile from the dashboard.' -AttemptId $slot.AttemptId -ProcessId 0;$batchHadFailures=$true}
+                elseif($slot.Process.HasExited){$status=Read-DeckJson (Get-DeckAuthHelperStatusPath $Root $slot.Account);if($status -and $status.AttemptId -eq $slot.AttemptId -and $status.State -in @('queued','running')){Set-DeckAuthHelperStatus $Root $slot.Account ([string]$status.Email) 'failed' 'Auth Helper worker exited before reporting an outcome.' -AttemptId $slot.AttemptId -ProcessId 0;$batchHadFailures=$true}elseif($status.State -in @('failed','unmatched')){$batchHadFailures=$true}}
+                try{$slot.Process.Dispose()}catch{};[void]$running.Remove($slot)
+            }
         }
         if($running.Count){Start-Sleep -Milliseconds 250}
     }
-    Write-DeckAuthHelperBatchStatus $Root 'completed' 'Batch login workers finished.' 0 $targets
+    Write-DeckAuthHelperBatchStatus $Root $(if($batchHadFailures){'failed'}else{'completed'}) $(if($batchHadFailures){'Batch login finished with failed or unmatched profiles.'}else{'Batch login workers finished.'}) 0 $targets
 }
 function ConvertTo-DeckAuthHelperArgument([AllowEmptyString()][string]$Value) {
     if($null -eq $Value){$Value=''}
@@ -202,7 +229,7 @@ function Invoke-DeckAuthHelperBrowserHarness([string]$Root,[string]$Url,[string]
         # reused for another account, and no existing user tab is touched.
         $env:DECK_AUTH_TARGET=''
         $harnessCode=@'
-import base64, hashlib, hmac, json, os, re, sys, time
+import atexit, base64, hashlib, hmac, json, os, re, sys, time
 
 url = os.environ["DECK_AUTH_URL"]
 email = os.environ["DECK_AUTH_EMAIL"]
@@ -226,6 +253,13 @@ if not target:
         json.dump({"TargetId": target}, output)
     goto_url(url)
 print("Deck sign-in opened in one new background Chrome tab.", flush=True)
+
+def close_helper_tab():
+    try:
+        cdp("Target.closeTarget", _response_timeout=3.0, targetId=target)
+    except Exception:
+        pass
+atexit.register(close_helper_tab)
 
 def evaluate(expression):
     response = cdp("Runtime.evaluate", _response_timeout=20.0, expression=expression, returnByValue=True, awaitPromise=True)
@@ -274,7 +308,7 @@ def click_continue(state, allow_consent=False):
     buttons = sorted(state.get("buttons", []), key=lambda button: button.get("type", "") != "submit")
     for button in buttons:
         label = button.get("text", "").strip().lower()
-        allowed = ("continue", "next", "submit", "authorize", "approve", "allow", "confirm")
+        allowed = ("continue", "next", "submit", "authorize", "approve", "allow", "confirm", "try again", "retry")
         if any(word in label for word in allowed) and (allow_consent or not any(word in label for word in ("authorize", "approve", "allow"))):
             label = button.get("text", "")
             expression = """(()=>{const wanted=%s;const els=[...document.querySelectorAll('button,[role=button],input[type=submit]')];const e=els.find(x=>(x.innerText||x.value||x.getAttribute('aria-label')||'').trim()===wanted);if(!e)return false;e.click();return true;})()""" % json.dumps(label)
@@ -295,6 +329,7 @@ def make_totp(secret):
 
 deadline = time.time() + 300
 challenge_since = None
+service_retry_count = 0
 email_done = password_done = otp_done = False
 email_submitted_at = None
 while time.time() < deadline:
@@ -326,6 +361,17 @@ while time.time() < deadline:
         raise RuntimeError("OpenAI rejected the sign-in details or requires an account check; stopped.")
     if "unexpected token" in body or "not valid json" in body:
         raise RuntimeError("OpenAI returned an invalid response after sign-in; stopped for a safe retry.")
+    if "operation timed out" in body or "oops, an error occurred" in body:
+        if service_retry_count >= 1:
+            raise RuntimeError("OpenAI sign-in service timed out after one retry.")
+        if not click_continue(state, allow_consent=True):
+            raise RuntimeError("OpenAI sign-in service timed out and did not expose a Retry action.")
+        service_retry_count += 1
+        email_done = password_done = otp_done = False
+        email_submitted_at = None
+        print("Retried the timed-out OpenAI sign-in page once.", flush=True)
+        time.sleep(1.5)
+        continue
     security_page = any(s in body or s in title for s in ("cloudflare", "verify you are human", "checking your browser", "just a moment", "security verification", "captcha"))
     if security_page:
         if challenge_since is None:
@@ -379,9 +425,19 @@ while time.time() < deadline:
 else:
     raise RuntimeError("OpenAI sign-in did not finish before the five-minute timeout.")
 '@
-        $harnessOutput=@($harnessCode | & browser-harness 2>&1)
-        if($LASTEXITCODE -ne 0){
-            $detail=($harnessOutput | ForEach-Object {[string]$_}) -join ' '
+        $harnessCommand=Get-Command browser-harness -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $harnessInfo=[Diagnostics.ProcessStartInfo]::new();$harnessInfo.FileName=$harnessCommand.Source;$harnessInfo.UseShellExecute=$false;$harnessInfo.CreateNoWindow=$true;$harnessInfo.RedirectStandardInput=$true;$harnessInfo.RedirectStandardOutput=$true;$harnessInfo.RedirectStandardError=$true
+        $harnessProcess=$null
+        try {
+            $harnessProcess=[Diagnostics.Process]::Start($harnessInfo)
+            $harnessStdout=$harnessProcess.StandardOutput.ReadToEndAsync();$harnessStderr=$harnessProcess.StandardError.ReadToEndAsync()
+            $harnessProcess.StandardInput.WriteLine($harnessCode);$harnessProcess.StandardInput.Close()
+            if(-not $harnessProcess.WaitForExit(330000)){try{$harnessProcess.Kill()}catch{};throw 'Browser-harness sign-in timed out before OAuth completed.'}
+            $harnessExitCode=$harnessProcess.ExitCode
+            $harnessOutput=$harnessStdout.Result+' '+$harnessStderr.Result
+        } finally {try{if($harnessProcess -and -not $harnessProcess.HasExited){$harnessProcess.Kill()}}catch{};try{if($harnessProcess){$harnessProcess.Dispose()}}catch{}}
+        if($harnessExitCode -ne 0){
+            $detail=[string]$harnessOutput
             if($detail -match '(?i)security check|cloudflare|captcha|verify you are human'){throw 'OpenAI still requires a security check in the background Chrome tab; stopped without solving it.'}
             if($detail -match '(?i)invalid response|unexpected token|not valid json'){throw 'OpenAI returned an invalid response after sign-in; stopped for a safe retry.'}
             if($detail -match '(?i)did not advance after the email step'){throw 'OpenAI did not advance after the email step in the background tab.'}
@@ -389,7 +445,7 @@ else:
             if($detail -match '(?i)could not fill the password field'){throw 'The background tab did not expose a usable password field.'}
             if($detail -match '(?i)authenticator|TOTP|one-time'){throw 'The background tab did not accept the authenticator step.'}
             if($detail -match '(?i)workspace selection'){throw 'The background tab did not expose the selected workspace Continue action.'}
-            if($detail -match '(?i)timeout|did not finish'){throw 'The background sign-in timed out before OAuth completed.'}
+            if($detail -match '(?i)timeout|did not finish|timed out'){throw 'The background sign-in timed out before OAuth completed.'}
             throw 'Browser-harness sign-in stopped before completing OAuth.'
         }
     } finally {
@@ -445,7 +501,11 @@ function Invoke-DeckAuthHelperRecovery([string]$Root,[string]$Account,[string]$E
     if(-not $ShowBrowser -and -not $BrowserHarness -and -not $Force -and $previous -and $previous.Email -ieq $Email -and [string]$previous.AuthFileStamp -eq $authStamp -and [string]$previous.HelperFileStamp -eq $helperStamp -and $previous.State -in @('unmatched','succeeded','failed')){return}
     $lockPath=Join-Path $Root "deck/auth-helper/$Account.lock"
     [void][IO.Directory]::CreateDirectory((Split-Path -Parent $lockPath))
-    try{$lock=[IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}catch{return}
+    try{$lock=[IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}catch{
+        $current=Read-DeckJson (Get-DeckAuthHelperStatusPath $Root $Account)
+        if($current -and [string]$current.AttemptId -eq [string]$script:AttemptId){Set-DeckAuthHelperStatus $Root $Account $entry.Email 'failed' 'Another sign-in still holds this profile. Retry after the active sign-in finishes.' $authStamp}
+        return
+    }
     try {
         Set-DeckAuthHelperStatus $Root $Account $entry.Email 'running' 'Starting Deck-managed OAuth login.'
         Start-DeckAuthHelperBrowser $Root $Account $entry.Email $entry.Password $entry.Otp -ShowBrowser:$ShowBrowser -BrowserHarness:$BrowserHarness

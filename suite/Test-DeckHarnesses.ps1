@@ -25,6 +25,7 @@ try{
     foreach($id in @('Claude','Antigravity','OpenCode')){Assert (-not (Test-DeckHarnessEnabled $preferences $id)) 'Optional harness enabled by default'}
     foreach($id in @('Codex','Claude','Antigravity','OpenCode')){Assert (-not $preferences[('Harness'+$id+'FullPermissions')]) 'Dangerous permissions must be opt-in by default'}
     Assert (-not $preferences.HarnessAntigravityFailoverEnabled -and $preferences.HarnessAntigravityFailoverAccounts -eq '*') 'AGY headless failover defaults are invalid'
+    Assert $preferences.ClaudeTerminalScrollbackEnabled 'Claude native terminal scrollback must default on'
     Refuses {New-DeckHarnessAccount $fixture disabled Claude Claude} 'Disabled harness accepted'
     foreach($id in @('Claude','Antigravity','OpenCode')){$preferences[('Harness'+$id+'Enabled')]=$true}
     $executable=Join-Path $fixture 'fake harness.exe'
@@ -36,7 +37,7 @@ public static class FakeDeckHarness {
     public static int Main(string[] args) {
         using(var output=new StreamWriter(Environment.GetEnvironmentVariable("DECK_TEST_CAPTURE"))) {
             foreach(var arg in args) output.WriteLine("arg="+Convert.ToBase64String(Encoding.UTF8.GetBytes(arg)));
-            foreach(var key in new[]{"CLAUDE_CONFIG_DIR","ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_BASE_URL","ANTHROPIC_MODEL","CLAUDE_CODE_OAUTH_TOKEN","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN","AWS_PROFILE","AWS_BEARER_TOKEN_BEDROCK","ANTHROPIC_BEDROCK_BASE_URL","ANTHROPIC_VERTEX_PROJECT_ID","ANTHROPIC_VERTEX_REGION","GOOGLE_APPLICATION_CREDENTIALS","CLOUD_ML_REGION","CLOUD_ML_PROJECT_ID","XDG_DATA_HOME","XDG_CONFIG_HOME","OPENCODE_CONFIG_DIR","OPENCODE_CONFIG_CONTENT","USERPROFILE","HOME","APPDATA","LOCALAPPDATA","SSH_CONNECTION","AGY_ADC_AUTH","GEMINI_API_KEY"})
+            foreach(var key in new[]{"CLAUDE_CONFIG_DIR","CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN","ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_BASE_URL","ANTHROPIC_MODEL","CLAUDE_CODE_OAUTH_TOKEN","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN","AWS_PROFILE","AWS_BEARER_TOKEN_BEDROCK","ANTHROPIC_BEDROCK_BASE_URL","ANTHROPIC_VERTEX_PROJECT_ID","ANTHROPIC_VERTEX_REGION","GOOGLE_APPLICATION_CREDENTIALS","CLOUD_ML_REGION","CLOUD_ML_PROJECT_ID","XDG_DATA_HOME","XDG_CONFIG_HOME","OPENCODE_CONFIG_DIR","OPENCODE_CONFIG_CONTENT","USERPROFILE","HOME","APPDATA","LOCALAPPDATA","SSH_CONNECTION","AGY_ADC_AUTH","GEMINI_API_KEY"})
                 output.WriteLine(key+"="+Convert.ToBase64String(Encoding.UTF8.GetBytes(Environment.GetEnvironmentVariable(key)??"")));
         }
         if(args.Length==2 && args[0]=="auth" && args[1]=="status") {
@@ -101,8 +102,14 @@ public static class FakeDeckHarness {
     Assert (($a.Arguments -join '|') -eq 'auth|login') 'Claude login translation failed'
     Assert (($b.Arguments -join '|') -eq 'auth|logout') 'Claude logout translation failed'
     Assert ($a.Environment.CLAUDE_CONFIG_DIR -ne $b.Environment.CLAUDE_CONFIG_DIR) 'Claude accounts share config/credentials'
+    Assert ($a.Remove -contains 'CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN' -and -not $a.Environment.ContainsKey('CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN')) 'Claude authentication command inherited the interactive scrollback override'
     $claudeNoArgs=Get-DeckHarnessLaunch $fixture claudeA @($null)
     Assert ($claudeNoArgs.Arguments -contains '--dangerously-skip-permissions' -and @($claudeNoArgs.Arguments | Where-Object {$null -eq $_}).Count -eq 0) 'Claude dashboard launch with an empty argument passed a null to the CLI'
+    Assert ($claudeNoArgs.Environment.CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN -eq '1' -and $claudeNoArgs.Remove -notcontains 'CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN') 'Interactive Claude launch did not enable native terminal scrollback'
+    $preferences.ClaudeTerminalScrollbackEnabled=$false;Write-DeckJson (Join-Path $fixture 'deck/settings.json') $preferences
+    $claudeScrollbackDisabled=Get-DeckHarnessLaunch $fixture claudeA @()
+    Assert (-not $claudeScrollbackDisabled.Environment.ContainsKey('CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN') -and $claudeScrollbackDisabled.Remove -contains 'CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN') 'Disabled Claude scrollback preference did not restore Claude renderer defaults'
+    $preferences.ClaudeTerminalScrollbackEnabled=$true;Write-DeckJson (Join-Path $fixture 'deck/settings.json') $preferences
     $agyNoArgs=Get-DeckHarnessLaunch $fixture googleA @($null)
     Assert ($agyNoArgs.Arguments -contains '--dangerously-skip-permissions' -and @($agyNoArgs.Arguments | Where-Object {$null -eq $_}).Count -eq 0) 'AGY dashboard launch with an empty argument passed a null to the CLI'
     $a=Get-DeckHarnessLaunch $fixture openA @('login')
@@ -132,6 +139,7 @@ public static class FakeDeckHarness {
     }
     Assert (($capturedArgs | ConvertTo-Json -Compress) -ceq ($nativeArguments | ConvertTo-Json -Compress)) 'Native arguments changed (quotes, Unicode, spaces, empty or trailing slash)'
     Assert (-not $records.ANTHROPIC_API_KEY -and -not $records.ANTHROPIC_AUTH_TOKEN -and -not $records.CLAUDE_CODE_OAUTH_TOKEN) 'Claude inherited API/OAuth authentication'
+    Assert (-not $records.CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN) 'Claude auth/status command received the interactive scrollback override'
     foreach($key in $claudeCredentialEnvironmentKeys){Assert (-not $records[$key]) "Claude inherited external provider/auth environment $key"}
     Assert ($records.CLAUDE_CONFIG_DIR -eq (Join-Path $fixture 'accounts/claudeA/claude')) 'Wrong Claude credential directory'
     foreach($key in @('USERPROFILE','HOME','APPDATA','LOCALAPPDATA')){Assert ($records[$key] -ceq $expectedWindowsDirectories[$key]) ("Claude changed the Windows $key environment needed by child tools (child='{0}', parent='{1}')" -f $records[$key],$expectedWindowsDirectories[$key]);Assert ([string][Environment]::GetEnvironmentVariable($key,'Process') -ceq $expectedWindowsDirectories[$key]) "Claude launch changed the parent $key environment"}
@@ -196,6 +204,8 @@ public static class FakeDeckHarness {
     Assert ($claudeSessionLaunch.Arguments -contains '--dangerously-skip-permissions') 'New/current Claude account launch did not inherit global dangerous mode'
     Invoke-DeckHarnessAccount $fixture claudeA @()
     Assert ($LASTEXITCODE -eq 17) 'Claude interactive launch lost native exit code'
+    $sessionEnvironment=@{};foreach($line in [IO.File]::ReadAllLines($env:DECK_TEST_CAPTURE)){$parts=$line.Split('=',2);$sessionEnvironment[$parts[0]]=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($parts[1]))}
+    Assert ($sessionEnvironment.CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN -eq '1') 'Interactive Claude process did not receive the terminal scrollback setting'
     Assert (@(Get-ChildItem -LiteralPath $claudeSessionLaunch.Environment.CLAUDE_CONFIG_DIR -Filter '.codexdeck-*' -File).Count -eq 0) 'Claude temporary defaults/instruction files were not cleaned up after launch'
     Assert (@(Get-DeckSessions (Join-Path $fixture 'deck')).Count -eq 0) 'Claude session was not cleaned up after launch'
     [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'accounts/claudeB/claude'))

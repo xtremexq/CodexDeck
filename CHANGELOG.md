@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.8.9 - 2026-10-29
+
+- Added a default-on Claude terminal scrollback option for interactive Claude Code sessions.
+- Added **X** to sign in to the selected unsigned Codex profile with a chosen Auth Helper identity; removed orphaned sign-in statuses and recover stale workers instead of leaving the dashboard queued indefinitely.
+- Added an eight-minute limit to Auth Helper batch workers, with failed batch summaries and per-profile timeout messages.
 - Fixed Harnesses install/update state, background progress, timeout and cleanup behavior. Added `agy-auth` with isolated Antigravity profiles, local credential checks, account/global rules and settings defaults, native skills paths, and no additional Windows-user requirement for new profiles.
 - Added `claude-auth`, a Claude-only account dashboard and launcher. It creates isolated local profiles on first use, maps `accountX` to `claude-accountX` to avoid colliding with Codex profiles, shows profile credential status, and opens Claude's native sign-in flow.
 - Added separate Claude global instructions and settings defaults, per-profile `claude auth status` checks, account `CLAUDE.md` editing, isolated home-level config, and encrypted backup support. Claude plan quota stays in `/usage`; Claude warm-ups are not run because they consume plan usage.

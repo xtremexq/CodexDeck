@@ -344,11 +344,15 @@ function Get-DeckHarnessLaunch([string]$SuiteRoot,[string]$Account,[string[]]$Ar
         # credentials separate. Preserve the real Windows profile for git, ssh,
         # gh and other tools Claude may launch from its session.
         $environment.CLAUDE_CONFIG_DIR=$claudeProfile
-        $remove=@('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_PROFILE','ANTHROPIC_BASE_URL','ANTHROPIC_MODEL','CLAUDE_CODE_OAUTH_TOKEN','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY','AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN','AWS_PROFILE','AWS_BEARER_TOKEN_BEDROCK','ANTHROPIC_BEDROCK_BASE_URL','ANTHROPIC_VERTEX_PROJECT_ID','ANTHROPIC_VERTEX_REGION','GOOGLE_APPLICATION_CREDENTIALS','CLOUD_ML_REGION','CLOUD_ML_PROJECT_ID','CLAUDE_CODE_DISABLE_CLAUDE_MDS','CLAUDE_CODE_DISABLE_AUTO_MEMORY')
+        $remove=@('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_PROFILE','ANTHROPIC_BASE_URL','ANTHROPIC_MODEL','CLAUDE_CODE_OAUTH_TOKEN','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY','AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN','AWS_PROFILE','AWS_BEARER_TOKEN_BEDROCK','ANTHROPIC_BEDROCK_BASE_URL','ANTHROPIC_VERTEX_PROJECT_ID','ANTHROPIC_VERTEX_REGION','GOOGLE_APPLICATION_CREDENTIALS','CLOUD_ML_REGION','CLOUD_ML_PROJECT_ID','CLAUDE_CODE_DISABLE_CLAUDE_MDS','CLAUDE_CODE_DISABLE_AUTO_MEMORY','CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN')
         if($argsList -and $argsList[0] -eq 'login'){$argsList=@('auth','login')+@($argsList | Select-Object -Skip 1)}
         if($argsList -and $argsList[0] -eq 'logout'){$argsList=@('auth','logout')+@($argsList | Select-Object -Skip 1)}
         if(Test-DeckClaudeSessionLaunch $argsList){
             $claudeContextPolicy=Get-DeckClaudeContextPolicy $SuiteRoot
+            if([bool]$preferences.ClaudeTerminalScrollbackEnabled){
+                $environment.CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN='1'
+                $remove=@($remove | Where-Object {$_ -ne 'CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN'})
+            }
             if(-not $claudeContextPolicy.AutoMemoryEnabled){$environment.CLAUDE_CODE_DISABLE_AUTO_MEMORY='1';$remove=@($remove | Where-Object {$_ -ne 'CLAUDE_CODE_DISABLE_AUTO_MEMORY'})}
             if(@($claudeContextPolicy.SettingSources).Count -lt 3){
                 $cleanSources=[Collections.Generic.List[string]]::new()
@@ -403,7 +407,7 @@ function Get-DeckHarnessLaunch([string]$SuiteRoot,[string]$Account,[string[]]$Ar
             if($explicitSettings.Found){$argsList=@($explicitSettings.Arguments)}
         }else{$claudeDefaults=$null}
     }else{$claudeDefaults=$null}
-    foreach($key in $environment.Keys){if($key -notin @('SSH_CONNECTION','AGY_ADC_AUTH','CLAUDE_CODE_DISABLE_AUTO_MEMORY')){Assert-DeckHarnessPath $directory $environment[$key]}}
+    foreach($key in $environment.Keys){if($key -notin @('SSH_CONNECTION','AGY_ADC_AUTH','CLAUDE_CODE_DISABLE_AUTO_MEMORY','CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN')){Assert-DeckHarnessPath $directory $environment[$key]}}
     $instructionsPath=$null
     if($identity.Harness -eq 'Claude' -and (Test-DeckClaudeSessionLaunch $argsList)){
         $candidate=Get-DeckClaudeGlobalInstructionsPath $SuiteRoot

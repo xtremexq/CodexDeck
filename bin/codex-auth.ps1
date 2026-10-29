@@ -754,7 +754,7 @@ function Show-Usage {
     Write-Host "Usage: codex-auth [dashboard|status|resume|accountN|N|list] [codex args...]"
     Write-Host "  codex-auth          Interactive account dashboard"
     Write-Host "  codex-auth -a       Open the dashboard and queue checks for every signed-in account"
-    Write-Host "  Dashboard: O new helper creates an unsigned profile and lets you select a saved Auth Helper combo"
+    Write-Host "  Dashboard: X helper sign-in uses the selected profile; O new helper creates a profile and signs it in"
     Write-Host "  codex-auth status   Cached dashboard snapshot (no network)"
     Write-Host "  codex-auth -Best    Launch the recommended fresh account"
     Write-Host "  codex-auth pool -Pool -PoolAccounts '*'  Configure the pooled environment"

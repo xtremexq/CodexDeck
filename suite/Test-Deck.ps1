@@ -8,6 +8,7 @@ Assert ($settings.AutoCompactMode -eq 'Native') 'Auto-compact implementation mus
 Assert ($settings.AutoCompactThresholdPercent -eq 55) 'Auto-compact threshold must default to 55%'
 Assert (-not $settings.AutoCompactLaunchEnabled) 'Auto-compact launches must default off'
 Assert $settings.TerminalScrollbackEnabled 'Terminal scrollback must default on for every account'
+Assert $settings.ClaudeTerminalScrollbackEnabled 'Claude terminal scrollback must default on for every account'
 $scrollbackArgs=@(Get-DeckTerminalLaunchArguments $settings $true)
 Assert (($scrollbackArgs -join '|') -eq '--no-alt-screen') 'Interactive launches must explicitly disable Codex alternate-screen mode without changing the standard TUI display'
 $settings.TerminalScrollbackEnabled=$false

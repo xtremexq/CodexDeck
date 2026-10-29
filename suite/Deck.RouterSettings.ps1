@@ -1,4 +1,4 @@
-$routerTab=if($settingsTabRefs.Router){$settingsTabRefs.Router}else{[Windows.Controls.TabItem]::new()};$routerTab.Header='AI Router';$settingsTabRefs.Router=$routerTab
+﻿$routerTab=if($settingsTabRefs.Router){$settingsTabRefs.Router}else{[Windows.Controls.TabItem]::new()};$routerTab.Header='AI Router';$settingsTabRefs.Router=$routerTab
 $routerScroll=[Windows.Controls.ScrollViewer]::new();$routerScroll.VerticalScrollBarVisibility='Auto';$routerScroll.HorizontalScrollBarVisibility='Disabled'
 $routerPanel=[Windows.Controls.StackPanel]::new();$routerPanel.Margin='2,0,12,0';$routerScroll.Content=$routerPanel;$routerTab.Content=$routerScroll;if(-not $tabs.Items.Contains($routerTab)){[void]$tabs.Items.Add($routerTab)}
 [void]$routerPanel.Children.Add((New-DeckText 'AI Router server' '#EDF1F7' 18))
