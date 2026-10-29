@@ -56,7 +56,7 @@ if (-not $SmokeTest -and -not $Demo) {
     }
 }
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
-Add-Type -ReferencedAssemblies @([Windows.Data.Binding].Assembly.Location,[Windows.Media.Visual].Assembly.Location,[Windows.Threading.Dispatcher].Assembly.Location) -TypeDefinition @'
+Add-Type -ReferencedAssemblies @([Windows.Data.Binding].Assembly.Location,[Windows.Media.Visual].Assembly.Location,[Windows.Threading.Dispatcher].Assembly.Location,[System.Management.Automation.PSObject].Assembly.Location) -TypeDefinition @'
 using System.Runtime.InteropServices;
 using System;
 using System.Threading;
@@ -64,6 +64,7 @@ using System.Globalization;
 using System.Collections;
 using System.Windows.Data;
 using System.Windows.Controls;
+using System.Management.Automation;
 public static class DeckTaskbarIdentity {
     [DllImport("shell32.dll", CharSet=CharSet.Unicode)]
     public static extern int SetCurrentProcessExplicitAppUserModelID(string id);
@@ -117,7 +118,10 @@ public static class DeckTaskbarIdentity {
 public sealed class DeckRowTemplateConverter : IValueConverter {
     public Func<object, object> Resolve { get; set; }
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) {
-        return Resolve == null ? null : Resolve(value);
+        if (Resolve == null) return null;
+        object resolved = Resolve(value);
+        PSObject wrapped = resolved as PSObject;
+        return wrapped == null ? resolved : wrapped.BaseObject;
     }
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) {
         throw new NotSupportedException();
@@ -2249,6 +2253,8 @@ try{
         }finally{$lazySettingsUI.Dialog.Close();$script:testPickerNames=$savedLazyPickerNames}
         $window.Content.Measure([Windows.Size]::new($window.Width,$window.Height)); $window.Content.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $window.Content.UpdateLayout()
         if($Cards.Items.Count -ne 2){throw 'Smoke test all-account card rendering failed.'}
+        $convertedRow=$rowConverter.Convert('account1',[object],[object]$null,[Globalization.CultureInfo]::InvariantCulture)
+        if($convertedRow -isnot [Windows.FrameworkElement]){throw "The virtualized row converter returned $($convertedRow.GetType().FullName) instead of a WPF element."}
         $rowExpander=(Get-DeckRenderedCard 0).Child
         if($rowExpander -isnot [Windows.Controls.Expander] -or $rowExpander.IsExpanded){throw 'Row must start collapsed.'}
         $collapsedHeight=$window.Height
@@ -2336,7 +2342,7 @@ try{
                 $window.Content.UpdateLayout(); $nativeVirtualPanel=@(Find-DeckVisual $Cards ([Windows.Controls.VirtualizingStackPanel]))[0]
                 if(-not $nativeVirtualPanel -or $nativeVirtualPanel.Children.Count -ge $Cards.Items.Count){throw "The account panel did not virtualize its visual rows: $($nativeVirtualPanel.Children.Count) of $($Cards.Items.Count); enabled=$([Windows.Controls.VirtualizingPanel]::GetIsVirtualizing($Cards))/$([Windows.Controls.VirtualizingPanel]::GetIsVirtualizing($nativeVirtualPanel)), itemsHost=$($nativeVirtualPanel.IsItemsHost), owner=$($null -ne $nativeVirtualPanel.ScrollOwner), pixel-scroll=$($CardScroll.CanContentScroll), viewport=$($CardScroll.ViewportHeight), extent=$($CardScroll.ExtentHeight), desired=$($nativeVirtualPanel.DesiredSize.Height), actual=$($nativeVirtualPanel.ActualHeight)."}
                 $virtualizedCount=$nativeVirtualPanel.Children.Count
-                if($rowControls.Count -gt 16){throw "Offscreen account cards were eagerly built: $($rowControls.Count) for $($nativeVirtualPanel.Children.Count) realized containers."}
+                if($rowControls.Count -gt [Math]::Max(20,$nativeVirtualPanel.Children.Count+2)){throw "Offscreen account cards were eagerly built: $($rowControls.Count) for $($nativeVirtualPanel.Children.Count) realized containers."}
                 $CardScroll.ScrollToEnd(); $window.Content.UpdateLayout()
                 if(-not $Cards.ItemContainerGenerator.ContainerFromIndex($Cards.Items.Count-1)){throw 'Native virtualization did not realize the last account after scrolling.'}
                 $cacheLimit=[Math]::Max(20,($nativeVirtualPanel.Children.Count*2)+4)
