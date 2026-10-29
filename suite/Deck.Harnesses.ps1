@@ -323,7 +323,7 @@ function Get-DeckHarnessLaunch([string]$SuiteRoot,[string]$Account,[string[]]$Ar
     $definition=Get-DeckHarness $identity.Harness
     $sessionArguments=@(Get-DeckHarnessSessionArguments $preferences $identity.Harness $Arguments)
     $directory=Get-DeckEntryDirectory $SuiteRoot $Account
-    $environment=@{}; $remove=@(); $argsList=@($sessionArguments)
+    $environment=@{}; $remove=@(); $argsList=@($sessionArguments);$claudeContextPolicy=$null
     if($identity.Harness -eq 'Claude'){
         $claudeProfile=Join-Path $directory 'claude'
         $environment.CLAUDE_CONFIG_DIR=$claudeProfile
@@ -331,9 +331,33 @@ function Get-DeckHarnessLaunch([string]$SuiteRoot,[string]$Account,[string[]]$Ar
         $environment.HOME=$claudeProfile
         $environment.APPDATA=Join-Path $claudeProfile 'AppData/Roaming'
         $environment.LOCALAPPDATA=Join-Path $claudeProfile 'AppData/Local'
-        $remove=@('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_PROFILE','ANTHROPIC_BASE_URL','ANTHROPIC_MODEL','CLAUDE_CODE_OAUTH_TOKEN','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY','AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN','AWS_PROFILE','AWS_BEARER_TOKEN_BEDROCK','ANTHROPIC_BEDROCK_BASE_URL','ANTHROPIC_VERTEX_PROJECT_ID','ANTHROPIC_VERTEX_REGION','GOOGLE_APPLICATION_CREDENTIALS','CLOUD_ML_REGION','CLOUD_ML_PROJECT_ID')
+        $remove=@('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_PROFILE','ANTHROPIC_BASE_URL','ANTHROPIC_MODEL','CLAUDE_CODE_OAUTH_TOKEN','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY','AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN','AWS_PROFILE','AWS_BEARER_TOKEN_BEDROCK','ANTHROPIC_BEDROCK_BASE_URL','ANTHROPIC_VERTEX_PROJECT_ID','ANTHROPIC_VERTEX_REGION','GOOGLE_APPLICATION_CREDENTIALS','CLOUD_ML_REGION','CLOUD_ML_PROJECT_ID','CLAUDE_CODE_DISABLE_CLAUDE_MDS','CLAUDE_CODE_DISABLE_AUTO_MEMORY')
         if($argsList -and $argsList[0] -eq 'login'){$argsList=@('auth','login')+@($argsList | Select-Object -Skip 1)}
         if($argsList -and $argsList[0] -eq 'logout'){$argsList=@('auth','logout')+@($argsList | Select-Object -Skip 1)}
+        if(Test-DeckClaudeSessionLaunch $argsList){
+            $claudeContextPolicy=Get-DeckClaudeContextPolicy $SuiteRoot
+            if(-not $claudeContextPolicy.AutoMemoryEnabled){$environment.CLAUDE_CODE_DISABLE_AUTO_MEMORY='1';$remove=@($remove | Where-Object {$_ -ne 'CLAUDE_CODE_DISABLE_AUTO_MEMORY'})}
+            if(@($claudeContextPolicy.SettingSources).Count -lt 3){
+                $cleanSources=[Collections.Generic.List[string]]::new()
+                for($i=0;$i -lt $argsList.Count;$i++){
+                    if($argsList[$i] -eq '--setting-sources'){if($i+1 -lt $argsList.Count){$i++};continue}
+                    if(([string]$argsList[$i]).StartsWith('--setting-sources=',[StringComparison]::Ordinal)){continue}
+                    $cleanSources.Add([string]$argsList[$i])
+                }
+                $argsList=$cleanSources.ToArray()+@('--setting-sources',(@($claudeContextPolicy.SettingSources) -join ','))
+            }
+            if(-not $claudeContextPolicy.SkillsAndCommandsEnabled -and $argsList -notcontains '--disable-slash-commands'){$argsList+=@('--disable-slash-commands')}
+            if(-not $claudeContextPolicy.McpEnabled){
+                $cleanMcp=[Collections.Generic.List[string]]::new()
+                for($i=0;$i -lt $argsList.Count;$i++){
+                    if($argsList[$i] -eq '--mcp-config'){if($i+1 -lt $argsList.Count){$i++};continue}
+                    if(([string]$argsList[$i]).StartsWith('--mcp-config=',[StringComparison]::Ordinal) -or $argsList[$i] -eq '--strict-mcp-config'){continue}
+                    $cleanMcp.Add([string]$argsList[$i])
+                }
+                $argsList=$cleanMcp.ToArray()+@('--strict-mcp-config')
+            }
+            if($claudeContextPolicy.SafeMode -and $argsList -notcontains '--safe-mode'){$argsList+=@('--safe-mode')}
+        }
     }elseif(Test-DeckAntigravityFileAccount $identity){
         $profile=Join-Path $directory 'antigravity/profile'
         $environment.USERPROFILE=$profile; $environment.HOME=$profile
@@ -366,13 +390,13 @@ function Get-DeckHarnessLaunch([string]$SuiteRoot,[string]$Account,[string[]]$Ar
             if($explicitSettings.Found){$argsList=@($explicitSettings.Arguments)}
         }else{$claudeDefaults=$null}
     }else{$claudeDefaults=$null}
-    foreach($key in $environment.Keys){if($key -notin @('SSH_CONNECTION','AGY_ADC_AUTH')){Assert-DeckHarnessPath $directory $environment[$key]}}
+    foreach($key in $environment.Keys){if($key -notin @('SSH_CONNECTION','AGY_ADC_AUTH','CLAUDE_CODE_DISABLE_AUTO_MEMORY')){Assert-DeckHarnessPath $directory $environment[$key]}}
     $instructionsPath=$null
     if($identity.Harness -eq 'Claude' -and (Test-DeckClaudeSessionLaunch $argsList)){
         $candidate=Get-DeckClaudeGlobalInstructionsPath $SuiteRoot
         if((Test-Path -LiteralPath $candidate -PathType Leaf) -and -not [string]::IsNullOrWhiteSpace([IO.File]::ReadAllText($candidate))){$instructionsPath=$candidate}
     }
-    return @{Identity=$identity;Executable=(Resolve-DeckHarnessExecutable $preferences $identity.Harness);Environment=$environment;Remove=$remove;Arguments=$argsList;Directory=$directory;ClaudeDefaults=$claudeDefaults;ClaudeSessionSettings=$claudeSessionSettings;ClaudeSettingsWereExplicit=$claudeSettingsWereExplicit;ClaudeGlobalInstructionsPath=$instructionsPath}
+    return @{Identity=$identity;Executable=(Resolve-DeckHarnessExecutable $preferences $identity.Harness);Environment=$environment;Remove=$remove;Arguments=$argsList;Directory=$directory;ClaudeDefaults=$claudeDefaults;ClaudeSessionSettings=$claudeSessionSettings;ClaudeSettingsWereExplicit=$claudeSettingsWereExplicit;ClaudeGlobalInstructionsPath=$instructionsPath;ClaudeContextPolicy=$claudeContextPolicy}
 }
 
 function Get-DeckClaudeAuthStatus([string]$SuiteRoot,[string]$Account) {
@@ -464,6 +488,7 @@ function New-DeckClaudeSessionArguments([string]$SuiteRoot,[string]$Account,$Lau
             $settingsPath=Get-DeckHarnessConfigPath $SuiteRoot $Account
             $accountSettings=Read-DeckClaudeSettingsFile $settingsPath 'Claude account settings'
             $settings=Merge-DeckClaudeSettings $Launch.ClaudeDefaults $accountSettings $Launch.ClaudeSessionSettings
+            if($Launch.ClaudeContextPolicy){$settings=Merge-DeckClaudeSettingsValue $settings (Get-DeckClaudeContextSettings $Launch.ClaudeContextPolicy)}
             $settingsFile=Join-Path $Launch.Environment.CLAUDE_CONFIG_DIR ('.codexdeck-settings-'+[guid]::NewGuid().ToString('N')+'.json')
             Assert-DeckHarnessPath $Launch.Directory $settingsFile
             $temporaryFiles.Add($settingsFile)
@@ -634,6 +659,7 @@ function Invoke-DeckHarnessAccountOnce([string]$SuiteRoot,[string]$Account,[stri
         }
         if($identity.Harness -eq 'Claude'){
             foreach($key in @('USERPROFILE','APPDATA','LOCALAPPDATA')){[void][IO.Directory]::CreateDirectory($launch.Environment[$key])}
+            if(Get-Command Sync-DeckClaudeNativeDefaults -ErrorAction SilentlyContinue){[void](Sync-DeckClaudeNativeDefaults $SuiteRoot $Account)}
         }
         $configPath=Get-DeckHarnessConfigPath $SuiteRoot $Account
         [void][IO.Directory]::CreateDirectory((Split-Path -Parent $configPath))

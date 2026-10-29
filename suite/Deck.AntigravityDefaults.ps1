@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$AntigravityDefaultsEdit,
     [string]$AntigravityDefaultsSuiteRoot=$PSScriptRoot
 )

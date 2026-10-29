@@ -154,6 +154,20 @@ public static class FakeDeckHarness {
     Assert ($mergedPrompt -match 'Deck-wide Claude instruction\.' -and $mergedPrompt -match 'Session-only instruction\.') 'Claude global and per-session prompt instructions did not combine'
     foreach($temporaryFile in $prepared.TemporaryFiles){[IO.File]::Delete($temporaryFile)}
 
+    $contextPolicyPath=Get-DeckClaudeContextPolicyPath $fixture
+    $contextBefore=if(Test-Path -LiteralPath $contextPolicyPath){[IO.File]::ReadAllText($contextPolicyPath)}else{$null}
+    $contextPolicy=Set-DeckClaudeContextPolicy $fixture ([pscustomobject]@{ProjectSettings=$false;LocalSettings=$false;InstructionFilesMode='managed-only';ClaudeMdExcludes=@('C:\Workspace\long-context\CLAUDE.md');AutoMemoryEnabled=$false;SkillsAndCommandsEnabled=$false;BundledSkillsEnabled=$false;McpEnabled=$false;SafeMode=$true})
+    $isolatedContextLaunch=Get-DeckHarnessLaunch $fixture claudeA @('--setting-sources','user,project,local','--mcp-config','session-mcp.json')
+    Assert (($isolatedContextLaunch.Arguments -join '|') -match '--setting-sources\|user' -and $isolatedContextLaunch.Arguments -contains '--disable-slash-commands' -and $isolatedContextLaunch.Arguments -contains '--strict-mcp-config' -and $isolatedContextLaunch.Arguments -contains '--safe-mode' -and $isolatedContextLaunch.Environment.CLAUDE_CODE_DISABLE_AUTO_MEMORY -eq '1') 'Claude context policy did not constrain settings, skills, MCP, safe mode and auto-memory at launch.'
+    Assert ($isolatedContextLaunch.Arguments -notcontains 'session-mcp.json' -and $isolatedContextLaunch.Arguments -notcontains '--mcp-config') 'Disabled MCP context still accepted a per-session config.'
+    $isolatedContextPrepared=New-DeckClaudeSessionArguments $fixture claudeA $isolatedContextLaunch
+    $isolatedSettingsIndex=[Array]::IndexOf([string[]]$isolatedContextPrepared.Arguments,'--settings')
+    $isolatedSettings=Read-DeckClaudeSettingsFile $isolatedContextPrepared.Arguments[$isolatedSettingsIndex+1] 'generated Claude context settings'
+    Assert (-not $isolatedSettings.autoMemoryEnabled -and $isolatedSettings.disableBundledSkills -and $isolatedSettings.pluginConfigs.'cc-plugin-agents-md@builtin'.options.instructionFiles -eq 'managed-only' -and $isolatedSettings.claudeMdExcludes -contains 'C:\Workspace\long-context\CLAUDE.md') 'Claude context policy did not become effective native settings.'
+    foreach($temporaryFile in $isolatedContextPrepared.TemporaryFiles){[IO.File]::Delete($temporaryFile)}
+    Set-DeckClaudeContextPolicy $fixture ([pscustomobject]@{ProjectSettings=$true;LocalSettings=$true;InstructionFilesMode='claude-md-or-agents-md';ClaudeMdExcludes=@();AutoMemoryEnabled=$true;SkillsAndCommandsEnabled=$true;BundledSkillsEnabled=$true;McpEnabled=$true;SafeMode=$false}) | Out-Null
+    if($contextBefore -eq $null){Remove-Item -LiteralPath $contextPolicyPath -Force}else{[IO.File]::WriteAllText($contextPolicyPath,$contextBefore)}
+
     $parentProfile=$env:USERPROFILE;$parentHome=$env:HOME;$parentAppData=$env:APPDATA;$parentLocalAppData=$env:LOCALAPPDATA
     $checked=Get-DeckClaudeAuthStatus $fixture claudeA
     Assert ($checked.LoggedIn -and $checked.AuthMethod -eq 'claude.ai') 'Claude isolated native sign-in check did not parse a signed-in status'

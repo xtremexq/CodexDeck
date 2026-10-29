@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$SuiteRoot = $PSScriptRoot,
     [switch]$Edit,
     [switch]$Recover,
