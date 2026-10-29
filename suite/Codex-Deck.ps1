@@ -27,7 +27,7 @@ $script:autoCheckReadyAt=[DateTimeOffset]::UtcNow.AddMinutes($settings.PollMinut
 $script:settingsStamp=0
 if(-not $SmokeTest -and -not $Demo){$settingsItem=Get-Item -LiteralPath (Join-Path $root 'settings.json') -ErrorAction SilentlyContinue;if($settingsItem){$script:settingsStamp=$settingsItem.LastWriteTimeUtc.Ticks}}
 $script:cache = @{}; $script:nextCheck = @{}; $script:resets = @{}; $script:history = @{}
-$script:rowPools=@{}; $script:rowControls=@{}; $script:rowStyle=''; $script:expandedRows=@{}; $script:profiles=@{}; $script:profileStamps=@{}; $script:profileVersion=0; $script:visibleAccountsCache=@{Key='';Names=@()}; $script:cacheVersion=0; $script:lastPicker=[DateTimeOffset]::MinValue
+$script:rowPools=@{}; $script:rowControls=@{}; $script:rowStyle=''; $script:expandedRows=@{}; $script:profiles=@{}; $script:profileStamps=@{}; $script:profileVersion=0; $script:visibleAccountsCache=@{Key='';Names=@()}; $script:cacheVersion=0; $script:lastPicker=[DateTimeOffset]::MinValue; $script:profileRefreshQueue=@(); $script:profileRefreshNamesKey=''
 $script:accountNames=@(); $script:pickerContentKeys=@{}; $script:usageCacheStamp=''
 $script:cacheWrite=$null; $script:cacheWriteVersion=0; $script:cacheSavedVersion=0
 $script:sessionRead=$null; $script:lastSessionRead=[DateTimeOffset]::MinValue; $script:sessionVersion=0; $script:sessionSignature=''
@@ -61,7 +61,9 @@ using System.Runtime.InteropServices;
 using System;
 using System.Threading;
 using System.Globalization;
+using System.Collections;
 using System.Windows.Data;
+using System.Windows.Controls;
 public static class DeckTaskbarIdentity {
     [DllImport("shell32.dll", CharSet=CharSet.Unicode)]
     public static extern int SetCurrentProcessExplicitAppUserModelID(string id);
@@ -121,6 +123,20 @@ public sealed class DeckRowTemplateConverter : IValueConverter {
         throw new NotSupportedException();
     }
 }
+public static class DeckRowCacheCleanup {
+    public static IDictionary Pools;
+    public static readonly CleanUpVirtualizedItemEventHandler Callback = Cleanup;
+    static void Cleanup(object sender, CleanUpVirtualizedItemEventArgs e) {
+        if (e.Cancel || !(e.Value is string)) return;
+        IDictionary pools = Pools;
+        if (pools == null) return;
+        foreach (DictionaryEntry entry in pools) {
+            IDictionary pool = entry.Value as IDictionary;
+            IDictionary controls = pool == null ? null : pool["Controls"] as IDictionary;
+            if (controls != null) controls.Remove((string)e.Value);
+        }
+    }
+}
 '@
 [void][DeckTaskbarIdentity]::SetCurrentProcessExplicitAppUserModelID('Codex.Deck')
 [xml]$xaml=[IO.File]::ReadAllText((Join-Path $suite 'Deck.Theme.xaml'))
@@ -136,15 +152,8 @@ $script:CardScroll=$Cards.Template.FindName('CardScroll',$Cards)
 if(-not $CardScroll){$script:CardScroll=$Cards.Template.FindName('PART_ScrollViewer',$Cards)}
 if(-not $CardScroll){throw 'Codex Deck account list template is missing its scroll viewer.'}
 $script:rowHostState=@{Rows=$rowControls}
-$script:rowCleanupHandler=[Windows.Controls.CleanUpVirtualizedItemEventHandler]{
-    param($sender,$eventArgs)
-    if($eventArgs.Cancel -or $eventArgs.Value -isnot [string] -or -not [Windows.Controls.VirtualizingPanel]::GetIsVirtualizing($script:Cards)){return}
-    $account=[string]$eventArgs.Value
-    if($script:expandedRows[$account]){return}
-    # Let the virtualizing panel release cards after their containers leave the
-    # viewport. Retaining every account ever scrolled past negates virtualization.
-    foreach($pool in @($script:rowPools.Values)){$pool.Controls.Remove($account)}
-}
+[DeckRowCacheCleanup]::Pools=$rowPools
+$script:rowCleanupHandler=[DeckRowCacheCleanup]::Callback
 [Windows.Controls.VirtualizingStackPanel]::AddCleanUpVirtualizedItemHandler($Cards,$rowCleanupHandler)
 $script:rowTemplate=[Windows.DataTemplate]::new()
 $script:rowConverter=[DeckRowTemplateConverter]::new()
@@ -634,10 +643,21 @@ function Set-DeckPickerNames($Names) {
     $script:lastRender=''
 }
 function Update-DeckPicker([switch]$Force) {
-    if(-not $Force -and ([DateTimeOffset]::UtcNow-$lastPicker).TotalSeconds -lt 30){return}
-    $script:lastPicker=[DateTimeOffset]::UtcNow
+    $now=[DateTimeOffset]::UtcNow
     $names = @(Get-DeckAccounts)
-    foreach($name in $names){
+    Set-DeckPickerNames $names
+    $namesKey=$names -join ','
+    $namesChanged=$namesKey -cne $profileRefreshNamesKey
+    if($namesChanged -or $Force -or (-not $profileRefreshQueue.Count -and ($now-$lastPicker).TotalSeconds -ge 30)){
+        $script:profileRefreshNamesKey=$namesKey
+        $script:profileRefreshQueue=@($names)
+        $script:lastPicker=$now
+    }elseif(-not $profileRefreshQueue.Count){return}
+    # Keep profile discovery below one short dispatcher slice. Account names
+    # already render immediately, while harness and plan metadata fills in.
+    $profileBatch=@($profileRefreshQueue | Select-Object -First 10)
+    $script:profileRefreshQueue=@($profileRefreshQueue | Select-Object -Skip $profileBatch.Count)
+    foreach($name in $profileBatch){
         if($SmokeTest -or $Demo){continue}
         $folder=Join-Path $suite "accounts/$name"
         $authIssuePath=Join-Path $suite "deck/auth-issues/$name.json"
@@ -648,7 +668,6 @@ function Update-DeckPicker([switch]$Force) {
             if(Clear-DeckStaleRevokedAuth $suite $name $cache[$name]){$nextCheck[$name]=[DateTimeOffset]::UtcNow;$script:cacheVersion++;Save-DeckDesktopUsageCache}
         }
     }
-    Set-DeckPickerNames $names
     # The account picker is an internal, collapsed identity control. Building
     # its rich quota inlines for every account never reaches the screen.
     if($AccountPicker.Visibility -eq 'Collapsed' -and -not ($SmokeTest -or $Demo)){return}
@@ -1742,7 +1761,7 @@ function Invoke-DeckTick {
             # Profiles already contain harness identity from the throttled account refresh.
             # Re-reading every deck-account.json on each dispatcher tick made a large
             # account list steadily consume CPU while automatic checks were enabled.
-            $automatic=@(); if($settings.AutoCheck -and $now -ge $autoCheckReadyAt){$automatic=@(Get-DeckVisibleAccounts | Where-Object {(-not $profiles[$_].Harness -or $profiles[$_].Harness -eq 'Codex') -and -not $profiles[$_].AuthIssue})}
+            $automatic=@(); if($settings.AutoCheck -and $now -ge $autoCheckReadyAt){$automatic=@(Get-DeckVisibleAccounts | Where-Object {$profiles[$_] -and $profiles[$_].Harness -eq 'Codex' -and -not $profiles[$_].AuthIssue})}
             $due=@(Get-DeckDueAccounts $automatic $manualChecks $nextCheck $now)
             foreach($account in $due){
                 if (Get-DeckPoolEntry $suite $account) { $manualChecks.Remove($account); continue }
@@ -1935,6 +1954,7 @@ if($SmokeTest -or $Demo){Update-DeckPicker}else{
     if($storageProcess){$storageProcess.Dispose()}
 }
 Set-DeckMode $settings.ViewMode -Initial
+if(-not ($SmokeTest -or $Demo)){Render-Deck}
 $heightTimer=[Windows.Threading.DispatcherTimer]::new(); $heightTimer.Interval=[TimeSpan]::FromMilliseconds(120)
 $heightTimer.Add_Tick({$heightTimer.Stop(); if(-not $script:sizing){Update-DeckWidgetHeight}})
 $window.Add_SizeChanged({if(-not $script:sizing){$heightTimer.Stop();$heightTimer.Start()}})
