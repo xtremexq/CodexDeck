@@ -8,6 +8,16 @@ $sourceText=[IO.File]::ReadAllText($sourcePath)
 if($sourceText -notmatch '(?s)\$Account -eq ''plugin''.*Invoke-DeckManagedPluginCommand'){throw 'codex-auth plugin is not routed through Deck plugin management'}
 $checkAllParameter=$ast.ParamBlock.Parameters | Where-Object {$_.Name.VariablePath.UserPath -eq 'CheckAll'} | Select-Object -First 1
 if(-not $checkAllParameter -or $checkAllParameter.Extent.Text -notmatch "Alias\('a'\)" -or $sourceText -notmatch 'Show-DeckTerminal[^\r\n]+-CheckAll:\$CheckAll'){throw 'codex-auth -a is not wired to the dashboard all-check action'}
+$prepareAccountParameter=$ast.ParamBlock.Parameters | Where-Object {$_.Name.VariablePath.UserPath -eq 'PrepareAccount'} | Select-Object -First 1
+if(-not $prepareAccountParameter -or $sourceText -notmatch 'if\(\$PrepareAccount\)\{Write-Host .*Prepared unsigned Codex account'){throw 'codex-auth does not support preparing a new unsigned account for Auth Helper login'}
+$authHelperFixture=Join-Path ([IO.Path]::GetTempPath()) ('codex-auth-helper-test-'+[guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory((Join-Path $authHelperFixture 'deck'))
+try {
+    . (Join-Path $PSScriptRoot 'Deck.AuthHelper.ps1') -SuiteRoot $authHelperFixture
+    Write-DeckAuthHelperText $authHelperFixture "# Saved account combos`nfirst@example.com|password-one|111111`nfirst@example.com|password-two|222222`n"
+    $selectedHelperEntry=Get-DeckAuthHelperEntryByLine $authHelperFixture 3 'first@example.com'
+    if($selectedHelperEntry.Password -ne 'password-two' -or $selectedHelperEntry.Otp -ne '222222'){throw 'Auth Helper selection did not preserve the exact chosen duplicate-email combo.'}
+} finally {if(Test-Path -LiteralPath $authHelperFixture){Remove-Item -LiteralPath $authHelperFixture -Recurse -Force}}
 if($sourceText -notmatch '(?s)\$serverConfigArgs\s*=.*Where-Object\s*\{\s*\$_ -ne ''--no-alt-screen''\s*\}'){throw 'codex-auth does not filter --no-alt-screen from sidecar app-server config'}
 $savedErrorPreference=$ErrorActionPreference
 try {
@@ -15,7 +25,7 @@ try {
     $invalidCheckAll=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sourcePath -a status 2>&1
     $invalidCheckAllExit=$LASTEXITCODE
 } finally { $ErrorActionPreference=$savedErrorPreference }
-if($invalidCheckAllExit -eq 0 -or ($invalidCheckAll -join "`n") -notmatch 'only works with the plain codex-auth dashboard command'){throw 'codex-auth -a accepted a non-plain command'}
+if($invalidCheckAllExit -eq 0 -or ($invalidCheckAll -join "`n") -notmatch 'can only be combined with the dashboard command'){throw 'codex-auth -a accepted a non-plain command'}
 foreach ($name in 'Initialize-AccountDirectory','Remove-CodexAccount','Get-AccountDirectories','Find-DeckConversationOwner','Normalize-AccountName','Ensure-FreeAccountDefaults','Ensure-AccountSandboxDefaults','Ensure-AccountInstructions','Read-TextFile','Write-TextFile','Normalize-Newlines','Trim-TrailingNewlines','Get-SettingLine','ConvertTo-DeckWindowsArgument','Invoke-DeckCodex','Write-DeckSessionExit','Get-DeckSessionRoutingArguments','ConvertFrom-DeckTomlScalar','Get-DeckTomlTopLevelValue','Get-DeckCodexArgumentSetting','Get-DeckNativeAutoCompactConfiguration','Open-DeckLaunchInspector') {
     $definition=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $true)
     . ([scriptblock]::Create($definition.Extent.Text))

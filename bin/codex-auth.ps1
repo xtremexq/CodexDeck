@@ -4,6 +4,7 @@ param(
     [string]$Account,
 
     [switch]$NewAccount,
+    [switch]$PrepareAccount,
     [ValidateSet('Codex','Antigravity','Claude','OpenCode')][string]$Harness,
     [ValidateSet('ChatGPT','Claude','Gemini','Custom')][string]$Provider,
     [switch]$ConfigureRunner,
@@ -47,6 +48,10 @@ param(
 $accountsRoot = Join-Path $HOME ".codex-loop\accounts"
 $defaultConfigPath = Join-Path $HOME ".codex\config.toml"
 $ErrorActionPreference = 'Stop'
+if($PrepareAccount){
+    $prepareUnexpected=@($PSBoundParameters.Keys | Where-Object {$_ -notin @('Account','NewAccount','PrepareAccount','Harness','Provider')})
+    if(-not $NewAccount -or $Harness -ne 'Codex' -or $Provider -ne 'ChatGPT' -or $CodexArgs -or $prepareUnexpected.Count){throw '-PrepareAccount is reserved for creating a new Codex profile without starting the CLI.'}
+}
 if($Account -eq 'skills'){
     $skillOptions=@()
     if($PSBoundParameters.ContainsKey('Category')){$skillOptions+=@('-Category',$Category)}
@@ -749,6 +754,7 @@ function Show-Usage {
     Write-Host "Usage: codex-auth [dashboard|status|resume|accountN|N|list] [codex args...]"
     Write-Host "  codex-auth          Interactive account dashboard"
     Write-Host "  codex-auth -a       Open the dashboard and queue checks for every signed-in account"
+    Write-Host "  Dashboard: O new helper creates an unsigned profile and lets you select a saved Auth Helper combo"
     Write-Host "  codex-auth status   Cached dashboard snapshot (no network)"
     Write-Host "  codex-auth -Best    Launch the recommended fresh account"
     Write-Host "  codex-auth pool -Pool -PoolAccounts '*'  Configure the pooled environment"
@@ -1374,6 +1380,7 @@ if (Test-Path -LiteralPath $commandsModule) {
     . $commandsModule
     Remove-DeckLegacyCommandSkills $accountDir | Out-Null
 }
+if($PrepareAccount){Write-Host ("Prepared unsigned Codex account '$accountName'.");exit 0}
 Use-CodexNodePath
 $sharedArgs = @(Get-DeckSharedArguments $runtimeRoot $accountName)
 $globalRuleArgs=@()

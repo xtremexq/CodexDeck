@@ -27,9 +27,21 @@ Assert (($frame.Text -join "`n") -match 'E memories') 'Per-account memories shor
 Assert (($frame.Text -join "`n") -match 'I instructions') 'Per-account instructions shortcut missing'
 Assert (($frame.Text -join "`n") -match 'K skills') 'Per-account skills shortcut missing'
 Assert (($frame.Text -join "`n") -match 'C compact \[ \] Native 55%') 'Native auto-compact shortcut or default threshold missing'
+Assert (($frame.Text -join "`n") -match 'O new helper') 'New Codex account Auth Helper shortcut missing'
+Assert (($frame.Text -join "`n") -match 'VIEW\s+\| Ctrl shortcuts \| Alt extended info' -and ($frame.Text -join "`n") -match 'R refresh \| A all \| J auto-login') 'Shortcut table is missing separators or Ctrl/Alt viewing hints'
+$hiddenShortcutFrame=@(Get-DeckTerminalFrame $names @{} $profiles @() @{} 39 100 25 '' '' -ShowShortcuts $false)
+Assert (($hiddenShortcutFrame.Text -join "`n") -match 'Press Ctrl for shortcuts \| Alt for extended info') 'Hidden shortcut hint does not explain both display toggles'
 Assert (($frame.Text -join "`n") -notmatch 'V trajectory' -and ($frame.Text -join "`n") -match 'Y Analytics') 'Analytics shortcut or trajectory shortcut removal failed'
 Assert (($frame.Text -join "`n") -notmatch 'person@example.com') 'Email not masked by default'
+Assert (($frame.Text -join "`n") -notmatch 'Window resets|Sessions:|AUTO WARM-UP') 'Extended Codex account information is visible before Alt is pressed'
 Assert ($frame.Count -le 24) 'Frame overflows terminal height'
+$extendedCache=@{account40=@{Status='available';Windows=@(@{Label='5H';DurationSeconds=18000;RemainingPct=72;ResetsAtUnix=$resetAt})}}
+$extendedFrame=@(Get-DeckTerminalFrame $names $extendedCache $profiles @() @{} 39 110 25 '' 'Ready' -WarmupSettings @{WarmupEnabled=$false;WarmupAccounts='account40'} -ShowExtendedInfo $true)
+Assert (($extendedFrame.Text -join "`n") -match 'Window resets' -and ($extendedFrame.Text -join "`n") -match 'AUTO WARM-UP') 'Alt extended info omitted account reset or warm-up details'
+$defaultNoticeFrame=@(Get-DeckTerminalFrame @('account1') @{} $profiles @() @{} 0 110 25 '' 'Ready. Cached usage is shown; fresh checks are available.')
+Assert (($defaultNoticeFrame.Text -join "`n") -notmatch 'NOTICE\s+Ready\. Cached usage') 'Codex dashboard still shows its cached-usage startup notice'
+$helperLoginFrame=@(Get-DeckTerminalFrame @('account-new') @{} @{ 'account-new'=@{PlanType='plus';Model='default';Effort='default';AuthHelperState='running';AuthHelperMessage='Starting sign-in.'} } @() @{} 0 100 25 '' '')
+Assert (($helperLoginFrame.Text -join "`n") -match 'Signing in\.\.\.' -and ($helperLoginFrame.Text -join "`n") -notmatch 'Starting sign-in') 'New Auth Helper login progress is not shown in the account status row.'
 $empty = @(Get-DeckTerminalFrame @() @{} @{} @() @{} 0 60 25 '' 'Ready')
 $compactFrame = @(Get-DeckTerminalFrame $names @{} $profiles @() @{} 0 100 25 '' 'Ready' $true $null @{} $true 72)
 Assert (($compactFrame.Text -join "`n") -match 'C compact \[x\] Native 72%') 'Auto-compact selected state or configured threshold missing'
@@ -43,18 +55,30 @@ $claudeText=$claudeFrame.Text -join "`n"
 Assert ($claudeText -match 'R check sign-in' -and $claudeText -match 'A all') 'Claude dashboard sign-in checks are missing.'
 Assert ($claudeText -match 'G defaults' -and $claudeText -match 'Claude /usage shows plan limits') 'Claude dashboard global defaults or native usage guidance is missing.'
 Assert ($claudeText -match 'Signed in' -and $claudeText -match 'Sign in required') 'Claude dashboard did not render native auth state.'
+Assert ($claudeText -match 'Ctrl shortcuts' -and $claudeText -match 'Alt extended info' -and $claudeText -match 'R check sign-in \| A all sign-ins') 'Claude dashboard is missing the shared table and view hints.'
+Assert ($claudeText -notmatch 'Config, credentials, history') 'Claude extended account info is visible before Alt is pressed.'
+$claudeExtended=@(Get-DeckTerminalFrame @('claude-account1','claude-account2') @{} $claudeProfiles @() @{} 0 110 25 '' '' -Harness Claude -ShowShortcuts $false -ShowExtendedInfo $true)
+Assert (($claudeExtended.Text -join "`n") -match 'Config, credentials, history') 'Claude Alt extended info is missing.'
 Assert ($claudeText -notmatch 'WARM-?UP|PRIMARY|WEEKLY|NEXT RESET|5H|quota') 'Claude dashboard displayed unsupported quota or warm-up state.'
 foreach($theme in @('Focus','Cards','Ledger','Split')){
     $themedClaude=@(Get-DeckTerminalFrame @('claude-account1','claude-account2') @{} $claudeProfiles @() @{} 0 110 25 '' 'Ready' -Theme $theme -Harness Claude)
     $themedClaudeText=$themedClaude.Text -join "`n"
     Assert ($themedClaude.Count -le 24 -and $themedClaudeText -match 'R selected sign-in' -and $themedClaudeText -match 'G defaults') "$theme Claude dashboard lost check/defaults shortcuts or overflowed."
     Assert ($themedClaudeText -notmatch 'WARM-?UP|PRIMARY|WEEKLY|NEXT RESET|5H|quota') "$theme Claude dashboard displayed unsupported quota or warm-up state."
+    $themedClaudeExtended=@(Get-DeckTerminalFrame @('claude-account1','claude-account2') @{} $claudeProfiles @() @{} 0 110 25 '' '' -Theme $theme -Harness Claude -ShowExtendedInfo $true)
+    Assert ($themedClaudeExtended.Count -le 24 -and ($themedClaudeExtended.Text -join "`n") -match 'Config, credentials, history') "$theme Claude extended info is missing or overflows."
 }
 $agyProfiles=@{'agy-account1'=@{Harness='Antigravity';Provider='Gemini';PlanType='Gemini';AuthStatus='Credentials stored';Model='Gemini default';Effort='default'}}
 $agySettings=@{HarnessAntigravityFailoverEnabled=$true;HarnessAntigravityFailoverAccounts='*'}
 $agyFrame=@(Get-DeckTerminalFrame @('agy-account1') @{} $agyProfiles @() @{} 0 110 25 '' 'Ready' -WarmupSettings $agySettings -Harness Antigravity)
 $agyText=$agyFrame.Text -join "`n"
 Assert ($agyText -match 'headless -p failover: ON' -and $agyText -match 'F failover ON') 'AGY dashboard did not show the configured headless failover setting or shortcut.'
+Assert ($agyText -match 'Ctrl shortcuts' -and $agyText -match 'Alt extended info' -and $agyText -match 'R selected credentials \| A all credentials') 'AGY dashboard is missing the shared table and view hints.'
+Assert ($agyText -notmatch 'New profiles keep their OAuth files separate') 'AGY extended account info is visible before Alt is pressed.'
+$agyExtended=@(Get-DeckTerminalFrame @('agy-account1') @{} $agyProfiles @() @{} 0 110 25 '' '' -WarmupSettings $agySettings -Harness Antigravity -ShowShortcuts $false -ShowExtendedInfo $true)
+Assert (($agyExtended.Text -join "`n") -match 'New profiles keep their OAuth files separate') 'AGY Alt extended info is missing.'
+$agyThemedExtended=@(Get-DeckTerminalFrame @('agy-account1') @{} $agyProfiles @() @{} 0 110 25 '' '' -WarmupSettings $agySettings -Harness Antigravity -Theme Focus -ShowExtendedInfo $true)
+Assert ($agyThemedExtended.Count -le 24 -and ($agyThemedExtended.Text -join "`n") -match 'Profile files are isolated') 'AGY themed Alt extended info is missing or overflows.'
 Assert ($agyText -notmatch 'WARM-?UP|quota|NEXT RESET') 'AGY dashboard displayed unsupported quota or warm-up state.'
 $lastConversation=[pscustomobject]@{Account='account40';Id='12345678-1234-1234-1234-123456789abc'}
 $lastFrame=@(Get-DeckTerminalFrame $names @{} $profiles @() @{} 39 100 25 '' 'Returned' $true $null @{} $false 55 $false 'Native' 'Default' $lastConversation)
@@ -104,6 +128,7 @@ Write-DeckJson (Join-Path $fixture 'deck/terminal-cache.json') @(@{Account='acco
 Assert ((Get-DeckTerminalCache (Join-Path $fixture 'deck')).account1.Status -eq 'blocked') 'Newest cache not selected'
 Write-DeckJson (Join-Path $fixture 'deck/cache.json') @(@{Account='account1';CheckedAt='2026-01-02T12:00:00-03:00';Status='available'})
 Assert ((Get-DeckTerminalCache (Join-Path $fixture 'deck')).account1.Status -eq 'available') 'Cache timestamps with different offsets were compared as text'
+Write-DeckJson (Join-Path $fixture 'deck/auth-helper/status/account1.json') @{Version=1;Account='account1';Email='person@example.com';State='running';Message='Starting sign-in.';At=[DateTimeOffset]::UtcNow.ToString('o')}
 $terminalAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'Deck.Terminal.ps1'),[ref]$null,[ref]$null)
 $dashboard=$terminalAst.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-DeckTerminal'},$true).Extent.Text
 Assert ($dashboard -notmatch '\$attempted|TotalMinutes\s+-lt\s+5') 'Opening the terminal dashboard still schedules automatic usage checks'
@@ -113,6 +138,7 @@ Assert ($dashboard -match '\$queueAll=\$CheckAll\.IsPresent' -and $dashboard -ma
 Assert ($dashboard -match '\$dashboardState=@\{LastConversation=\$null\}' -and $dashboard -match 'Get-DeckTerminalRecentConversation') 'Dashboard does not keep the returned conversation only in its current process'
 $snapshot = @(Show-DeckTerminal -SuiteRoot $fixture -AuthScript 'unused' -Snapshot)
 Assert (($snapshot -join "`n") -match 'CODEX / DECK') 'Snapshot did not render'
+Assert (($snapshot -join "`n") -match 'Signing in\.\.\.') 'Dashboard did not surface running Auth Helper state.'
 'PASS: terminal quota, sanitization, cache merge, paging, masking, empty state and snapshot.'
 
 $freeCache = @{account1=@{Status='available';Windows=@(@{Label='30-day';DurationSeconds=2592000;RemainingPct=42;ResetsAtUnix=$resetAt})}}
@@ -130,7 +156,7 @@ Assert ($settings.WarmupEnabled -and $settings.WarmupAccounts -eq 'account1') 'T
 $settings=Set-DeckWarmupControl (Join-Path $fixture 'deck') -Pause
 Assert (-not $settings.WarmupEnabled -and $settings.WarmupAccounts -eq 'account1') 'Pause lost account selection'
 $frame=@(Get-DeckTerminalFrame $names @{} $profiles @() @{} 39 100 25 '' 'Ready' $true $settings @{})
-Assert ($frame.Count -le 24 -and ($frame.Text -join "`n") -match 'AUTO WARM-UP: PAUSED') 'Warm-up state missing or overflowing'
+Assert ($frame.Count -le 24 -and ($frame.Text -join "`n") -notmatch 'AUTO WARM-UP') 'Warm-up detail should stay hidden until Alt is pressed and the dashboard must fit'
 Assert (Test-Path (Join-Path $fixture 'deck/warmup-settings-changed.json')) 'Scheduler was not signaled'
 'PASS: shared warm-up selection, pause, scheduler signal and compact status.'
 
@@ -149,7 +175,9 @@ foreach($theme in @('Focus','Cards','Ledger','Split')){
     Assert ($themedText -match 'account40' -and $themedText -match '72%' -and $themedText -match '54%') "$theme theme lost the selected account or quotas"
     Assert ($themedText -notmatch 'person@example.com') "$theme theme exposed a masked email"
     Assert ($themedText -match 'LAUNCH' -and $themedText -match 'ACCOUNTS' -and $themedText -match 'WARM-UP' -and $themedText -match 'OPEN' -and $themedText -match 'FILES') "$theme theme did not separate shortcut groups"
-    Assert ($themedText -match 'NOTICE    Ready') "$theme theme hid the current notice"
+    Assert ($themedText -notmatch 'NOTICE\s+Ready\. Cached usage') "$theme theme still shows the cached-usage startup notice"
+    $themedExtended=@(Get-DeckTerminalFrame $names $themeCache $profiles @() @{} 39 100 25 '' '' $true $null @{} $false 55 $false 'Native' $theme $null $null $null $true $true)
+    Assert ($themedExtended.Count -le 24 -and ($themedExtended.Text -join "`n") -match 'STATUS\s+Warm-up') "$theme extended info overflows or omits the warm-up detail"
     $themeSignatures[$theme]=$themedText
     $narrow=@(Get-DeckTerminalFrame $names $themeCache $profiles @() @{} 39 60 25 '' 'Ready' $true $null @{} $false 55 $false 'Native' $theme)
     Assert ($narrow.Count -le 24 -and @($narrow | Where-Object {$_.Text.Length -gt 59}).Count -eq 0) "$theme theme does not fit a narrow terminal"

@@ -4,15 +4,16 @@
     [switch]$Recover,
     [switch]$ShowBrowser,
     [switch]$BrowserHarness,
+    [switch]$NewAccountLogin,
     [switch]$Force,
     [switch]$Batch,
     [string]$Account,
     [string]$Email,
+    [int]$EntryLine = 0,
     [string]$AttemptId,
     [string[]]$Accounts,
     [ValidateRange(1,8)][int]$Concurrency = 3
 )
-
 function Get-DeckAuthHelperPath([string]$Root) {
     return Join-Path $Root 'deck/auth-helper.dat'
 }
@@ -38,11 +39,11 @@ function Write-DeckAuthHelperText([string]$Root,[string]$Text) {
 function Get-DeckAuthHelperStatusPath([string]$Root,[string]$Account) {
     return Join-Path $Root "deck/auth-helper/status/$Account.json"
 }
-function Set-DeckAuthHelperStatus([string]$Root,[string]$Account,[string]$Email,[string]$State,[string]$Message='',[string]$AuthFileStamp) {
+function Set-DeckAuthHelperStatus([string]$Root,[string]$Account,[string]$Email,[string]$State,[string]$Message='',[string]$AuthFileStamp,[string]$AttemptId=$script:AttemptId) {
     try {
         $path=Get-DeckAuthHelperStatusPath $Root $Account
         if(-not $PSBoundParameters.ContainsKey('AuthFileStamp')){$AuthFileStamp=Get-DeckAuthFileStamp $Root $Account}
-        Write-DeckJson $path @{Version=1;Account=$Account;Email=$Email;State=$State;Message=$Message;At=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=$AuthFileStamp;HelperFileStamp=$(try{(Get-Item -LiteralPath (Get-DeckAuthHelperPath $Root) -ErrorAction Stop).LastWriteTimeUtc.Ticks.ToString()}catch{'0'});AttemptId=$script:AttemptId}
+        Write-DeckJson $path @{Version=1;Account=$Account;Email=$Email;State=$State;Message=$Message;At=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=$AuthFileStamp;HelperFileStamp=$(try{(Get-Item -LiteralPath (Get-DeckAuthHelperPath $Root) -ErrorAction Stop).LastWriteTimeUtc.Ticks.ToString()}catch{'0'});AttemptId=$AttemptId}
     } catch {}
 }
 function Get-DeckAuthHelperEntries([string]$Root) {
@@ -65,6 +66,13 @@ function Get-DeckAuthHelperEntries([string]$Root) {
 function Find-DeckAuthHelperEntry([string]$Root,[string]$Email) {
     if([string]::IsNullOrWhiteSpace($Email)){return $null}
     return @(Get-DeckAuthHelperEntries $Root | Where-Object Email -ieq $Email | Select-Object -First 1)[0]
+}
+function Get-DeckAuthHelperEntryByLine([string]$Root,[int]$Line,[string]$Email) {
+    if($Line -lt 1){throw 'Choose a saved Auth Helper entry.'}
+    $entry=@(Get-DeckAuthHelperEntries $Root | Where-Object Line -eq $Line | Select-Object -First 1)
+    if(-not $entry.Count){throw 'That Auth Helper entry no longer exists. Reopen the dashboard and choose again.'}
+    if($Email -and $entry[0].Email -ine $Email){throw 'The selected Auth Helper entry changed. Reopen the dashboard and choose again.'}
+    return $entry[0]
 }
 function Get-DeckAuthHelperEmail([string]$Root,[string]$Account) {
     try {
@@ -117,6 +125,27 @@ function Start-DeckAuthHelperBatch([string]$Root,[string[]]$RequestedAccounts,[i
     $batchPid=$process.Id; $process.Dispose()
     Write-DeckAuthHelperBatchStatus $Root 'started' 'Batch login is running in the background.' $batchPid $targets
     Write-Host ("Started background login for {0} account(s) with up to {1} Playwright workers. Status: {2}" -f $targets.Count,[Math]::Max(1,[Math]::Min(8,$Limit)),(Join-Path $Root 'deck/auth-helper/batch.json'))
+}
+function Start-DeckAuthHelperNewAccountLogin([string]$Root,[string]$Account,[int]$EntryLine,[string]$Email) {
+    if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){throw 'Invalid new Codex account name.'}
+    $accountDirectory=Join-Path $Root ('accounts/'+$Account)
+    if(-not (Test-Path -LiteralPath $accountDirectory -PathType Container)){throw 'Prepare a new Codex account profile before starting Auth Helper sign-in.'}
+    if(Test-Path -LiteralPath (Join-Path $accountDirectory 'auth.json') -PathType Leaf){throw 'This Codex account already has sign-in credentials.'}
+    $entry=Get-DeckAuthHelperEntryByLine $Root $EntryLine $Email
+    $helper=Join-Path $Root 'Deck.AuthHelper.ps1'
+    if(-not (Test-Path -LiteralPath $helper -PathType Leaf)){throw 'Deck Auth Helper is missing. Reinstall Codex Deck.'}
+    if(-not (Get-Command Start-DeckBackgroundPowerShell -ErrorAction SilentlyContinue)){. (Join-Path $Root 'Deck.Core.ps1')}
+    $attemptId=[guid]::NewGuid().ToString('N')
+    Remove-Item -LiteralPath (Get-DeckAuthHelperStatusPath $Root $Account) -ErrorAction SilentlyContinue
+    Set-DeckAuthHelperStatus $Root $Account $entry.Email 'queued' 'Starting a new Codex profile sign-in.' -AttemptId $attemptId
+    try {
+        $process=Start-DeckBackgroundPowerShell $helper @('-Recover','-SuiteRoot',$Root,'-Account',$Account,'-Email',$entry.Email,'-EntryLine',$EntryLine,'-BrowserHarness','-NewAccountLogin','-Force','-AttemptId',$attemptId)
+        $process.Dispose()
+        return $true
+    } catch {
+        Set-DeckAuthHelperStatus $Root $Account $entry.Email 'failed' 'Could not start Auth Helper sign-in.'
+        throw
+    }
 }
 function Invoke-DeckAuthHelperBatch([string]$Root,[string[]]$RequestedAccounts,[int]$Limit=2,[switch]$BrowserHarness) {
     $targets=Get-DeckAuthHelperBatchTargets $Root $RequestedAccounts
@@ -404,10 +433,12 @@ function Start-DeckAuthHelperBrowser([string]$Root,[string]$Account,[string]$Ema
         if($process.ExitCode -ne 0){throw $(if($errorText){$errorText}else{'Playwright sign-in failed.'})}
     } finally { try{if(-not $process.HasExited){$process.Kill()}}catch{};try{$process.Dispose()}catch{};if($bridgePath){Remove-Item -LiteralPath $bridgePath -Force -ErrorAction SilentlyContinue} }
 }
-function Invoke-DeckAuthHelperRecovery([string]$Root,[string]$Account,[string]$Email,[switch]$ShowBrowser,[switch]$BrowserHarness,[switch]$Force) {
+function Invoke-DeckAuthHelperRecovery([string]$Root,[string]$Account,[string]$Email,[int]$EntryLine=0,[switch]$ShowBrowser,[switch]$BrowserHarness,[switch]$NewAccountLogin,[switch]$Force) {
     if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){return}
-    $entry=Find-DeckAuthHelperEntry $Root $Email
+    try{$entry=if($EntryLine -gt 0){Get-DeckAuthHelperEntryByLine $Root $EntryLine $Email}else{Find-DeckAuthHelperEntry $Root $Email}}
+    catch{Set-DeckAuthHelperStatus $Root $Account $Email 'failed' $_.Exception.Message;return}
     if(-not $entry){Set-DeckAuthHelperStatus $Root $Account $Email 'unmatched' 'No helper credential matches this routed email.';return}
+    if($NewAccountLogin -and (-not (Test-Path -LiteralPath (Join-Path $Root "accounts/$Account") -PathType Container) -or (Test-Path -LiteralPath (Join-Path $Root "accounts/$Account/auth.json") -PathType Leaf))){Set-DeckAuthHelperStatus $Root $Account $entry.Email 'failed' 'New-profile sign-in requires an unsigned Codex profile.';return}
     $authStamp=Get-DeckAuthFileStamp $Root $Account
     $helperStamp=try{(Get-Item -LiteralPath (Get-DeckAuthHelperPath $Root) -ErrorAction Stop).LastWriteTimeUtc.Ticks.ToString()}catch{'0'}
     $previous=Read-DeckJson (Get-DeckAuthHelperStatusPath $Root $Account)
@@ -425,7 +456,7 @@ function Invoke-DeckAuthHelperRecovery([string]$Root,[string]$Account,[string]$E
         }else{throw 'Deck login completed, but the installed profile email did not match the helper entry.'}
     } catch {
         Set-DeckAuthHelperStatus $Root $Account $entry.Email 'failed' $_.Exception.Message $authStamp
-        try{Write-DeckJson (Join-Path $Root "deck/auth-issues/$Account.json") @{Version=1;Account=$Account;Code='oauth_invalid';DetectedAt=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=(Get-DeckAuthFileStamp $Root $Account)}}catch{}
+        if(-not $NewAccountLogin){try{Write-DeckJson (Join-Path $Root "deck/auth-issues/$Account.json") @{Version=1;Account=$Account;Code='oauth_invalid';DetectedAt=[DateTimeOffset]::UtcNow.ToString('o');AuthFileStamp=(Get-DeckAuthFileStamp $Root $Account)}}catch{}}
     }
     finally {try{$lock.Dispose()}catch{}}
 }
@@ -457,6 +488,6 @@ function Start-DeckAuthHelperForPendingIssues([string]$Root) {
         if($email -and (Find-DeckAuthHelperEntry $Root $email)){[void](Start-DeckAuthHelperRecoveryWorker $Root $account $email -Force)}
     }
 }
-if($Batch){. (Join-Path $SuiteRoot 'Deck.Core.ps1');Invoke-DeckAuthHelperBatch $SuiteRoot $Accounts $Concurrency -BrowserHarness:$BrowserHarness}
-elseif($Recover){. (Join-Path $SuiteRoot 'Deck.Core.ps1');Invoke-DeckAuthHelperRecovery $SuiteRoot $Account $Email -ShowBrowser:$ShowBrowser -BrowserHarness:$BrowserHarness -Force:$Force}
+if($Batch){$script:AttemptId=$AttemptId;. (Join-Path $SuiteRoot 'Deck.Core.ps1');Invoke-DeckAuthHelperBatch $SuiteRoot $Accounts $Concurrency -BrowserHarness:$BrowserHarness}
+elseif($Recover){$script:AttemptId=$AttemptId;. (Join-Path $SuiteRoot 'Deck.Core.ps1');Invoke-DeckAuthHelperRecovery $SuiteRoot $Account $Email -EntryLine $EntryLine -ShowBrowser:$ShowBrowser -BrowserHarness:$BrowserHarness -NewAccountLogin:$NewAccountLogin -Force:$Force}
 elseif($Edit){Show-DeckAuthHelper $SuiteRoot}
