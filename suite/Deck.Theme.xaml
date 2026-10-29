@@ -33,7 +33,10 @@
    <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button x:Name="SummaryButton" Padding="8,5" Margin="0,0,6,0" HorizontalContentAlignment="Stretch"><Canvas x:Name="SummaryViewport" Height="14" ClipToBounds="True"><TextBlock x:Name="Summary" Foreground="#69DEC0" FontSize="10" TextWrapping="NoWrap" TextTrimming="None"><TextBlock.RenderTransform><TranslateTransform/></TextBlock.RenderTransform></TextBlock></Canvas></Button><Button x:Name="FilterButton" Grid.Column="1" Content="All ▾" Padding="10,5" Margin="0" ToolTip="Filter visible accounts by plan"/></Grid>
   </StackPanel>
   <Button x:Name="StatusButton" DockPanel.Dock="Bottom" Padding="8,5" Margin="0,8,0,0"><TextBlock x:Name="StatusLine" FontSize="10" Foreground="#8493AA" TextAlignment="Center"/></Button>
-  <ScrollViewer Style="{StaticResource {x:Type ScrollViewer}}" CanContentScroll="False" x:Name="CardScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel x:Name="Cards"/></ScrollViewer>
+  <ItemsControl x:Name="Cards" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True">
+   <ItemsControl.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+   <ItemsControl.Template><ControlTemplate TargetType="ItemsControl"><ScrollViewer x:Name="CardScroll" Style="{StaticResource {x:Type ScrollViewer}}" CanContentScroll="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><ItemsPresenter/></ScrollViewer></ControlTemplate></ItemsControl.Template>
+  </ItemsControl>
  </DockPanel>
  </Border>
 </Window>

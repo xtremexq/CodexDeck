@@ -38,8 +38,9 @@ foreach($definition in @(Get-DeckHarnessCatalog)){
     $configActions=[Windows.Controls.WrapPanel]::new(); $configActions.Margin='0,5,0,0'; [void]$details.Children.Add($configActions)
     $accounts=[Windows.Controls.ComboBox]::new(); $accounts.MinWidth=180; $accounts.MaxWidth=300; $accounts.Margin='0,0,8,0'; [void]$configActions.Children.Add($accounts)
     if($id -eq 'Codex'){[void]$accounts.Items.Add('(new-account defaults)')}
-    foreach($accountName in @(if($harnessContext.Demo){@()}else{& $harnessCommands['Get-DeckEntryNames'] $suite})){
-        if((& $harnessCommands['Get-DeckAccountIdentity'] $suite $accountName).Harness -eq $id){[void]$accounts.Items.Add($accountName)}
+    foreach($accountName in @(if($harnessContext.Demo){@()}else{$settingsAccountNames})){
+        $identity=if($settingsAccountSnapshot.ContainsKey($accountName)){$settingsAccountSnapshot[$accountName].Identity}else{& $harnessCommands['Get-DeckAccountIdentity'] $suite $accountName}
+        if($identity.Harness -eq $id){[void]$accounts.Items.Add($accountName)}
     }
     if($accounts.Items.Count){$accounts.SelectedIndex=0}
     $edit=[Windows.Controls.Button]::new(); $edit.Content='Edit all settings'; $edit.IsEnabled=$accounts.Items.Count -gt 0; [void]$configActions.Children.Add($edit)

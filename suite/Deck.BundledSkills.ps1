@@ -42,11 +42,17 @@ function Get-DeckBundledSkills([string]$SuiteRoot) {
     return $skills
 }
 
+$script:deckBundledSkillStateCache=if($script:deckBundledSkillStateCache){$script:deckBundledSkillStateCache}else{@{}}
 function Get-DeckBundledSkillState([string]$SuiteRoot,[string]$Entry) {
     $directory=Get-DeckEntryDirectory $SuiteRoot $Entry
     $path=Join-Path $directory '.codexdeck-skills.json'
-    $state=Read-DeckEnvironmentJson $path
-    if (-not $state) { return [pscustomobject]@{Version=1;Overrides=@()} }
+    $item=Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    $stamp=if($item){$item.LastWriteTimeUtc.Ticks.ToString()+'/'+$item.Length+'/'+[int]$item.Attributes}else{'missing'}
+    $cacheKey=([IO.Path]::GetFullPath($SuiteRoot)+'|'+$Entry).ToLowerInvariant()
+    $cached=$script:deckBundledSkillStateCache[$cacheKey]
+    if($cached -and $cached.Stamp -eq $stamp){return $cached.Value}
+    $state=if($item){Read-DeckEnvironmentJson $path}else{$null}
+    if (-not $state) { $state=[pscustomobject]@{Version=1;Overrides=@()} }
     if ($state.Version -ne 1) { throw 'Unsupported Deck skill settings.' }
     $seen=@{}
     foreach($override in @($state.Overrides)) {
@@ -54,12 +60,21 @@ function Get-DeckBundledSkillState([string]$SuiteRoot,[string]$Entry) {
         if ($override.Enabled -isnot [bool] -or $seen.ContainsKey([string]$override.Name)) { throw 'Invalid Deck skill override.' }
         $seen[[string]$override.Name]=$true
     }
-    return [pscustomobject]@{Version=1;Overrides=@($state.Overrides)}
+    $value=[pscustomobject]@{Version=1;Overrides=@($state.Overrides)}
+    $script:deckBundledSkillStateCache[$cacheKey]=@{Stamp=$stamp;Value=$value}
+    return $value
 }
 
+$script:deckGlobalSkillStateCache=if($script:deckGlobalSkillStateCache){$script:deckGlobalSkillStateCache}else{@{}}
 function Get-DeckGlobalSkillState([string]$SuiteRoot) {
-    $state=Read-DeckEnvironmentJson (Join-Path $SuiteRoot 'deck/skill-defaults.json')
-    if (-not $state) { return [pscustomobject]@{Version=1;Overrides=@()} }
+    $path=Join-Path $SuiteRoot 'deck/skill-defaults.json'
+    $item=Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    $stamp=if($item){$item.LastWriteTimeUtc.Ticks.ToString()+'/'+$item.Length+'/'+[int]$item.Attributes}else{'missing'}
+    $cacheKey=[IO.Path]::GetFullPath($SuiteRoot).ToLowerInvariant()
+    $cached=$script:deckGlobalSkillStateCache[$cacheKey]
+    if($cached -and $cached.Stamp -eq $stamp){return $cached.Value}
+    $state=if($item){Read-DeckEnvironmentJson $path}else{$null}
+    if (-not $state) { $state=[pscustomobject]@{Version=1;Overrides=@()} }
     if ($state.Version -ne 1) { throw 'Unsupported global Deck skill settings.' }
     $seen=@{}
     foreach($override in @($state.Overrides)) {
@@ -67,7 +82,9 @@ function Get-DeckGlobalSkillState([string]$SuiteRoot) {
         if ($override.Enabled -isnot [bool] -or $seen.ContainsKey([string]$override.Name)) { throw 'Invalid global Deck skill override.' }
         $seen[[string]$override.Name]=$true
     }
-    return [pscustomobject]@{Version=1;Overrides=@($state.Overrides)}
+    $value=[pscustomobject]@{Version=1;Overrides=@($state.Overrides)}
+    $script:deckGlobalSkillStateCache[$cacheKey]=@{Stamp=$stamp;Value=$value}
+    return $value
 }
 
 function Test-DeckGlobalSkillEnabled([string]$SuiteRoot,$Skill) {

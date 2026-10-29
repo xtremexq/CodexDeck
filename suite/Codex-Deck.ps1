@@ -30,7 +30,7 @@ $script:cache = @{}; $script:nextCheck = @{}; $script:resets = @{}; $script:hist
 $script:rowPools=@{}; $script:rowControls=@{}; $script:rowStyle=''; $script:expandedRows=@{}; $script:profiles=@{}; $script:profileStamps=@{}; $script:cacheVersion=0; $script:lastPicker=[DateTimeOffset]::MinValue
 $script:accountNames=@(); $script:pickerContentKeys=@{}; $script:usageCacheStamp=''
 $script:cacheWrite=$null; $script:cacheWriteVersion=0; $script:cacheSavedVersion=0
-$script:sessionRead=$null; $script:lastSessionRead=[DateTimeOffset]::MinValue
+$script:sessionRead=$null; $script:lastSessionRead=[DateTimeOffset]::MinValue; $script:sessionVersion=0; $script:sessionSignature=''
 $script:tasks = @{}; $script:batchAccounts=@(); $script:batchUntil=[DateTimeOffset]::MinValue; $script:task = $null
 $script:quit = $false; $script:accountFilter='all'; $script:lastWarmupScheduleCheck=[DateTimeOffset]::UtcNow; $script:scheduleRepairTask=$null; $script:initialScheduleRepairStarted=$false
 $script:sessions = @(); $script:notice = 'Ready'; $script:lastRender = ''
@@ -116,9 +116,13 @@ public static class DeckTaskbarIdentity {
 $script:window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
 $script:appIcon=[Windows.Media.Imaging.BitmapImage]::new([uri](Join-Path $root 'assets/codex-deck.png'))
 $window.Icon=$appIcon; $window.FindName('AppLogo').Source=$appIcon
-foreach ($name in 'AccountPicker','SettingsButton','ConfigButton','NewButton','AutoCompactButton','Summary','SummaryViewport','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','EfficiencyButton','Brand','LayoutRoot','Disclaimer','Header','SummaryButton','FilterButton','StatusButton','CardScroll') {
+foreach ($name in 'AccountPicker','SettingsButton','ConfigButton','NewButton','AutoCompactButton','Summary','SummaryViewport','StatusLine','Cards','ModeButton','MinimizeButton','CloseButton','LaunchBar','EfficiencyButton','Brand','LayoutRoot','Disclaimer','Header','SummaryButton','FilterButton','StatusButton') {
     Set-Variable -Name $name -Value $window.FindName($name) -Scope Script
 }
+$Cards.ApplyTemplate()
+$Cards.HorizontalAlignment='Stretch'; $Cards.VerticalAlignment='Stretch'; $Cards.HorizontalContentAlignment='Stretch'
+$script:CardScroll=$Cards.Template.FindName('CardScroll',$Cards)
+if(-not $CardScroll){throw 'Codex Deck account list template is missing its scroll viewer.'}
 # Native caption hit testing covers the top padding, logo, text and gaps too.
 # The old Header-only mouse handler left the surrounding margin undraggable.
 $chrome=[Windows.Shell.WindowChrome]::new(); $chrome.CaptionHeight=54; $chrome.ResizeBorderThickness='5'; $chrome.GlassFrameThickness='0'; $chrome.CornerRadius='10'
@@ -185,16 +189,20 @@ function Update-DeckWidgetHeight {
     $script:sizing=$true
     try{
         $width=[Math]::Max(100,$window.Width-2-$LayoutRoot.Margin.Left-$LayoutRoot.Margin.Right-9)
-        $Cards.Measure([Windows.Size]::new($width,[double]::PositiveInfinity))
-        $window.Content.Measure([Windows.Size]::new($window.Width,[double]::PositiveInfinity))
+        $virtualPanel=(-not ($SmokeTest -or $Demo) -or [bool]$script:forceVirtualRows)
+        if(-not $virtualPanel){
+            $Cards.Measure([Windows.Size]::new($width,[double]::PositiveInfinity))
+            $window.Content.Measure([Windows.Size]::new($window.Width,[double]::PositiveInfinity))
+        }
         $overhead=2+$LayoutRoot.Margin.Top+$LayoutRoot.Margin.Bottom
-        foreach($section in $LayoutRoot.Children){if($section -ne $CardScroll){$overhead+=$section.DesiredSize.Height}}
+        foreach($section in $LayoutRoot.Children){if($section -ne $Cards){$overhead+=$(if($virtualPanel){$section.ActualHeight}else{$section.DesiredSize.Height})}}
         $collapsed=0
         $expanded=0
-        foreach($card in $Cards.Children){
+        foreach($entry in $Cards.Items){
+            $card=if($entry -is [Windows.Controls.ContentControl] -and $entry.Tag -and $entry.Tag.PSObject.Properties['Account']){$entry.Content}else{$entry}
             if($card -isnot [Windows.Controls.Border]){continue}
-            if($card.Child.IsExpanded){$expanded=[Math]::Max($expanded,$card.DesiredSize.Height)}
-            else{$collapsed=[Math]::Max($collapsed,$card.DesiredSize.Height)}
+            if($card.Child.IsExpanded){$expanded=[Math]::Max($expanded,[Math]::Max($card.DesiredSize.Height,150))}
+            elseif(-not $virtualPanel){$collapsed=[Math]::Max($collapsed,$card.DesiredSize.Height)}
         }
         if($collapsed -eq 0){$collapsed=if($widget){47}else{34}}
         $rows=if($widget){2}else{3}
@@ -279,7 +287,8 @@ function New-DeckEntryMenu([string]$Name) {
                 }
                 'Account config' {if(-not $SmokeTest -and -not $Demo){try{Edit-DeckConfig (Get-DeckHarnessConfigPath $suite $account) $account}catch{$script:notice=$_.Exception.Message}}}
                 'Expand / collapse' {
-                    foreach($card in $Cards.Children){if($card -is [Windows.Controls.Border] -and $card.Child.Tag -eq $account){$card.Child.IsExpanded=-not $card.Child.IsExpanded}}
+                    $script:expandedRows[$account]=-not [bool]$script:expandedRows[$account]
+                    $script:lastRender=''; Render-Deck
                 }
                 'Pin / unpin' {
                     if($account -in $pins){$script:pins=@($pins | Where-Object {$_ -ne $account})}else{$script:pins=@($pins)+$account}
@@ -438,6 +447,11 @@ function Set-DeckMode([string]$Mode, [switch]$Initial) {
         Save-DeckView
     }
     $script:widget=$Mode -ne 'Panel'; $settings.ViewMode=$Mode
+    $virtualize=(-not ($SmokeTest -or $Demo) -or [bool]$script:forceVirtualRows)
+    [Windows.Controls.VirtualizingPanel]::SetIsVirtualizing($Cards,$virtualize)
+    [Windows.Controls.VirtualizingPanel]::SetVirtualizationMode($Cards,[Windows.Controls.VirtualizationMode]::Recycling)
+    [Windows.Controls.VirtualizingPanel]::SetScrollUnit($Cards,[Windows.Controls.ScrollUnit]::Pixel)
+    [Windows.Controls.ScrollViewer]::SetCanContentScroll($Cards,$virtualize)
     $summaryMarquee.Stop(); $script:summaryScroll=0; $Summary.RenderTransform.X=0
     $window.ShowInTaskbar=-not $widget
     $visibility=if($widget){'Collapsed'}else{'Visible'}
@@ -549,11 +563,15 @@ function Complete-DeckDesktopUsageCache([switch]$Wait) {
 }
 function Update-DeckSessions {
     if($sessionRead -and $sessionRead.Handle.IsCompleted){
-        try {$script:sessions=@(Complete-DeckSessionRead $sessionRead)}
+        try {
+            $fresh=@(Complete-DeckSessionRead $sessionRead)
+            $signature=(@($fresh | ForEach-Object {"$($_.Account)|$($_.ProcessId)|$($_.Folder)|$($_.StartedAt)"}) -join "`n")
+            if($signature -cne $sessionSignature){$script:sessions=$fresh;$script:sessionSignature=$signature;$script:sessionVersion++;$script:lastRender=''}
+        }
         catch {$script:notice='Session refresh failed: '+$_.Exception.Message; $script:lastRender=''}
         $script:sessionRead=$null
     }
-    if(-not $sessionRead -and ([DateTimeOffset]::UtcNow-$lastSessionRead).TotalSeconds -ge 5){
+    if(-not $sessionRead -and ([DateTimeOffset]::UtcNow-$lastSessionRead).TotalSeconds -ge 15){
         $script:sessionRead=Start-DeckSessionRead $root
         $script:lastSessionRead=[DateTimeOffset]::UtcNow
     }
@@ -579,7 +597,7 @@ function Set-DeckPickerNames($Names) {
     $script:lastRender=''
 }
 function Update-DeckPicker([switch]$Force) {
-    if(-not $Force -and ([DateTimeOffset]::UtcNow-$lastPicker).TotalSeconds -lt 15){return}
+    if(-not $Force -and ([DateTimeOffset]::UtcNow-$lastPicker).TotalSeconds -lt 30){return}
     $script:lastPicker=[DateTimeOffset]::UtcNow
     $names = @(Get-DeckAccounts)
     foreach($name in $names){
@@ -743,6 +761,22 @@ function Edit-DeckConfig([string]$Path, [string]$Label) {
 }
 function Show-DeckSettings {
     param([switch]$TestUI)
+    # Settings panes share one immutable inventory snapshot. Previously each
+    # harness card and environment list independently enumerated the account
+    # folders and reopened every deck-account/deck-entry file.
+    $script:settingsAccountSnapshot=@{}
+    $script:settingsAccountNames=if($SmokeTest -or $Demo){@()}else{@(Get-DeckEntryNames $suite)}
+    if(-not ($SmokeTest -or $Demo)){
+        foreach($accountName in $settingsAccountNames){
+            $identity=Get-DeckAccountIdentity $suite $accountName
+            $pool=Get-DeckPoolEntry $suite $accountName
+            $script:settingsAccountSnapshot[$accountName]=@{
+                Identity=$identity
+                IsPool=[bool]$pool
+                SignedIn=[bool](Test-Path -LiteralPath (Join-Path $suite "accounts/$accountName/auth.json") -PathType Leaf)
+            }
+        }
+    }
     $dialog=[Windows.Window]::new(); $dialog.Title='Codex Deck / Settings'; $dialog.Width=640; $dialog.Height=[Math]::Min(700,[Windows.SystemParameters]::WorkArea.Height); $dialog.MinWidth=540; $dialog.MinHeight=440
     $dialog.WindowStyle='None'; $dialog.ResizeMode='CanResize'; $dialog.ShowInTaskbar=$false
     $settingsChrome=[Windows.Shell.WindowChrome]::new(); $settingsChrome.CaptionHeight=65; $settingsChrome.ResizeBorderThickness='5'; $settingsChrome.GlassFrameThickness='0'
@@ -886,6 +920,7 @@ function Show-DeckSettings {
                 $control.SelectedItem=$settings.WarmupModel; $control.ToolTip='Paid-plan warm-up uses low reasoning effort. Free and Go use their Codex-default model. Loading models from Codex...'
             }elseif($key -eq 'WarmupAccounts'){
                 $control=[Windows.Controls.ListBox]::new(); $control.SelectionMode='Multiple'; $control.MaxHeight=150
+                [Windows.Controls.VirtualizingPanel]::SetIsVirtualizing($control,$true); [Windows.Controls.VirtualizingPanel]::SetVirtualizationMode($control,[Windows.Controls.VirtualizationMode]::Recycling); [Windows.Controls.ScrollViewer]::SetCanContentScroll($control,$true)
                 $control.IsTextSearchEnabled=$true; $control.Background='#111315'; $control.Foreground='#E4EAF4'; $control.BorderBrush='#363C42'
                 foreach($account in @(Get-DeckAccounts)){[void]$control.Items.Add($account); if($account -in @($settings.WarmupAccounts -split '[,;\s]+')){[void]$control.SelectedItems.Add($account)}}
             }elseif($key -eq 'FailoverAccounts'){
@@ -893,7 +928,8 @@ function Show-DeckSettings {
                 $membership=[Windows.Controls.ComboBox]::new()
                 foreach($option in @('Use all signed-in accounts (including future accounts)','Use all free accounts','Use all Plus or higher accounts','Use selected accounts')){[void]$membership.Items.Add($option)}
                 $members=[Windows.Controls.ListBox]::new(); $members.SelectionMode='Multiple'; $members.MaxHeight=150; $members.Margin='0,8,0,0'
-                $accountNames=if($SmokeTest){@('account1','account2')}else{@(Get-DeckAccounts | Where-Object {(Test-DeckCodexAccount $suite $_) -and (Test-Path -LiteralPath (Join-Path $suite "accounts/$_/auth.json") -PathType Leaf)})}
+                [Windows.Controls.VirtualizingPanel]::SetIsVirtualizing($members,$true); [Windows.Controls.VirtualizingPanel]::SetVirtualizationMode($members,[Windows.Controls.VirtualizationMode]::Recycling); [Windows.Controls.ScrollViewer]::SetCanContentScroll($members,$true)
+                $accountNames=if($SmokeTest){@('account1','account2')}else{@($settingsAccountNames | Where-Object {$settingsAccountSnapshot[$_].Identity.Harness -eq 'Codex' -and $settingsAccountSnapshot[$_].SignedIn -and -not $settingsAccountSnapshot[$_].IsPool})}
                 foreach($account in $accountNames){[void]$members.Items.Add($account)}
                 $savedMembers=@($settings[$key] -split ',' | ForEach-Object {$_.Trim()} | Where-Object {$_})
                 $membership.SelectedIndex=if(($savedMembers -join ',') -eq '*'){0}elseif(($savedMembers -join ',') -eq '*free'){1}elseif(($savedMembers -join ',') -eq '*paid'){2}else{3}
@@ -1317,6 +1353,17 @@ function Get-DeckVisibleAccounts {
     $names=@($accountNames)
     @($names | Where-Object {Test-DeckAccountFilter $_} | Sort-Object @{Expression={if($_ -in $pins){0}else{1}}},@{Expression={if($_ -match '^account(\d+)$'){[long]$Matches[1]}else{[long]::MaxValue}}},{$_})
 }
+function Get-DeckVirtualRowHeight {
+    if($widget){if($settings.WidgetOneLine){return 27.0};return 43.0}
+    return 34.0
+}
+function New-DeckVirtualPlaceholder([string]$Name) {
+    $placeholder=[Windows.Controls.Border]::new()
+    $placeholder.Tag='DeckVirtualPlaceholder'
+    $placeholder.Height=Get-DeckVirtualRowHeight
+    if($expandedRows[$Name]){$placeholder.Height=170}
+    return $placeholder
+}
 function Set-DeckAccountFilter([string]$Filter) {
     if($Filter -notin @('all','free','paid')){return}
     $script:accountFilter=$Filter
@@ -1378,7 +1425,8 @@ function Render-Deck {
     if($widget -and -not $tasks.Count){$StatusLine.Text='Checks '+$(if($settings.AutoCheck){'on'}else{'off'})+'  /  warm-up '+$warmupLabel}
     $SummaryButton.ToolTip=$null
     $Summary.Foreground='#69DEC0'
-    $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + '/' + $accountFilter + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',')
+    $virtualRows=(-not ($SmokeTest -or $Demo) -or [bool]$script:forceVirtualRows)
+    $signature=($names -join ',') + (($sessions | ForEach-Object ProcessId) -join ',') + '/' + $cacheVersion + '/' + [DateTimeOffset]::Now.ToString('yyyyMMddHHmm') + '/' + $accountFilter + '/' + ($manualChecks.Keys -join ',') + '/' + ($tasks.Keys -join ',') + '/' + [string]$CardScroll.VerticalOffset.ToString('0.0')
     if ($signature -eq $lastRender) { return }
     $script:lastRender=$signature
     $sessionIndex=New-DeckSessionIndex $sessions
@@ -1390,12 +1438,29 @@ function Render-Deck {
     }
     $rendered=[Collections.Generic.List[Windows.UIElement]]::new()
     $built=0
-    if (-not $names.Count) {
-        $Cards.Children.Clear()
-        $emptyText=if($accountFilter -eq 'free'){'No free accounts match this view.'}elseif($accountFilter -eq 'paid'){'No Plus or higher accounts match this view.'}else{'Your deck is clear. Pick an account and launch a terminal. Already-running sessions attach after their next codex-auth launch.'}
-        [void]$Cards.Children.Add((New-DeckText $emptyText '#9BB5D9' 14)); Update-DeckWidgetHeight; return
+    $realizeIndexes=[Collections.Generic.HashSet[int]]::new()
+    if(-not $virtualRows){for($i=0;$i -lt $names.Count;$i++){[void]$realizeIndexes.Add($i)}}
+    elseif($names.Count){
+        $estimated=Get-DeckVirtualRowHeight
+        $viewport=[Math]::Max($estimated*6,[double]$CardScroll.ViewportHeight)
+        $offset=[Math]::Max(0,[double]$CardScroll.VerticalOffset)
+        $first=[Math]::Max(0,[int][Math]::Floor($offset/$estimated)-3)
+        $last=[Math]::Min($names.Count-1,[int][Math]::Ceiling(($offset+$viewport)/$estimated)+3)
+        for($i=$first;$i -le $last;$i++){[void]$realizeIndexes.Add($i)}
+        foreach($expandedName in @($expandedRows.Keys)){ $expandedIndex=[Array]::IndexOf([string[]]$names,[string]$expandedName);if($expandedIndex -ge 0){[void]$realizeIndexes.Add($expandedIndex)} }
     }
-    foreach ($name in $names) {
+    if (-not $names.Count) {
+        $Cards.Items.Clear()
+        $emptyText=if($accountFilter -eq 'free'){'No free accounts match this view.'}elseif($accountFilter -eq 'paid'){'No Plus or higher accounts match this view.'}else{'Your deck is clear. Pick an account and launch a terminal. Already-running sessions attach after their next codex-auth launch.'}
+        [void]$Cards.Items.Add((New-DeckText $emptyText '#9BB5D9' 14)); Update-DeckWidgetHeight; return
+    }
+    for($nameIndex=0;$nameIndex -lt $names.Count;$nameIndex++) {
+        $name=$names[$nameIndex]
+        if(-not $realizeIndexes.Contains($nameIndex)){
+            $rowControls.Remove($name)
+            $rendered.Add((New-DeckVirtualPlaceholder $name))
+            continue
+        }
         $connected=@(Get-DeckIndexedSessions $sessionIndex $name); $row=$cache[$name]
         $profile=$profiles[$name]
         $minuteKey=if($expandedRows[$name] -and $settings.ShowUptime -and $connected.Count){[DateTimeOffset]::Now.ToString('yyyyMMddHHmm')}else{''}
@@ -1450,15 +1515,23 @@ function Render-Deck {
     # Retain existing visuals and scroll position; only insert/remove changed rows.
     for($index=0;$index -lt $rendered.Count;$index++){
         $card=$rendered[$index]
-        if($index -lt $Cards.Children.Count -and [object]::ReferenceEquals($Cards.Children[$index],$card)){continue}
+        if($index -lt $Cards.Items.Count -and [object]::ReferenceEquals($Cards.Items[$index],$card)){continue}
         $structureChanged=$true
-        if($Cards.Children.Contains($card)){$Cards.Children.Remove($card)}
-        $Cards.Children.Insert($index,$card)
+        if($Cards.Items.Contains($card)){$Cards.Items.Remove($card);if($index -gt $Cards.Items.Count){$index=$Cards.Items.Count}}
+        elseif($index -lt $Cards.Items.Count){$Cards.Items.RemoveAt($index)}
+        $Cards.Items.Insert($index,$card)
     }
-    while($Cards.Children.Count -gt $rendered.Count){$structureChanged=$true; $Cards.Children.RemoveAt($Cards.Children.Count-1)}
+    while($Cards.Items.Count -gt $rendered.Count){$structureChanged=$true; $Cards.Items.RemoveAt($Cards.Items.Count-1)}
     if($structureChanged -or $built -gt 0 -or $script:defaultViewHeight){Update-DeckWidgetHeight}
 
 }
+$CardScroll.Add_ScrollChanged({param($sender,$eventArgs)
+    if([Math]::Abs($eventArgs.VerticalChange) -le 0.1 -or $script:renderAfterScroll){return}
+    $script:renderAfterScroll=$true
+    [void]$window.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Background,[Action]{
+        $script:renderAfterScroll=$false;$script:lastRender='';Render-Deck
+    })
+})
 function Invoke-DeckShowRequest {
     $signal=Join-Path $root 'show.json'
     if(-not (Test-Path -LiteralPath $signal)){return}
@@ -1581,7 +1654,10 @@ function Invoke-DeckTick {
     }
     if($tasks.Count -lt 8 -and ($settings.AutoCheck -or $manualChecks.Count)){
         if($tasks.Count -lt 8){
-            $automatic=@(); if($settings.AutoCheck -and $now -ge $autoCheckReadyAt){$automatic=@(Get-DeckVisibleAccounts | Where-Object {(Test-DeckCodexAccount $suite $_) -and -not $profiles[$_].AuthIssue})}
+            # Profiles already contain harness identity from the throttled account refresh.
+            # Re-reading every deck-account.json on each dispatcher tick made a large
+            # account list steadily consume CPU while automatic checks were enabled.
+            $automatic=@(); if($settings.AutoCheck -and $now -ge $autoCheckReadyAt){$automatic=@(Get-DeckVisibleAccounts | Where-Object {(-not $profiles[$_].Harness -or $profiles[$_].Harness -eq 'Codex') -and -not $profiles[$_].AuthIssue})}
             $due=@(Get-DeckDueAccounts $automatic $manualChecks $nextCheck $now)
             foreach($account in $due){
                 if (Get-DeckPoolEntry $suite $account) { $manualChecks.Remove($account); continue }
@@ -1901,13 +1977,13 @@ try{
         $environmentUI.Membership.SelectedIndex=1
         if($environmentUI.Members.Visibility -ne 'Collapsed' -or $environmentUI.State.Pools.pool.Members[0] -ne '*free'){throw 'Free membership draft failed.'}
         $environmentUI.Resources.SelectedIndex=0
-        $recipient=$environmentUI.Recipients.Children[0]; $recipient.IsChecked=$true
+        $recipient=$environmentUI.Recipients.Items[0]; $recipient.IsChecked=$true
         $recipient.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         if($environmentUI.State.Changes.Count -ne 1){throw 'Sharing checkbox did not stage its change.'}
         $environmentUI.Owner.SelectedItem='account1'
-        if(@($environmentUI.Resources.Items | ForEach-Object Resource) -contains 'memories' -or @($environmentUI.Recipients.Children | Where-Object IsChecked).Count){throw 'Owner change retained stale resources or selections.'}
+        if(@($environmentUI.Resources.Items | ForEach-Object Resource) -contains 'memories' -or @($environmentUI.Recipients.Items | Where-Object IsChecked).Count){throw 'Owner change retained stale resources or selections.'}
         $environmentUI.Owner.SelectedItem='pool'
-        if(-not $environmentUI.Recipients.Children[0].IsChecked){throw 'Owner change lost its pending sharing draft.'}
+        if(-not $environmentUI.Recipients.Items[0].IsChecked){throw 'Owner change lost its pending sharing draft.'}
         if($headers -notcontains 'Checks & Warmup' -or $headers -contains 'Checks' -or $headers -contains 'Usage Warmup'){throw 'Checks and warmup must share one tab.'}
         $checkPanel=$settingsTest.Controls.AutoCheck.Parent
         if($checkPanel -ne $settingsTest.Controls.WarmupEnabled.Parent -or $checkPanel.Children.IndexOf($settingsTest.Controls.AutoCheck) -ge $checkPanel.Children.IndexOf($settingsTest.Controls.WarmupEnabled)){throw 'Checks must appear above warmup.'}
@@ -2034,8 +2110,8 @@ try{
         }
         $settingsUI.Dialog.Close()
         $window.Content.Measure([Windows.Size]::new($window.Width,$window.Height)); $window.Content.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $window.Content.UpdateLayout()
-        if($Cards.Children.Count -ne 2){throw 'Smoke test all-account card rendering failed.'}
-        $rowExpander=$Cards.Children[0].Child
+        if($Cards.Items.Count -ne 2){throw 'Smoke test all-account card rendering failed.'}
+        $rowExpander=$Cards.Items[0].Child
         if($rowExpander -isnot [Windows.Controls.Expander] -or $rowExpander.IsExpanded){throw 'Row must start collapsed.'}
         $collapsedHeight=$window.Height
         $rowExpander.IsExpanded=$true
@@ -2056,10 +2132,10 @@ try{
         }
         foreach($key in @('ShowModel','ShowProcessIds','ShowFolder','ShowSource','ShowCredits','ShowSessionCount','ShowUptime','ShowWarmup','ShowCheckedAt')){$settings[$key]=$true}
         Set-DeckMode 'Panel' -Initial; Render-Deck
-        $Cards.Children[0].Child.IsExpanded=$true
-        $detailLabels=@($Cards.Children[0].Child.Content.Children | Where-Object {$_ -is [Windows.Controls.Grid]} | ForEach-Object {$_.Children[0].Text})
+        $Cards.Items[0].Child.IsExpanded=$true
+        $detailLabels=@($Cards.Items[0].Child.Content.Children | Where-Object {$_ -is [Windows.Controls.Grid]} | ForEach-Object {$_.Children[0].Text})
         foreach($label in @('Status','Email','Plan','Terminals','Model','Uptime','Last check','Source','Process IDs','Folders','Warm-up','Credits')){if($label -notin $detailLabels){throw "Missing expanded field: $label"}}
-        if($LaunchBar.Visibility -ne 'Visible' -or $Cards.Children.Count -ne 3){throw "Panel mode failed: LaunchBar=$($LaunchBar.Visibility), cards=$($Cards.Children.Count)."}
+        if($LaunchBar.Visibility -ne 'Visible' -or $Cards.Items.Count -ne 3){throw "Panel mode failed: LaunchBar=$($LaunchBar.Visibility), cards=$($Cards.Items.Count)."}
         if($window.FindName('AllButton') -or $window.FindName('CheckButton')){throw 'Redundant panel controls remain.'}
         if(-not $window.ShowInTaskbar -or $MinimizeButton.Visibility -ne 'Visible'){throw 'Panel taskbar/minimize failed.'}
         if($MinimizeButton.Parent.Children[0] -ne $MinimizeButton){throw 'Minimize must be the first caption button.'}
@@ -2088,14 +2164,14 @@ try{
             $window.Height=$window.MinHeight
             $window.Content.Measure([Windows.Size]::new($window.Width,$window.Height)); $window.Content.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $window.Content.UpdateLayout()
             $count=if($widget){2}else{3}
-            $needed=0; for($index=0;$index -lt $count;$index++){$needed+=$Cards.Children[$index].DesiredSize.Height}
+            $needed=0; for($index=0;$index -lt $count;$index++){$needed+=$Cards.Items[$index].DesiredSize.Height}
             if($CardScroll.ViewportHeight+1 -lt $needed){throw "$testMode minimum clips collapsed entries: $($CardScroll.ViewportHeight) / $needed"}
-            $before=$window.Height; $Cards.Children[0].Child.IsExpanded=$true
+            $before=$window.Height; $Cards.Items[0].Child.IsExpanded=$true
             $window.Content.UpdateLayout(); Update-DeckWidgetHeight
             $window.Content.Measure([Windows.Size]::new($window.Width,$window.Height)); $window.Content.Arrange([Windows.Rect]::new(0,0,$window.Width,$window.Height)); $window.Content.UpdateLayout()
-            if($window.Height -lt $before -or $CardScroll.ViewportHeight+1 -lt $Cards.Children[0].DesiredSize.Height){throw "$testMode expansion shrinks or clips the entry"}
-            if($Cards.Children[0].ToolTip){throw 'Entry hover overlay remains'}
-            $entryMenu=$Cards.Children[0].ContextMenu
+            if($window.Height -lt $before -or $CardScroll.ViewportHeight+1 -lt $Cards.Items[0].DesiredSize.Height){throw "$testMode expansion shrinks or clips the entry"}
+            if($Cards.Items[0].ToolTip){throw 'Entry hover overlay remains'}
+            $entryMenu=$Cards.Items[0].ContextMenu
             if($entryMenu.Items.Count -ne 11 -or $entryMenu.Items[1].Header -ne 'Log in' -or $entryMenu.Items[10].Foreground.ToString() -ne '#FFF17D8D'){throw 'Entry actions or red Delete missing'}
             $entryMenu.Items[2].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
             if(-not $manualChecks.ContainsKey('account1')){throw 'Entry check did not queue its account'}
@@ -2103,7 +2179,7 @@ try{
             $window.Width=$rememberWidth; $window.Height=$rememberHeight
             Set-DeckMode $(if($widget){'Panel'}else{'Widget'}); Render-Deck
             Set-DeckMode $testMode; Render-Deck
-            if([Math]::Abs($window.Width-$rememberWidth) -gt 1 -or [Math]::Abs($window.Height-$rememberHeight) -gt 1 -or -not $Cards.Children[0].Child.IsExpanded){throw "$testMode state was not restored: $($window.Width)/$rememberWidth, $($window.Height)/$rememberHeight, expanded=$($Cards.Children[0].Child.IsExpanded)"}
+            if([Math]::Abs($window.Width-$rememberWidth) -gt 1 -or [Math]::Abs($window.Height-$rememberHeight) -gt 1 -or -not $Cards.Items[0].Child.IsExpanded){throw "$testMode state was not restored: $($window.Width)/$rememberWidth, $($window.Height)/$rememberHeight, expanded=$($Cards.Items[0].Child.IsExpanded)"}
         }
         $stressAccounts=@(1..40 | ForEach-Object {"account$_"})
         $script:sessions=@($stressAccounts | ForEach-Object {[pscustomobject]@{Account=$_;ProcessId=$PID;StartedAt=[DateTimeOffset]::Now.ToString('o')}})
@@ -2130,20 +2206,20 @@ try{
             $mouseArgs=[Windows.Input.MouseEventArgs]::new([Windows.Input.Mouse]::PrimaryDevice,0); $mouseArgs.RoutedEvent=[Windows.UIElement]::MouseEnterEvent; $SummaryButton.RaiseEvent($mouseArgs)
             if($script:summaryScroll -ne 0 -or $script:summaryDirection -ne 1 -or -not $summaryMarquee.IsEnabled){throw "$testMode hovering the summary did not restart its rightward roll."}
             $summaryMarquee.Stop();$script:summaryScroll=0;$Summary.RenderTransform.X=0;$Summary.Text=$tickerText;$script:summaryMeasuredText='';Update-DeckSummaryOverflow
-            $originalCards=@($Cards.Children)
-            $menu=$Cards.Children[1].ContextMenu; $menu.PlacementTarget=$Cards.Children[1]
+            $originalCards=@($Cards.Items)
+            $menu=$Cards.Items[1].ContextMenu; $menu.PlacementTarget=$Cards.Items[1]
             $menu.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.ContextMenu]::OpenedEvent))
-            if($menu.Items[1].Tag.Account -ne $Cards.Children[1].Child.Tag){throw 'Shared entry menu targets the wrong account'}
+            if($menu.Items[1].Tag.Account -ne $Cards.Items[1].Child.Tag){throw 'Shared entry menu targets the wrong account'}
 
             $settings.Width+=1; $settings.WidgetHeight+=1; $script:lastRender=''; Render-Deck
-            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Children[$index])){throw 'Geometry change rebuilt account controls'}}
+            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Items[$index])){throw 'Geometry change rebuilt account controls'}}
             $fullSessions=$sessions; $script:sessions=@($sessions[0]); $script:lastRender=''; Render-Deck
             $script:sessions=$fullSessions; $script:lastRender=''; $filterWatch=[Diagnostics.Stopwatch]::StartNew(); Render-Deck
-            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Children[$index])){throw 'Filter switch rebuilt cached rows'}}
+            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Items[$index])){throw 'Filter switch rebuilt cached rows'}}
             Write-Output ("{0}: cached 40-account list restored in {1} ms." -f $testMode,$filterWatch.ElapsedMilliseconds)
             foreach($session in $sessions){$manualChecks[$session.Account]=[DateTimeOffset]::UtcNow}
             $watch=[Diagnostics.Stopwatch]::StartNew(); $script:lastRender=''; Render-Deck
-            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Children[$index])){throw 'Checking rebuilt unchanged rows'}}
+            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Items[$index])){throw 'Checking rebuilt unchanged rows'}}
             Write-Output ("{0} 40-account Check state update: {1} ms (rows retained)" -f $testMode,$watch.ElapsedMilliseconds)
             $manualChecks.Clear()
             $CardScroll.ScrollToEnd(); $window.Content.UpdateLayout()
@@ -2154,16 +2230,27 @@ try{
                 $cache[$session.Account]=$record
             }
             $script:lastRender=''; Render-Deck; $window.Content.UpdateLayout()
-            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Children[$index])){throw 'Completed checks replaced account rows'}}
+            for($index=0;$index -lt $originalCards.Count;$index++){if(-not [object]::ReferenceEquals($originalCards[$index],$Cards.Items[$index])){throw 'Completed checks replaced account rows'}}
             if([Math]::Abs($CardScroll.VerticalOffset-$beforeOffset) -gt 1 -or [Math]::Abs($CardScroll.ExtentHeight-$beforeExtent) -gt 1){throw 'Completed checks disturbed scroll position or extent'}
-            $quotaText=if($testMode -eq 'Widget'){$Cards.Children[0].Resources['HealthSummary'].Text}else{$Cards.Children[0].Resources['UsageHost'].Children[0].Child.Children[1].Text}
+            $quotaText=if($testMode -eq 'Widget'){$Cards.Items[0].Resources['HealthSummary'].Text}else{$Cards.Items[0].Resources['UsageHost'].Children[0].Child.Children[1].Text}
             if($quotaText -notmatch '17%'){throw 'Retained row did not display new quota'}
             Write-Output "${testMode}: completed results retain rows, quota updates, scroll offset and extent."
-            $script:rowControls=@{}; $Cards.Children.Clear(); $script:lastRender=''
+            $script:rowControls=@{}; $Cards.Items.Clear(); $script:lastRender=''
             $watch=[Diagnostics.Stopwatch]::StartNew(); Render-Deck
-            if($Cards.Children.Count -ne 40){throw 'Account list was not presented in a single render'}
-            if(@($Cards.Children | Where-Object {$_.Child.Content}).Count){throw 'Collapsed rows eagerly built details'}
+            if($Cards.Items.Count -ne 40){throw 'Account list was not presented in a single render'}
+            if(@($Cards.Items | Where-Object {$_.Child.Content}).Count){throw 'Collapsed rows eagerly built details'}
             Write-Output ("{0}: all 40 rows presented together in {1} ms." -f $testMode,$watch.ElapsedMilliseconds)
+        }
+        $script:forceVirtualRows=$true
+        try{
+            $script:rowControls=@{};$Cards.Items.Clear();$script:lastRender='';Set-DeckMode 'Panel' -Initial;Render-Deck
+            $virtualCount=$rowControls.Count;$placeholderCount=@($Cards.Items | Where-Object Tag -eq 'DeckVirtualPlaceholder').Count
+            if($Cards.Items.Count -ne 40 -or $virtualCount -gt 20 -or $placeholderCount -lt 20){throw "Account virtualization did not bound the heavy visual rows: items=$($Cards.Items.Count), realized=$virtualCount, placeholders=$placeholderCount."}
+            $CardScroll.ScrollToEnd();$window.Content.UpdateLayout();Render-Deck
+            if(-not $rowControls.ContainsKey('account40')){throw 'Scrolling to the end did not realize the last account.'}
+            Write-Output ("PASS: virtualized account rows keep all 40 identities while realizing {0} heavy rows." -f $virtualCount)
+        }finally{
+            $script:forceVirtualRows=$false;$script:rowControls=@{};$Cards.Items.Clear();$script:lastRender='';Set-DeckMode 'Widget' -Initial;Render-Deck
         }
         $deletePreview=Show-DeckDelete 'account1' -TestUI
         if($deletePreview.WindowStyle -ne 'None' -or -not $deletePreview.Icon){throw 'Delete confirmation is not themed'}
@@ -2198,7 +2285,7 @@ try{
             $draftUI=Show-DeckSettings -TestUI
             $draftUI.Environment.Membership.SelectedIndex=1
             $draftUI.Environment.Resources.SelectedItem=@($draftUI.Environment.Resources.Items | Where-Object Resource -eq 'skills')[0]
-            $shareCheck=$draftUI.Environment.Recipients.Children[0];$shareCheck.IsChecked=$true
+            $shareCheck=$draftUI.Environment.Recipients.Items[0];$shareCheck.IsChecked=$true
             $shareCheck.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
             $draftUI.Controls.HarnessClaudeEnabled.IsChecked=$true
             $draftUI.Controls.HarnessClaudePath.Text='C:\Synthetic\claude.exe'

@@ -25,14 +25,22 @@ function Get-DeckEntryDirectory([string]$SuiteRoot, [string]$Name) {
         (($root.Attributes -bor $item.Attributes) -band [IO.FileAttributes]::ReparsePoint)) { throw 'Entries must be real directories inside accounts.' }
     return $item.FullName
 }
+$script:deckPoolEntryCache = if($script:deckPoolEntryCache){$script:deckPoolEntryCache}else{@{}}
 function Get-DeckPoolEntry([string]$SuiteRoot, [string]$Name) {
     Assert-DeckEntryName $Name
     $path = Join-Path $SuiteRoot "accounts/$Name/deck-entry.json"
-    $entry = Read-DeckEnvironmentJson $path
+    $item=Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    $stamp=if($item){$item.LastWriteTimeUtc.Ticks.ToString()+'/'+$item.Length+'/'+[int]$item.Attributes}else{'missing'}
+    $cacheKey=([IO.Path]::GetFullPath($SuiteRoot)+'|'+$Name).ToLowerInvariant()
+    $cached=$script:deckPoolEntryCache[$cacheKey]
+    if($cached -and $cached.Stamp -eq $stamp){return $cached.Value}
+    $entry = if($item){Read-DeckEnvironmentJson $path}else{$null}
     if ($entry) {
         if ($entry.Version -ne 1 -or $entry.Kind -ne 'pool' -or $entry.Mode -notin @('Ordered','Best') -or -not @($entry.Accounts).Count) { throw 'Invalid pooled entry configuration.' }
-        return $entry
     }
+    $script:deckPoolEntryCache[$cacheKey]=@{Stamp=$stamp;Value=$entry}
+    if($script:deckPoolEntryCache.Count -gt 1024){$script:deckPoolEntryCache=@{$cacheKey=$script:deckPoolEntryCache[$cacheKey]}}
+    return $entry
 }
 function Get-DeckEntryNames([string]$SuiteRoot) {
     @(Get-ChildItem -LiteralPath (Join-Path $SuiteRoot 'accounts') -Directory -ErrorAction SilentlyContinue |
@@ -40,16 +48,25 @@ function Get-DeckEntryNames([string]$SuiteRoot) {
         Sort-Object @{Expression={ if (Test-Path -LiteralPath (Join-Path $_.FullName 'deck-entry.json')) { 0 } else { 1 } }},
         @{Expression={ if ($_.Name -match '^account(\d+)$') { [long]$Matches[1] } else { [long]::MaxValue } }},Name | ForEach-Object Name)
 }
+$script:deckPoolAccountPlanCache=if($script:deckPoolAccountPlanCache){$script:deckPoolAccountPlanCache}else{@{}}
 function Get-DeckPoolAccountPlan([string]$SuiteRoot, [string]$Name) {
-    $auth=Read-DeckEnvironmentJson (Join-Path (Get-DeckEntryDirectory $SuiteRoot $Name) 'auth.json')
+    $directory=Get-DeckEntryDirectory $SuiteRoot $Name
+    $authPath=Join-Path $directory 'auth.json'
+    $item=Get-Item -LiteralPath $authPath -Force -ErrorAction SilentlyContinue
+    $stamp=if($item){$item.LastWriteTimeUtc.Ticks.ToString()+'/'+$item.Length+'/'+[int]$item.Attributes}else{'missing'}
+    $cacheKey=([IO.Path]::GetFullPath($SuiteRoot)+'|'+$Name).ToLowerInvariant()
+    $cached=$script:deckPoolAccountPlanCache[$cacheKey]
+    if($cached -and $cached.Stamp -eq $stamp){return $cached.Plan}
+    $auth=if($item){Read-DeckEnvironmentJson $authPath}else{$null}
     foreach ($token in @($auth.tokens.id_token,$auth.tokens.access_token)) {
         try {
             $part=$token.Split('.')[1].Replace('-','+').Replace('_','/')
             $claims=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($part.PadRight($part.Length+(4-$part.Length%4)%4,'='))) | ConvertFrom-Json
             $plan=$claims.'https://api.openai.com/auth'.chatgpt_plan_type
-            if ($plan) { return ([string]$plan).ToLowerInvariant() }
+            if ($plan) { $plan=([string]$plan).ToLowerInvariant();$script:deckPoolAccountPlanCache[$cacheKey]=@{Stamp=$stamp;Plan=$plan};return $plan }
         } catch { }
     }
+    $script:deckPoolAccountPlanCache[$cacheKey]=@{Stamp=$stamp;Plan='unknown'}
     return 'unknown'
 }
 function Resolve-DeckEntryPool([string]$SuiteRoot, $Entry) {
@@ -98,11 +115,19 @@ function Assert-DeckEntryIdle([string]$SuiteRoot, [string]$Name) {
     if (($env:CODEX_HOME -and [IO.Path]::GetFullPath($env:CODEX_HOME).TrimEnd('\') -eq $dir) -or
         ((Get-Command Get-DeckSessions -ErrorAction SilentlyContinue) -and @(Get-DeckSessions (Join-Path $SuiteRoot 'deck') | Where-Object Account -eq $Name).Count)) { throw "Close $Name's connected terminals before changing its environment." }
 }
+ $script:deckSharingStateCache=if($script:deckSharingStateCache){$script:deckSharingStateCache}else{@{}}
 function Get-DeckSharing([string]$SuiteRoot, [string]$Name) {
     $dir = Get-DeckEntryDirectory $SuiteRoot $Name
-    $state = Read-DeckEnvironmentJson (Join-Path $dir 'deck-sharing.json')
-    if (-not $state) { return [pscustomobject]@{Version=1; Bindings=@()} }
+    $path=Join-Path $dir 'deck-sharing.json'
+    $item=Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    $stamp=if($item){$item.LastWriteTimeUtc.Ticks.ToString()+'/'+$item.Length+'/'+[int]$item.Attributes}else{'missing'}
+    $cacheKey=([IO.Path]::GetFullPath($SuiteRoot)+'|'+$Name).ToLowerInvariant()
+    $cached=$script:deckSharingStateCache[$cacheKey]
+    if($cached -and $cached.Stamp -eq $stamp){return $cached.Value}
+    $state = if($item){Read-DeckEnvironmentJson $path}else{$null}
+    if (-not $state) { $state=[pscustomobject]@{Version=1; Bindings=@()} }
     if ($state.Version -ne 1) { throw 'Unsupported sharing configuration.' }
+    $script:deckSharingStateCache[$cacheKey]=@{Stamp=$stamp;Value=$state}
     return $state
 }
 function Assert-DeckResource([string]$Resource) {

@@ -16,7 +16,7 @@ $files += @('Deck.AutoCompact.cjs','Deck.AutoCompact.Sidecar.cjs','Deck.Antigrav
 $files += @('Deck.Router.ps1','Deck.RouterSettings.ps1','Deck.RouterSupervisor.ps1','Test-DeckRouter.ps1')
 $routerPayload=Join-Path $PSScriptRoot 'suite/router-source'
 if(Test-Path -LiteralPath $routerPayload){$files+=@(Get-ChildItem -LiteralPath $routerPayload -Recurse -File | ForEach-Object {'router-source/'+$_.FullName.Substring($routerPayload.Length).TrimStart('\').Replace('\','/')})}
-$wrappers = @('codex-auth.ps1','codex-auth.cmd','claude-auth.cmd','agy-auth.cmd','deck-skills.ps1','deck-skills.cmd','codex-check.cmd','codex-deck.cmd','codex-deck-session.ps1','codex-deck-session.cmd','account.cmd','pool.cmd','usage.cmd','delay.cmd','schedule.cmd','check.cmd','deck.cmd','context.cmd','autocompact.cmd')
+$wrappers = @('codex-auth.ps1','codex-auth.cmd','claude-auth.cmd','agy-auth.ps1','agy-auth.cmd','deck-skills.ps1','deck-skills.cmd','codex-check.cmd','codex-deck.cmd','codex-deck-session.ps1','codex-deck-session.cmd','account.cmd','pool.cmd','usage.cmd','delay.cmd','schedule.cmd','check.cmd','deck.cmd','context.cmd','autocompact.cmd')
 # Validate the complete payload before changing an existing installation.
 foreach ($name in $files) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "suite/$name") -PathType Leaf)) { throw "Missing suite file: $name" } }
 foreach ($name in $wrappers) { if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "bin/$name") -PathType Leaf)) { throw "Missing command: $name" } }

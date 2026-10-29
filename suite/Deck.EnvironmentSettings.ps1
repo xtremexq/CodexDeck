@@ -22,9 +22,9 @@ function Add-DeckEnvironmentLabel([string]$Text) {
 [void]$environmentPanel.Children.Add((New-DeckText 'Pooled environment' '#EDF1F7' 18))
 Add-DeckEnvironmentLabel 'Environment'
 $poolNameBox=[Windows.Controls.ComboBox]::new(); $poolNameBox.IsEditable=$true; $poolNameBox.ToolTip='Choose an environment or type a new name.'
-$environmentNames=if($SmokeTest){@('pool','account1','account2')}else{@(Get-DeckEntryNames $suite)}
+$environmentNames=if($SmokeTest){@('pool','account1','account2')}else{@($settingsAccountNames)}
 foreach($entryName in $environmentNames) {
-    if (($SmokeTest -and $entryName -eq 'pool') -or (-not $SmokeTest -and (Get-DeckPoolEntry $suite $entryName))) { [void]$poolNameBox.Items.Add($entryName) }
+    if (($SmokeTest -and $entryName -eq 'pool') -or (-not $SmokeTest -and $settingsAccountSnapshot[$entryName].IsPool)) { [void]$poolNameBox.Items.Add($entryName) }
 }
 if($poolNameBox.Items.Count){$poolNameBox.SelectedIndex=0; $poolNameBox.Text=[string]$poolNameBox.SelectedItem}else{$poolNameBox.Text='pool'}
 [void]$environmentPanel.Children.Add($poolNameBox)
@@ -32,9 +32,9 @@ Add-DeckEnvironmentLabel 'Quota accounts'
 $poolMembership=[Windows.Controls.ComboBox]::new()
 foreach($label in @('Use all signed-in accounts (including future accounts)','Use all free accounts','Use all Plus or higher accounts','Use selected accounts')){[void]$poolMembership.Items.Add($label)}
 [void]$environmentPanel.Children.Add($poolMembership)
-$poolMemberList=[Windows.Controls.ListBox]::new(); $poolMemberList.SelectionMode='Multiple'; $poolMemberList.MaxHeight=150; $poolMemberList.Margin='0,8,0,0'
+$poolMemberList=[Windows.Controls.ListBox]::new(); $poolMemberList.SelectionMode='Multiple'; $poolMemberList.MaxHeight=150; $poolMemberList.Margin='0,8,0,0'; [Windows.Controls.VirtualizingPanel]::SetIsVirtualizing($poolMemberList,$true); [Windows.Controls.VirtualizingPanel]::SetVirtualizationMode($poolMemberList,[Windows.Controls.VirtualizationMode]::Recycling); [Windows.Controls.ScrollViewer]::SetCanContentScroll($poolMemberList,$true)
 foreach($entryName in $environmentNames) {
-    if (($SmokeTest -and $entryName -eq 'pool') -or (-not $SmokeTest -and ((Get-DeckPoolEntry $suite $entryName) -or -not (Test-Path -LiteralPath (Join-Path $suite "accounts/$entryName/auth.json"))))) { continue }
+    if (($SmokeTest -and $entryName -eq 'pool') -or (-not $SmokeTest -and ($settingsAccountSnapshot[$entryName].IsPool -or -not $settingsAccountSnapshot[$entryName].SignedIn))) { continue }
     [void]$poolMemberList.Items.Add($entryName)
 }
 [void]$environmentPanel.Children.Add($poolMemberList)
@@ -74,17 +74,17 @@ $sharingGrid=[Windows.Controls.Grid]::new(); $sharingGrid.Margin='0,12,0,0'
 foreach($column in 1..2){$definition=[Windows.Controls.ColumnDefinition]::new(); $definition.Width='*'; [void]$sharingGrid.ColumnDefinitions.Add($definition)}
 $resourcePanel=[Windows.Controls.StackPanel]::new(); $resourcePanel.Margin='0,0,12,0'; [void]$sharingGrid.Children.Add($resourcePanel)
 [void]$resourcePanel.Children.Add((New-DeckText 'Resource' '#A2ADB5'))
-$shareResourceList=[Windows.Controls.ListBox]::new(); $shareResourceList.DisplayMemberPath='Label'; $shareResourceList.Height=210; $shareResourceList.Margin='0,6,0,0'; [void]$resourcePanel.Children.Add($shareResourceList)
+$shareResourceList=[Windows.Controls.ListBox]::new(); $shareResourceList.DisplayMemberPath='Label'; $shareResourceList.Height=210; $shareResourceList.Margin='0,6,0,0'; [Windows.Controls.VirtualizingPanel]::SetIsVirtualizing($shareResourceList,$true); [Windows.Controls.VirtualizingPanel]::SetVirtualizationMode($shareResourceList,[Windows.Controls.VirtualizationMode]::Recycling); [Windows.Controls.ScrollViewer]::SetCanContentScroll($shareResourceList,$true); [void]$resourcePanel.Children.Add($shareResourceList)
 $recipientPanel=[Windows.Controls.StackPanel]::new(); [Windows.Controls.Grid]::SetColumn($recipientPanel,1); [void]$sharingGrid.Children.Add($recipientPanel)
 $recipientHeading=New-DeckText 'Share with' '#A2ADB5'; [void]$recipientPanel.Children.Add($recipientHeading)
-$recipientScroll=[Windows.Controls.ScrollViewer]::new(); $recipientScroll.VerticalScrollBarVisibility='Auto'; $recipientScroll.Height=210; $recipientScroll.Margin='0,6,0,0'
-$shareRecipients=[Windows.Controls.StackPanel]::new(); $recipientScroll.Content=$shareRecipients; [void]$recipientPanel.Children.Add($recipientScroll)
+$shareRecipients=[Windows.Controls.ListBox]::new(); $shareRecipients.Height=210; $shareRecipients.Margin='0,6,0,0'; $shareRecipients.Background='#171C1F'; $shareRecipients.Foreground='#EAF0FA'; $shareRecipients.BorderBrush='#303A42'; $shareRecipients.BorderThickness='1'; $shareRecipients.SelectionMode='Multiple'
+[Windows.Controls.VirtualizingPanel]::SetIsVirtualizing($shareRecipients,$true); [Windows.Controls.VirtualizingPanel]::SetVirtualizationMode($shareRecipients,[Windows.Controls.VirtualizationMode]::Recycling); [Windows.Controls.ScrollViewer]::SetCanContentScroll($shareRecipients,$true); [void]$recipientPanel.Children.Add($shareRecipients)
 [void]$environmentPanel.Children.Add($sharingGrid)
 [void]$environmentPanel.Children.Add($environmentStatus)
 $sharingHint=New-DeckText 'Changes apply with Save settings. Unchecking restores the previous private resource.' '#929CA4'; $sharingHint.Margin='0,12,0,0'; [void]$environmentPanel.Children.Add($sharingHint)
 $sharingHint.ToolTip='Shared folders allow edits from every recipient. Instructions and MCP definitions update at launch. Credentials and runtime databases stay private. Close recipient terminals before saving.'
 $renderRecipients={
-    $shareRecipients.Children.Clear()
+    $shareRecipients.Items.Clear()
     $owner=[string]$shareSourceBox.SelectedItem; $resource=$shareResourceList.SelectedItem
     if(-not $resource){$recipientHeading.Text='Share with'; return}
     $recipientHeading.Text='Share '+$resource.Label+' with'
@@ -102,7 +102,7 @@ $renderRecipients={
             $item=$sender.Tag
             if([bool]$sender.IsChecked -eq $item.Original){$item.State.Changes.Remove($item.Key)}else{$item.State.Changes[$item.Key]=@{Source=$item.Source;Target=$item.Target;Resource=$item.Resource;Enabled=[bool]$sender.IsChecked}}
         }.GetNewClosure())
-        [void]$shareRecipients.Children.Add($check)
+        [void]$shareRecipients.Items.Add($check)
     }
 }.GetNewClosure()
 $populateResources={
@@ -131,7 +131,7 @@ $resourceTimer.Add_Tick({
 }.GetNewClosure())
 $shareSourceBox.Add_SelectionChanged({
     if($environmentState.Task){& $environmentCommands.Stop $environmentState.Task; & $environmentCommands.Dispose $environmentState.Task; $environmentState.Task=$null}; $resourceTimer.Stop()
-    $shareResourceList.Items.Clear(); $shareRecipients.Children.Clear(); $recipientHeading.Text='Share with'
+    $shareResourceList.Items.Clear(); $shareRecipients.Items.Clear(); $recipientHeading.Text='Share with'
     $owner=[string]$shareSourceBox.SelectedItem; $environmentState.Owner=$owner
     if(-not $owner){return}
     if($environmentState.SmokeTest){& $populateResources $(if($owner -eq 'pool'){@('skills','memories','mcp:example')}else{@('AGENTS.md','skills/example')}); return}

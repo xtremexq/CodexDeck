@@ -11,14 +11,24 @@ function Get-DeckHarness([string]$Id) {
     $item=Get-DeckHarnessCatalog | Where-Object Id -eq $Id | Select-Object -First 1
     if(-not $item){throw "Unknown harness: $Id"}; return $item
 }
+$script:deckAccountIdentityCache = if($script:deckAccountIdentityCache){$script:deckAccountIdentityCache}else{@{}}
 function Get-DeckAccountIdentity([string]$SuiteRoot,[string]$Account) {
     Assert-DeckEntryName $Account
-    if(Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$Account")){[void](Get-DeckEntryDirectory $SuiteRoot $Account)}
-    $value=Read-DeckEnvironmentJson (Join-Path $SuiteRoot "accounts/$Account/deck-account.json")
-    if(-not (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$Account/deck-account.json"))){return [pscustomobject]@{Version=1;Harness='Codex';Provider='ChatGPT'}}
+    $folder=Join-Path $SuiteRoot "accounts/$Account"
+    if(Test-Path -LiteralPath $folder){[void](Get-DeckEntryDirectory $SuiteRoot $Account)}
+    $metadataPath=Join-Path $folder 'deck-account.json'
+    $metadata=Get-Item -LiteralPath $metadataPath -Force -ErrorAction SilentlyContinue
+    $stamp=if($metadata){$metadata.LastWriteTimeUtc.Ticks.ToString()+'/'+$metadata.Length+'/'+[int]$metadata.Attributes}else{'missing'}
+    $cacheKey=([IO.Path]::GetFullPath($SuiteRoot)+'|'+$Account).ToLowerInvariant()
+    $cached=$script:deckAccountIdentityCache[$cacheKey]
+    if($cached -and $cached.Stamp -eq $stamp){return $cached.Value}
+    $value=if($metadata){Read-DeckEnvironmentJson $metadataPath}else{$null}
+    if(-not $metadata){$identity=[pscustomobject]@{Version=1;Harness='Codex';Provider='ChatGPT'};$script:deckAccountIdentityCache[$cacheKey]=@{Stamp=$stamp;Value=$identity};return $identity}
     if($value -isnot [System.Management.Automation.PSCustomObject]){throw "Invalid account metadata for $Account."}
     $harness=Get-DeckHarness $value.Harness
     if($value.Version -ne 1 -or $value.Provider -notin $harness.Providers){throw "Invalid harness/provider metadata for $Account."}
+    $script:deckAccountIdentityCache[$cacheKey]=@{Stamp=$stamp;Value=$value}
+    if($script:deckAccountIdentityCache.Count -gt 1024){$script:deckAccountIdentityCache=@{$cacheKey=$script:deckAccountIdentityCache[$cacheKey]}}
     return $value
 }
 function Test-DeckCodexAccount([string]$SuiteRoot,[string]$Account) {
