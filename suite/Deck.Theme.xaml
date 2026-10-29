@@ -33,10 +33,11 @@
    <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button x:Name="SummaryButton" Padding="8,5" Margin="0,0,6,0" HorizontalContentAlignment="Stretch"><Canvas x:Name="SummaryViewport" Height="14" ClipToBounds="True"><TextBlock x:Name="Summary" Foreground="#69DEC0" FontSize="10" TextWrapping="NoWrap" TextTrimming="None"><TextBlock.RenderTransform><TranslateTransform/></TextBlock.RenderTransform></TextBlock></Canvas></Button><Button x:Name="FilterButton" Grid.Column="1" Content="All ▾" Padding="10,5" Margin="0" ToolTip="Filter visible accounts by plan"/></Grid>
   </StackPanel>
   <Button x:Name="StatusButton" DockPanel.Dock="Bottom" Padding="8,5" Margin="0,8,0,0"><TextBlock x:Name="StatusLine" FontSize="10" Foreground="#8493AA" TextAlignment="Center"/></Button>
-  <ItemsControl x:Name="Cards" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True">
-   <ItemsControl.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-   <ItemsControl.Template><ControlTemplate TargetType="ItemsControl"><ScrollViewer x:Name="CardScroll" Style="{StaticResource {x:Type ScrollViewer}}" CanContentScroll="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><ItemsPresenter/></ScrollViewer></ControlTemplate></ItemsControl.Template>
-  </ItemsControl>
+  <ListBox x:Name="Cards" BorderThickness="0" Background="Transparent" Padding="0" Focusable="False" SelectionMode="Single" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True">
+   <ListBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+   <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Focusable" Value="False"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
+   <ListBox.Template><ControlTemplate TargetType="ListBox"><ScrollViewer x:Name="CardScroll" Style="{StaticResource {x:Type ScrollViewer}}" CanContentScroll="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><ItemsPresenter/></ScrollViewer></ControlTemplate></ListBox.Template>
+  </ListBox>
  </DockPanel>
  </Border>
 </Window>

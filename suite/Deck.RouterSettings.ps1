@@ -1,6 +1,6 @@
-﻿$routerTab=[Windows.Controls.TabItem]::new();$routerTab.Header='AI Router'
+$routerTab=if($settingsTabRefs.Router){$settingsTabRefs.Router}else{[Windows.Controls.TabItem]::new()};$routerTab.Header='AI Router';$settingsTabRefs.Router=$routerTab
 $routerScroll=[Windows.Controls.ScrollViewer]::new();$routerScroll.VerticalScrollBarVisibility='Auto';$routerScroll.HorizontalScrollBarVisibility='Disabled'
-$routerPanel=[Windows.Controls.StackPanel]::new();$routerPanel.Margin='2,0,12,0';$routerScroll.Content=$routerPanel;$routerTab.Content=$routerScroll;[void]$tabs.Items.Add($routerTab)
+$routerPanel=[Windows.Controls.StackPanel]::new();$routerPanel.Margin='2,0,12,0';$routerScroll.Content=$routerPanel;$routerTab.Content=$routerScroll;if(-not $tabs.Items.Contains($routerTab)){[void]$tabs.Items.Add($routerTab)}
 [void]$routerPanel.Children.Add((New-DeckText 'AI Router server' '#EDF1F7' 18))
 $routerHelp=New-DeckText 'Optional companion for AIDeck Router. Provides a standard API endpoint, encrypted provider keys, proxies and native Deck terminals. The Chrome extension also works standalone.' '#929CA4';$routerHelp.Margin='0,8,0,14';[void]$routerPanel.Children.Add($routerHelp)
 $routerSource=[Windows.Controls.TextBox]::new();$routerSource.Text='';$routerSource.Margin='0,6,0,14';$routerSource.ToolTip='Optional aideck-router source folder. Blank uses the router payload bundled with Deck.'

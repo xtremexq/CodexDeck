@@ -11,7 +11,7 @@ Use **New account → Harness / login provider** in the desktop companion. In th
 | Harness | Primary account provider | Native settings and sign-in |
 | --- | --- | --- |
 | Codex CLI | ChatGPT | `accounts/<name>/config.toml`, `auth.json`; ChatGPT login required |
-| Claude Code | Claude | `accounts/<name>/claude`; isolates Claude config, home-level config, credentials, settings, history, plugins, memory and skills; Claude subscription login required |
+| Claude Code | Claude | `accounts/<name>/claude`; `CLAUDE_CONFIG_DIR` isolates Claude credentials, settings, history, plugins, memory and skills while child tools retain the normal Windows user paths; Claude subscription login required |
 | Antigravity | Gemini | New accounts: `accounts/<name>/antigravity/profile/.gemini`; native remote/SSH file authentication. Existing runner accounts retain their separate Windows identity |
 | OpenCode | ChatGPT, Claude, Gemini, or Custom | Separate `accounts/<name>/opencode` config, data, state and cache directories; native provider authentication |
 
@@ -34,7 +34,7 @@ codex-auth open login     # native opencode auth login --provider openai
 
 The Antigravity dashboard supports **Enter** to open a profile, **L** to sign in, **N** to create a profile, **R/A** to check one/all saved credential files, **Del** to move a profile into local recovery storage, **F2** to rename, **F** to toggle headless failover, **G** for Antigravity defaults, **I** for profile instructions, **E** for learned rules, **K** for skills, **D/S** for the desktop and settings, **Y** for Analytics, **M** to mask account details, and **/** to search. Press **Ctrl** to show or hide its shortcut table. `agy-auth -a` checks the local credential files for every profile and prints the resulting dashboard snapshot; `agy-auth status` prints the cached snapshot without checking. These file checks do not contact Google or validate the token. Open the profile and use `/usage` for live authentication status and quota.
 
-Use **R** in the Claude dashboard, `claude-auth account1 check`, or **A** / `claude-auth -a` to refresh native sign-in state for one or every profile. These checks run `claude auth status` inside that profile's isolated home and validate the reported configuration directory. They report whether Claude is signed in; they do not fetch plan quota.
+Use **R** in the Claude dashboard, `claude-auth account1 check`, or **A** / `claude-auth -a` to refresh native sign-in state for one or every profile. These checks run `claude auth status` with that profile's isolated `CLAUDE_CONFIG_DIR` and validate the reported configuration directory. They report whether Claude is signed in; they do not fetch plan quota.
 
 ```powershell
 claude-auth                 # Claude-only account dashboard

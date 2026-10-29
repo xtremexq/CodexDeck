@@ -340,11 +340,10 @@ function Get-DeckHarnessLaunch([string]$SuiteRoot,[string]$Account,[string[]]$Ar
     $environment=@{}; $remove=@(); $argsList=@($sessionArguments);$claudeContextPolicy=$null
     if($identity.Harness -eq 'Claude'){
         $claudeProfile=Join-Path $directory 'claude'
+        # Claude's supported config override keeps each account's settings and
+        # credentials separate. Preserve the real Windows profile for git, ssh,
+        # gh and other tools Claude may launch from its session.
         $environment.CLAUDE_CONFIG_DIR=$claudeProfile
-        $environment.USERPROFILE=$claudeProfile
-        $environment.HOME=$claudeProfile
-        $environment.APPDATA=Join-Path $claudeProfile 'AppData/Roaming'
-        $environment.LOCALAPPDATA=Join-Path $claudeProfile 'AppData/Local'
         $remove=@('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_PROFILE','ANTHROPIC_BASE_URL','ANTHROPIC_MODEL','CLAUDE_CODE_OAUTH_TOKEN','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY','AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN','AWS_PROFILE','AWS_BEARER_TOKEN_BEDROCK','ANTHROPIC_BEDROCK_BASE_URL','ANTHROPIC_VERTEX_PROJECT_ID','ANTHROPIC_VERTEX_REGION','GOOGLE_APPLICATION_CREDENTIALS','CLOUD_ML_REGION','CLOUD_ML_PROJECT_ID','CLAUDE_CODE_DISABLE_CLAUDE_MDS','CLAUDE_CODE_DISABLE_AUTO_MEMORY')
         if($argsList -and $argsList[0] -eq 'login'){$argsList=@('auth','login')+@($argsList | Select-Object -Skip 1)}
         if($argsList -and $argsList[0] -eq 'logout'){$argsList=@('auth','logout')+@($argsList | Select-Object -Skip 1)}
@@ -416,7 +415,7 @@ function Get-DeckHarnessLaunch([string]$SuiteRoot,[string]$Account,[string[]]$Ar
 function Get-DeckClaudeAuthStatus([string]$SuiteRoot,[string]$Account) {
     if((Get-DeckAccountIdentity $SuiteRoot $Account).Harness -ne 'Claude'){throw 'Authentication status checks require a Claude account.'}
     $launch=Get-DeckHarnessLaunch $SuiteRoot $Account @('auth','status')
-    foreach($key in @('USERPROFILE','APPDATA','LOCALAPPDATA')){if($launch.Environment[$key]){[void][IO.Directory]::CreateDirectory($launch.Environment[$key])}}
+    [void][IO.Directory]::CreateDirectory($launch.Environment.CLAUDE_CONFIG_DIR)
     $previous=@{}
     try{
         foreach($key in @($launch.Environment.Keys)+@($launch.Remove)){
@@ -672,7 +671,7 @@ function Invoke-DeckHarnessAccountOnce([string]$SuiteRoot,[string]$Account,[stri
             foreach($key in @('USERPROFILE','APPDATA','LOCALAPPDATA')){[void][IO.Directory]::CreateDirectory($launch.Environment[$key])}
         }
         if($identity.Harness -eq 'Claude'){
-            foreach($key in @('USERPROFILE','APPDATA','LOCALAPPDATA')){[void][IO.Directory]::CreateDirectory($launch.Environment[$key])}
+            [void][IO.Directory]::CreateDirectory($launch.Environment.CLAUDE_CONFIG_DIR)
             if(Get-Command Sync-DeckClaudeNativeDefaults -ErrorAction SilentlyContinue){[void](Sync-DeckClaudeNativeDefaults $SuiteRoot $Account)}
         }
         $configPath=Get-DeckHarnessConfigPath $SuiteRoot $Account

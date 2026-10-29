@@ -12,10 +12,10 @@ $environmentCommands=@{
     Dispose=Get-Command Dispose-DeckTask -CommandType Function -ErrorAction Stop
 }
 $environmentStatus=New-DeckText '' '#929CA4'; $environmentStatus.Margin='0,8,0,0'
-$environmentTab=[Windows.Controls.TabItem]::new(); $environmentTab.Header='Environments'
+$environmentTab=if($settingsTabRefs.EnvironmentTab){$settingsTabRefs.EnvironmentTab}else{[Windows.Controls.TabItem]::new()}; $environmentTab.Header='Environments'; $settingsTabRefs.EnvironmentTab=$environmentTab
 $environmentPanel=[Windows.Controls.StackPanel]::new(); $environmentPanel.Margin='2,0,12,0'
 $environmentScroll=[Windows.Controls.ScrollViewer]::new(); $environmentScroll.VerticalScrollBarVisibility='Auto'; $environmentScroll.HorizontalScrollBarVisibility='Disabled'; $environmentScroll.Content=$environmentPanel
-$environmentTab.Content=$environmentScroll; [void]$tabs.Items.Add($environmentTab)
+$environmentTab.Content=$environmentScroll; if(-not $tabs.Items.Contains($environmentTab)){[void]$tabs.Items.Add($environmentTab)}
 function Add-DeckEnvironmentLabel([string]$Text) {
     $label=New-DeckText $Text '#A2ADB5'; $label.Margin='0,12,0,6'; [void]$environmentPanel.Children.Add($label)
 }
@@ -166,3 +166,6 @@ if($SmokeTest){
         if($eventArgs.OriginalSource -eq $tabs -and $tabs.SelectedItem -eq $environmentTab -and $shareSourceBox.SelectedIndex -lt 0 -and $shareSourceBox.Items.Count){$shareSourceBox.SelectedIndex=0}
     }.GetNewClosure())
 }
+$settingsLazyState.EnvironmentState=$environmentState
+$settingsLazyState.SaveEnvironment=$saveEnvironments
+$settingsLazyState.RememberPool=$rememberPool

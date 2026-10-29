@@ -1,8 +1,38 @@
 ﻿# Dot-sourced inside Show-DeckSettings so modal handlers share its lifetime.
-. (Join-Path $suite 'Deck.HarnessSettings.ps1')
-. (Join-Path $suite 'Deck.RouterSettings.ps1')
-. (Join-Path $suite 'Deck.EnvironmentSettings.ps1')
-. (Join-Path $suite 'Deck.SkillSettings.ps1')
+if(($SmokeTest -or $Demo) -and -not $TestLazyLoad){
+    . (Join-Path $suite 'Deck.HarnessSettings.ps1')
+    . (Join-Path $suite 'Deck.RouterSettings.ps1')
+    . (Join-Path $suite 'Deck.EnvironmentSettings.ps1')
+    . (Join-Path $suite 'Deck.SkillSettings.ps1')
+    $settingsLazyState.EnvironmentState=$environmentState
+    $settingsLazyState.SkillState=$deckSkillState
+    $settingsLazyState.SaveEnvironment=$saveEnvironments
+    $settingsLazyState.SaveSkills=$saveDeckSkills
+    $settingsLazyState.RememberPool=$rememberPool
+    $settingsLazyState.SkillScope=$currentSkillScope
+    $settingsLazyState.EnvironmentLoaded=$true
+    $settingsLazyState.SkillsLoaded=$true
+}else{
+    $harnessTab=[Windows.Controls.TabItem]::new(); $harnessTab.Header='Harnesses'
+    $harnessTab.Content=(New-DeckText 'Harness status loads when you open this tab.' '#929CA4')
+    $routerTab=[Windows.Controls.TabItem]::new(); $routerTab.Header='AI Router'
+    $routerTab.Content=(New-DeckText 'AI Router status loads when you open this tab.' '#929CA4')
+    [void]$tabs.Items.Add($harnessTab); [void]$tabs.Items.Add($routerTab)
+    $settingsTabRefs.Harnesses=$harnessTab; $settingsTabRefs.Router=$routerTab
+    $settingsLazyState.EnvironmentState=@{Pools=@{};Changes=@{}}
+    $settingsLazyState.SkillState=@{GlobalChanged=$false;Changes=@{}}
+    $settingsLazyState.SaveEnvironment={param([switch]$ValidateOnly)}
+    $settingsLazyState.SaveSkills={param([switch]$ValidateOnly)}
+    $settingsLazyState.RememberPool={}
+    $settingsLazyState.SkillScope={if($settings.SkillAccessAccounts){[string]$settings.SkillAccessAccounts}else{'*'}}.GetNewClosure()
+    $environmentTab=[Windows.Controls.TabItem]::new(); $environmentTab.Header='Environments'
+    $environmentTab.Content=(New-DeckText 'Environment sharing loads when you open this tab.' '#929CA4')
+    $deckSkillTab=[Windows.Controls.TabItem]::new(); $deckSkillTab.Header='Skills'
+    $deckSkillTab.Content=(New-DeckText 'Skill settings load when you open this tab.' '#929CA4')
+    [void]$tabs.Items.Add($environmentTab); [void]$tabs.Items.Add($deckSkillTab)
+    $settingsTabRefs.EnvironmentTab=$environmentTab
+    $settingsTabRefs.SkillsTab=$deckSkillTab
+}
 $backupTab=[Windows.Controls.TabItem]::new(); $backupTab.Header='Backup'
 $backupPanel=[Windows.Controls.StackPanel]::new(); $backupPanel.Margin='2,0,12,0'
 $backupScroll=[Windows.Controls.ScrollViewer]::new(); $backupScroll.VerticalScrollBarVisibility='Auto'; $backupScroll.HorizontalScrollBarVisibility='Disabled'; $backupScroll.Content=$backupPanel; $backupTab.Content=$backupScroll; [void]$tabs.Items.Add($backupTab)

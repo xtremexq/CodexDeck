@@ -1,9 +1,9 @@
 ﻿# Dot-sourced inside Show-DeckSettings after Deck.EnvironmentSettings.ps1.
 $deckSkillState=@{Changes=@{};Controls=@{};Expanders=@{};Titles=@{};Page=1;PageSize=5;PageCount=1;SuiteRoot=$suite;SmokeTest=[bool]$SmokeTest;GlobalChanged=$false;CustomAccess=@{}}
-$deckSkillTab=[Windows.Controls.TabItem]::new(); $deckSkillTab.Header='Skills'
+$deckSkillTab=if($settingsTabRefs.SkillsTab){$settingsTabRefs.SkillsTab}else{[Windows.Controls.TabItem]::new()}; $deckSkillTab.Header='Skills'; $settingsTabRefs.SkillsTab=$deckSkillTab
 $deckSkillPanel=[Windows.Controls.StackPanel]::new(); $deckSkillPanel.Margin='2,0,12,0'
 $deckSkillScroll=[Windows.Controls.ScrollViewer]::new(); $deckSkillScroll.VerticalScrollBarVisibility='Auto'; $deckSkillScroll.HorizontalScrollBarVisibility='Disabled'; $deckSkillScroll.Content=$deckSkillPanel
-$deckSkillTab.Content=$deckSkillScroll; [void]$tabs.Items.Add($deckSkillTab)
+$deckSkillTab.Content=$deckSkillScroll; if(-not $tabs.Items.Contains($deckSkillTab)){[void]$tabs.Items.Add($deckSkillTab)}
 [void]$deckSkillPanel.Children.Add((New-DeckText 'Deck skills' '#EDF1F7' 18))
 $deckSkillHelp=New-DeckText 'Install managed skills once, choose their account access, and customize each account or pool from the same list. User-owned skills are never overwritten.' '#929CA4'
 $deckSkillHelp.Margin='0,8,0,16'; [void]$deckSkillPanel.Children.Add($deckSkillHelp)
@@ -153,6 +153,9 @@ $saveDeckSkills={
         if(-not $ValidateOnly){if($change.Global){$deckSkillState.GlobalChanged=$true};$deckSkillState.Changes.Remove($key)}
     }
 }.GetNewClosure()
+$settingsLazyState.SkillState=$deckSkillState
+$settingsLazyState.SaveSkills=$saveDeckSkills
+$settingsLazyState.SkillScope=$currentSkillScope
 & $updateSkillAccessRows
 if($deckSkillTarget.Items.Count){$deckSkillTarget.SelectedIndex=0}
 

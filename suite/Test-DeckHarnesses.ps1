@@ -119,6 +119,7 @@ public static class FakeDeckHarness {
     $env:ANTHROPIC_AUTH_TOKEN='synthetic-inherited-auth-token'
     $env:CLAUDE_CODE_OAUTH_TOKEN='synthetic-inherited-oauth-token'
     foreach($key in $claudeCredentialEnvironmentKeys){[Environment]::SetEnvironmentVariable($key,'synthetic-inherited-'+$key,'Process')}
+    $expectedWindowsDirectories=@{};foreach($key in @('USERPROFILE','HOME','APPDATA','LOCALAPPDATA')){$expectedWindowsDirectories[$key]=[string][Environment]::GetEnvironmentVariable($key,'Process')}
     $env:DECK_TEST_STATUS_CONFIG_DIRECTORY=$null
     $env:DECK_TEST_LOGGED_IN='true'
     $nativeArguments=@('auth','status','quote "preserved"','space Ω','C:\trailing\','')
@@ -133,8 +134,7 @@ public static class FakeDeckHarness {
     Assert (-not $records.ANTHROPIC_API_KEY -and -not $records.ANTHROPIC_AUTH_TOKEN -and -not $records.CLAUDE_CODE_OAUTH_TOKEN) 'Claude inherited API/OAuth authentication'
     foreach($key in $claudeCredentialEnvironmentKeys){Assert (-not $records[$key]) "Claude inherited external provider/auth environment $key"}
     Assert ($records.CLAUDE_CONFIG_DIR -eq (Join-Path $fixture 'accounts/claudeA/claude')) 'Wrong Claude credential directory'
-    Assert ($records.USERPROFILE -eq $records.CLAUDE_CONFIG_DIR -and $records.HOME -eq $records.CLAUDE_CONFIG_DIR) 'Claude home and ~/.claude.json were not isolated with its config directory'
-    Assert ($records.APPDATA -eq (Join-Path $records.CLAUDE_CONFIG_DIR 'AppData/Roaming') -and $records.LOCALAPPDATA -eq (Join-Path $records.CLAUDE_CONFIG_DIR 'AppData/Local')) 'Claude application data was not isolated'
+    foreach($key in @('USERPROFILE','HOME','APPDATA','LOCALAPPDATA')){Assert ($records[$key] -ceq $expectedWindowsDirectories[$key]) ("Claude changed the Windows $key environment needed by child tools (child='{0}', parent='{1}')" -f $records[$key],$expectedWindowsDirectories[$key]);Assert ([string][Environment]::GetEnvironmentVariable($key,'Process') -ceq $expectedWindowsDirectories[$key]) "Claude launch changed the parent $key environment"}
     Assert ($env:ANTHROPIC_API_KEY -eq 'synthetic-inherited-key') 'Parent credentials were changed'
     Assert ($env:ANTHROPIC_AUTH_TOKEN -eq 'synthetic-inherited-auth-token' -and $env:CLAUDE_CODE_OAUTH_TOKEN -eq 'synthetic-inherited-oauth-token') 'Parent Claude credentials were changed'
     Assert (@(Get-DeckSessions (Join-Path $fixture 'deck')).Count -eq 0) 'Native session was not cleaned up'

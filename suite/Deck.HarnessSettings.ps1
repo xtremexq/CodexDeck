@@ -1,8 +1,8 @@
 ﻿# Loaded inside Show-DeckSettings. Controls join its existing save transaction.
-$harnessTab=[Windows.Controls.TabItem]::new(); $harnessTab.Header='Harnesses'
+$harnessTab=if($settingsTabRefs.Harnesses){$settingsTabRefs.Harnesses}else{[Windows.Controls.TabItem]::new()}; $harnessTab.Header='Harnesses'; $settingsTabRefs.Harnesses=$harnessTab
 $harnessScroll=[Windows.Controls.ScrollViewer]::new(); $harnessScroll.VerticalScrollBarVisibility='Auto'; $harnessScroll.HorizontalScrollBarVisibility='Disabled'
 $harnessPanel=[Windows.Controls.StackPanel]::new(); $harnessPanel.Margin='2,0,12,0'; $harnessScroll.Content=$harnessPanel; $harnessTab.Content=$harnessScroll
-[void]$tabs.Items.Add($harnessTab)
+if(-not $tabs.Items.Contains($harnessTab)){[void]$tabs.Items.Add($harnessTab)}
 [void]$harnessPanel.Children.Add((New-DeckText 'Coding harnesses' '#EDF1F7' 18))
 [void]$harnessPanel.Children.Add((New-DeckText 'Enable a harness, install its CLI, then add an account from Deck or codex-auth. Changes apply to new launches after saving.' '#929CA4'))
 [void]$harnessPanel.Children.Add((New-DeckText 'Dangerous mode skips permission prompts and, where the CLI supports it, removes sandbox restrictions. It applies to every current and future account of that harness.' '#F0C66E'))
