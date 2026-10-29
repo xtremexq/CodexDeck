@@ -64,12 +64,14 @@ function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
         $definition=Get-DeckHarness $identity.Harness
         $authStatus=$null
         $authCheckedAt=$null
+        $authMethod=$null
         if($identity.Harness -eq 'Claude'){
-            $authStatus=if(Test-Path -LiteralPath (Join-Path $folder 'claude/.credentials.json') -PathType Leaf){'Credentials present'}else{'Sign in required'}
+            $authStatus=if(Test-Path -LiteralPath (Join-Path $folder 'claude/.credentials.json') -PathType Leaf){'Not checked'}else{'Sign in required'}
             $authCache=Read-DeckEnvironmentJson (Join-Path $SuiteRoot 'deck/claude-auth-checks.json')
             $record=$authCache.PSObject.Properties[$Account].Value
             if($record){
                 $authCheckedAt=[string]$record.CheckedAt
+                $authMethod=[string]$record.AuthMethod
                 if($record.Error){$authStatus='Check failed'}
                 elseif($record.LoggedIn){$authStatus='Signed in'}
                 else{$authStatus='Sign in required'}
@@ -87,7 +89,7 @@ function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
                 elseif($record.CredentialsPresent -eq ($authStatus -eq 'Credentials stored')){$authStatus=[string]$record.Status}
             }
         }
-        return @{Email=$null;PlanType=$identity.Provider;Model=$definition.Name+' default';Effort='default';Harness=$identity.Harness;Provider=$identity.Provider;AuthStatus=$authStatus;AuthCheckedAt=$authCheckedAt}
+        return @{Email=$null;PlanType=$identity.Provider;Model=$definition.Name+' default';Effort='default';Harness=$identity.Harness;Provider=$identity.Provider;AuthStatus=$authStatus;AuthCheckedAt=$authCheckedAt;AuthMethod=$authMethod}
     }
     $profile=@{Email=$null; PlanType=$null; Model='Codex default'; Effort='default'; AuthIssue=$null}
     $auth=Read-DeckJson (Join-Path $folder 'auth.json')

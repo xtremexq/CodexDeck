@@ -175,10 +175,13 @@ public static class FakeDeckHarness {
     if($contextBefore -eq $null){Remove-Item -LiteralPath $contextPolicyPath -Force}else{[IO.File]::WriteAllText($contextPolicyPath,$contextBefore)}
 
     $parentProfile=$env:USERPROFILE;$parentHome=$env:HOME;$parentAppData=$env:APPDATA;$parentLocalAppData=$env:LOCALAPPDATA
+    [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'accounts/claudeA/claude'))
+    Write-DeckEnvironmentJson (Join-Path $fixture 'accounts/claudeA/claude/.credentials.json') @{synthetic='test-token'}
+    Assert ((Get-DeckProfile $fixture claudeA).AuthStatus -eq 'Not checked') 'Saved Claude credentials were presented as a verified signed-in status before checking.'
     $checked=Get-DeckClaudeAuthStatus $fixture claudeA
     Assert ($checked.LoggedIn -and $checked.AuthMethod -eq 'claude.ai') 'Claude isolated native sign-in check did not parse a signed-in status'
     Assert ((Read-DeckEnvironmentJson (Join-Path $fixture 'deck/claude-auth-checks.json')).claudeA.LoggedIn) 'Claude sign-in check was not cached'
-    Assert ((Get-DeckProfile $fixture claudeA).AuthStatus -eq 'Signed in') 'Claude dashboard profile did not show checked sign-in state'
+    Assert ((Get-DeckProfile $fixture claudeA).AuthStatus -eq 'Signed in' -and (Get-DeckProfile $fixture claudeA).AuthMethod -eq 'claude.ai') 'Claude dashboard profile did not show checked sign-in state and auth method'
     Assert ($env:USERPROFILE -eq $parentProfile -and $env:HOME -eq $parentHome -and $env:APPDATA -eq $parentAppData -and $env:LOCALAPPDATA -eq $parentLocalAppData) 'Claude sign-in check changed the parent profile environment'
     $env:DECK_TEST_LOGGED_IN='false'
     $needsLogin=Get-DeckClaudeAuthStatus $fixture claudeA

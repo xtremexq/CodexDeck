@@ -73,7 +73,12 @@ function Get-DeckTerminalThemePageSize([string]$Theme, [int]$Height) {
         default { return [Math]::Max(1,$Height - 18) }
     }
 }
+function Get-DeckTerminalEffectiveTheme([string]$Theme,[string]$Harness=$null) {
+    if($Theme -eq 'Default' -and $Harness -and $Harness -ne 'Codex'){return 'Focus'}
+    return $Theme
+}
 function Get-DeckTerminalDashboardPageSize([string]$Theme,[int]$Height,[bool]$ShowShortcuts,[string]$Harness=$null,[bool]$HasLastConversation=$false,[bool]$ShowExtendedInfo=$false) {
+    $Theme=Get-DeckTerminalEffectiveTheme $Theme $Harness
     $lastPenalty=if($HasLastConversation){1}else{0}
     if($Theme -in @('Focus','Cards','Ledger','Split')){
         $pageSize=Get-DeckTerminalThemePageSize $Theme $Height
@@ -218,7 +223,7 @@ function Get-DeckTerminalThemeEntry([string]$Name,$Cache,$Profiles,$Sessions,$Ta
     return [pscustomobject]@{
         Name=$Name;DisplayName=(Get-DeckTerminalAccountLabel $Name $profile.Harness);Plan=[string]$profile.PlanType;State=$state;AuthIssue=$profile.AuthIssue;Primary=$primary;Weekly=$weekly
         Reset=(Format-DeckTerminalReset (Get-DeckTerminalResetWindow $row $primary))
-        Email=$email;Model=[string]$profile.Model;Effort=[string]$profile.Effort
+        Email=$email;Model=[string]$profile.Model;Effort=[string]$profile.Effort;AuthMethod=[string]$profile.AuthMethod
         Checked=$checked;SessionCount=$connected.Count;Credits=(Format-DeckResetCredits $row);AuthHelperState=[string]$profile.AuthHelperState;AuthHelperMessage=[string]$profile.AuthHelperMessage
     }
 }
@@ -249,14 +254,24 @@ function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[in
             Add-Line '  SELECTED ACCOUNT' 'Cyan'
             if($active){
                 Add-Line ('  > {0}   {1}   {2}' -f $active.DisplayName,$active.Plan,$active.State) 'White' 'DarkBlue'
-                if($Harness){Add-Line ('    LAST PROFILE CHECK  {0}' -f $active.Checked) 'Gray'}
+                if($Harness -eq 'Claude'){
+                    $authMethod=if($active.AuthMethod){$active.AuthMethod}else{'not reported'}
+                    Add-Line ('    SIGN-IN METHOD  {0}    |    LAST CHECK  {1}' -f $authMethod,$active.Checked) $(if($active.State -eq 'Signed in'){'Green'}else{'Yellow'})
+                    Add-Line '    PLAN LIMITS  Run /usage inside Claude Code' 'Gray'
+                    if($ShowExtendedInfo){Add-Line ('    CONNECTED SESSIONS  {0}' -f $active.SessionCount) 'Gray'}
+                }elseif($Harness -eq 'Antigravity'){
+                    Add-Line ('    LAST PROFILE CHECK  {0}' -f $active.Checked) 'Gray'
+                    $failover=if($WarmupSettings.HarnessAntigravityFailoverEnabled){'ON'}else{'OFF'}
+                    Add-Line ('    HEADLESS -p FAILOVER  {0}  ({1})' -f $failover,$WarmupSettings.HarnessAntigravityFailoverAccounts) 'Gray'
+                }elseif($Harness){Add-Line ('    LAST PROFILE CHECK  {0}' -f $active.Checked) 'Gray'}
                 else{Add-Line ('    PRIMARY  {0}    WEEKLY  {1}' -f (Format-DeckTerminalQuota $active.Primary),(Format-DeckTerminalQuota $active.Weekly)) 'Green';if($ShowExtendedInfo){Add-Line ('    RESET  {0}    CHECKED  {1}    SESSIONS  {2}' -f $active.Reset,$active.Checked,$active.SessionCount) 'Gray'}}
-                Add-Line ('    {0}   |   {1} / {2}' -f $active.Email,$active.Model,$active.Effort) 'DarkGray'
+                $selectedContext=if($active.Email){'{0}   |   {1} / {2}' -f $active.Email,$active.Model,$active.Effort}else{'{0} / {1}' -f $active.Model,$active.Effort}
+                Add-Line ('    '+$selectedContext) 'DarkGray'
             }else{Add-Line '  No matching accounts.' 'Yellow';Add-Line '';Add-Line '';Add-Line ''}
             Add-Line $(if($Harness){'  ACCOUNT ROSTER                         PROVIDER   AUTH STATUS'}else{'  ACCOUNT ROSTER                         PRIMARY   WEEKLY   STATE'}) 'DarkCyan'
             foreach($entry in $entries){
                 $marker=if($entry.Name -eq $active.Name){'>'}else{' '}
-                if($Harness){Add-Line ('  {0} {1,-27} {2,-10} {3}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 27),$entry.Plan,$entry.State) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})}
+                if($Harness){$stateColor=if($entry.State -eq 'Signed in'){'Green'}elseif($entry.State -in @('Sign in required','Check failed','Not checked')){'Yellow'}else{'Gray'};Add-Line ('  {0} {1,-27} {2,-10} {3}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 27),$entry.Plan,$entry.State) $(if($marker -eq '>'){'White'}else{$stateColor}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})}
                 else{Add-Line ('  {0} {1,-27} {2,5}   {3,5}   {4}' -f $marker,(ConvertTo-DeckTerminalText $entry.DisplayName 27),(Format-DeckTerminalThemePercent $entry.Primary),(Format-DeckTerminalThemePercent $entry.Weekly),$entry.State) $(if($marker -eq '>'){'White'}else{'Gray'}) $(if($marker -eq '>'){'DarkBlue'}else{'Black'})}
             }
         }
@@ -313,6 +328,7 @@ function Get-DeckTerminalThemeFrame($Names,$Cache,$Profiles,$Sessions,$Tasks,[in
     return $lines.ToArray()
 }
 function Get-DeckTerminalFrame($Names, $Cache, $Profiles, $Sessions, $Tasks, [int]$Selected, [int]$Width, [int]$Height, [string]$Filter, [string]$Notice, [bool]$Mask = $true, $WarmupSettings = $null, $WarmupHistory = @{}, [bool]$AutoCompact = $false, [int]$CompactThreshold = 55, [bool]$CompactAdjusting = $false, [string]$CompactMode = 'Native', [string]$Theme = 'Default', $LastConversation = $null, $SessionIndex=$null, $Harness=$null,[bool]$ShowShortcuts=$true,[bool]$ShowExtendedInfo=$false) {
+    $Theme=Get-DeckTerminalEffectiveTheme $Theme $Harness
     if($Theme -in @('Focus','Cards','Ledger','Split')){return Get-DeckTerminalThemeFrame $Names $Cache $Profiles $Sessions $Tasks $Selected $Width $Height $Filter $Notice $Mask $WarmupSettings $WarmupHistory $AutoCompact $CompactThreshold $CompactAdjusting $CompactMode $Theme $LastConversation $SessionIndex $Harness $ShowShortcuts $ShowExtendedInfo}
     $lines = [Collections.Generic.List[object]]::new()
     if(-not $SessionIndex){$SessionIndex=New-DeckSessionIndex $Sessions}
@@ -478,9 +494,9 @@ function Show-DeckTerminal {
     $names=@(); $sessions=@(); $sessionIndex=@{}; $sessionRead=$null; $lastSessionRead=[DateTimeOffset]::MinValue; $warmHistory=@{}; $stateRefreshAt=[DateTimeOffset]::MinValue; $authIssuesStamp=''
     $selected = 0; $filter = ''; $notice = ''; $mask = $true; $autoCompact = [bool]$warmSettings.AutoCompactLaunchEnabled; $showShortcuts=$false; $showExtendedInfo=$false; $controlWasDown=$false; $altWasDown=$false
     $dashboardState=@{LastConversation=$null}
-    $queueAll=$CheckAll.IsPresent
     $compactAdjusting=$false; $compactDraft=[int]$warmSettings.AutoCompactThresholdPercent
     $interactive = -not $Snapshot -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
+    $queueAll=$CheckAll.IsPresent -or ($interactive -and $Harness -eq 'Claude')
     if (-not $interactive) { $notice = if($Harness){"Cached $Harness profile snapshot."}else{'Cached snapshot. Run codex-auth in a terminal for live checks and actions.'} }
     elseif(-not $Harness -and $warmSettings.WarmupEnabled -and $warmSettings.WarmupSchedulingEnabled){
         try{if(Repair-DeckWarmupSchedule $SuiteRoot $warmSettings){$notice='Repaired the missing automatic warm-up schedule.'}}catch{$notice='Warm-up schedule repair failed: '+$_.Exception.Message}
@@ -552,7 +568,7 @@ function Show-DeckTerminal {
             if($queueAll -and ($interactive -or $Harness -in @('Claude','Antigravity'))){
                 if($Harness -eq 'Claude'){
                     $summary=Invoke-DeckClaudeTerminalAuthChecks $SuiteRoot $names $profiles
-                    $notice='Checked '+$summary.Total+' Claude profiles: '+$summary.SignedIn+' signed in, '+$summary.NeedsSignIn+' need sign-in, '+$summary.Failed+' checks failed. Usage limits remain in Claude /usage.'
+                    if($CheckAll.IsPresent -or $summary.Failed){$notice='Checked '+$summary.Total+' Claude profiles: '+$summary.SignedIn+' signed in, '+$summary.NeedsSignIn+' need sign-in, '+$summary.Failed+' checks failed. Run /usage inside Claude Code for plan limits.'}
                 }elseif($Harness -eq 'Antigravity'){
                     $summary=Invoke-DeckAntigravityTerminalAuthChecks $SuiteRoot $names $profiles
                     $notice='Checked '+$summary.Total+' Antigravity profiles: '+$summary.Credentials+' credential files present, '+$summary.NeedsSignIn+' need sign-in, '+$summary.Runner+' use Windows runners, '+$summary.Failed+' checks failed. /usage verifies service status and limits.'

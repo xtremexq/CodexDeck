@@ -47,18 +47,23 @@ $compactFrame = @(Get-DeckTerminalFrame $names @{} $profiles @() @{} 0 100 25 ''
 Assert (($compactFrame.Text -join "`n") -match 'C compact \[x\] Native 72%') 'Auto-compact selected state or configured threshold missing'
 Assert (($empty.Text -join "`n") -match 'No matching accounts') 'Missing empty state'
 $claudeProfiles=@{
-    'claude-account1'=@{Harness='Claude';Provider='Claude';PlanType='Claude';AuthStatus='Signed in';AuthCheckedAt=[DateTimeOffset]::UtcNow.ToString('o');Model='Claude Code default';Effort='default'}
+    'claude-account1'=@{Harness='Claude';Provider='Claude';PlanType='Claude';AuthStatus='Signed in';AuthCheckedAt=[DateTimeOffset]::UtcNow.ToString('o');AuthMethod='claude.ai';Model='Claude Code default';Effort='default'}
     'claude-account2'=@{Harness='Claude';Provider='Claude';PlanType='Claude';AuthStatus='Sign in required';Model='Claude Code default';Effort='default'}
 }
+Assert ((Get-DeckTerminalEffectiveTheme 'Default' 'Claude') -eq 'Focus' -and (Get-DeckTerminalEffectiveTheme 'Default' 'Antigravity') -eq 'Focus' -and (Get-DeckTerminalEffectiveTheme 'Default' 'Codex') -eq 'Default') 'Harness dashboards did not use the detailed default view while preserving Codex layout.'
 $claudeFrame=@(Get-DeckTerminalFrame @('claude-account1','claude-account2') @{} $claudeProfiles @() @{} 0 110 25 '' 'Ready' -Harness Claude)
 $claudeText=$claudeFrame.Text -join "`n"
-Assert ($claudeText -match 'R check sign-in' -and $claudeText -match 'A all') 'Claude dashboard sign-in checks are missing.'
-Assert ($claudeText -match 'G defaults' -and $claudeText -match 'Claude /usage shows plan limits') 'Claude dashboard global defaults or native usage guidance is missing.'
-Assert ($claudeText -match 'Signed in' -and $claudeText -match 'Sign in required') 'Claude dashboard did not render native auth state.'
-Assert ($claudeText -match 'Ctrl shortcuts' -and $claudeText -match 'Alt extended info' -and $claudeText -match 'R check sign-in \| A all sign-ins') 'Claude dashboard is missing the shared table and view hints.'
+Assert ($claudeText -match 'CLAUDE CODE / DECK\s+FOCUS' -and $claudeText -match 'R selected sign-in' -and $claudeText -match 'A all sign-ins') 'Claude dashboard did not use the detailed default view or sign-in checks.'
+Assert ($claudeText -match 'G defaults' -and $claudeText -match 'PLAN LIMITS  Run /usage inside Claude Code') 'Claude dashboard global defaults or native usage guidance is missing.'
+Assert ($claudeText -match 'Signed in' -and $claudeText -match 'Sign in required' -and $claudeText -match 'SIGN-IN METHOD  claude.ai') 'Claude dashboard did not render useful native auth state and method.'
+Assert ($claudeText -match 'Claude Code default / default' -and $claudeText -notmatch '^\s+\|\s+Claude Code') 'Claude selected-account details contain a blank identity field.'
+Assert ($claudeText -match 'Ctrl shortcuts' -and $claudeText -match 'Alt extended info' -and $claudeText -match 'R selected sign-in \| A all sign-ins') 'Claude dashboard is missing the shared table and view hints.'
 Assert ($claudeText -notmatch 'Config, credentials, history') 'Claude extended account info is visible before Alt is pressed.'
 $claudeExtended=@(Get-DeckTerminalFrame @('claude-account1','claude-account2') @{} $claudeProfiles @() @{} 0 110 25 '' '' -Harness Claude -ShowShortcuts $false -ShowExtendedInfo $true)
-Assert (($claudeExtended.Text -join "`n") -match 'Config, credentials, history') 'Claude Alt extended info is missing.'
+Assert (($claudeExtended.Text -join "`n") -match 'Config, credentials, history' -and ($claudeExtended.Text -join "`n") -match 'CONNECTED SESSIONS') 'Claude Alt extended info or connected session count is missing.'
+$claudeColors=@(Get-DeckTerminalFrame @('claude-account1','claude-account2') @{} $claudeProfiles @() @{} 1 110 25 '' '' -Harness Claude)
+$signedInRow=@($claudeColors | Where-Object {$_.Text -match '^ +account1\s'}) | Select-Object -First 1
+Assert ($signedInRow -and $signedInRow.Color -eq 'Green') 'Unselected signed-in Claude accounts are not visibly green.'
 Assert ($claudeText -notmatch 'WARM-?UP|PRIMARY|WEEKLY|NEXT RESET|5H|quota') 'Claude dashboard displayed unsupported quota or warm-up state.'
 foreach($theme in @('Focus','Cards','Ledger','Split')){
     $themedClaude=@(Get-DeckTerminalFrame @('claude-account1','claude-account2') @{} $claudeProfiles @() @{} 0 110 25 '' 'Ready' -Theme $theme -Harness Claude)
@@ -72,11 +77,11 @@ $agyProfiles=@{'agy-account1'=@{Harness='Antigravity';Provider='Gemini';PlanType
 $agySettings=@{HarnessAntigravityFailoverEnabled=$true;HarnessAntigravityFailoverAccounts='*'}
 $agyFrame=@(Get-DeckTerminalFrame @('agy-account1') @{} $agyProfiles @() @{} 0 110 25 '' 'Ready' -WarmupSettings $agySettings -Harness Antigravity)
 $agyText=$agyFrame.Text -join "`n"
-Assert ($agyText -match 'headless -p failover: ON' -and $agyText -match 'F failover ON') 'AGY dashboard did not show the configured headless failover setting or shortcut.'
+Assert ($agyText -match 'HEADLESS -p FAILOVER\s+ON' -and $agyText -match 'F failover ON') 'AGY dashboard did not show the configured headless failover setting or shortcut.'
 Assert ($agyText -match 'Ctrl shortcuts' -and $agyText -match 'Alt extended info' -and $agyText -match 'R selected credentials \| A all credentials') 'AGY dashboard is missing the shared table and view hints.'
 Assert ($agyText -notmatch 'New profiles keep their OAuth files separate') 'AGY extended account info is visible before Alt is pressed.'
 $agyExtended=@(Get-DeckTerminalFrame @('agy-account1') @{} $agyProfiles @() @{} 0 110 25 '' '' -WarmupSettings $agySettings -Harness Antigravity -ShowShortcuts $false -ShowExtendedInfo $true)
-Assert (($agyExtended.Text -join "`n") -match 'New profiles keep their OAuth files separate') 'AGY Alt extended info is missing.'
+Assert (($agyExtended.Text -join "`n") -match 'Profile files are isolated under this Deck account') 'AGY Alt extended info is missing.'
 $agyThemedExtended=@(Get-DeckTerminalFrame @('agy-account1') @{} $agyProfiles @() @{} 0 110 25 '' '' -WarmupSettings $agySettings -Harness Antigravity -Theme Focus -ShowExtendedInfo $true)
 Assert ($agyThemedExtended.Count -le 24 -and ($agyThemedExtended.Text -join "`n") -match 'Profile files are isolated') 'AGY themed Alt extended info is missing or overflows.'
 Assert ($agyText -notmatch 'WARM-?UP|quota|NEXT RESET') 'AGY dashboard displayed unsupported quota or warm-up state.'
@@ -134,7 +139,7 @@ $dashboard=$terminalAst.Find({param($node)$node -is [Management.Automation.Langu
 Assert ($dashboard -notmatch '\$attempted|TotalMinutes\s+-lt\s+5') 'Opening the terminal dashboard still schedules automatic usage checks'
 Assert ($dashboard -match 'Auto-compact enabled for future account and pool launches') 'Dashboard does not advertise pool auto-compact support'
 Assert ($dashboard -notmatch 'Auto-compact needs an individual account') 'Dashboard still blocks pool auto-compact launches'
-Assert ($dashboard -match '\$queueAll=\$CheckAll\.IsPresent' -and $dashboard -match 'Add-DeckTerminalCheckQueue') 'Dashboard -a startup does not reuse the A shortcut queue'
+Assert ($dashboard -match '\$queueAll=\$CheckAll\.IsPresent\s+-or\s+\(\$interactive\s+-and\s+\$Harness\s+-eq\s+''Claude''\)' -and $dashboard -match 'Add-DeckTerminalCheckQueue') 'Claude startup authentication checks or dashboard -a usage checks are not wired.'
 Assert ($dashboard -match '\$dashboardState=@\{LastConversation=\$null\}' -and $dashboard -match 'Get-DeckTerminalRecentConversation') 'Dashboard does not keep the returned conversation only in its current process'
 $snapshot = @(Show-DeckTerminal -SuiteRoot $fixture -AuthScript 'unused' -Snapshot)
 Assert (($snapshot -join "`n") -match 'CODEX / DECK') 'Snapshot did not render'
