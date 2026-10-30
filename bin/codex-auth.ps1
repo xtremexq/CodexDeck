@@ -1431,7 +1431,7 @@ try {
         $deckSession = Register-DeckSession $deckRoot $accountName (Get-Location).Path
         $env:CODEX_DECK_SESSION_PATH = $deckSession
         $deckSettings = Get-DeckSettings $deckRoot
-        if($codexConversation){$CodexArgs=@(Get-DeckHarnessSessionArguments $deckSettings 'Codex' $CodexArgs)}
+        if($codexConversation){$CodexArgs=@(Get-DeckHarnessSessionArguments $deckSettings 'Codex' $CodexArgs -Resume:$Resume)}
         if ($deckSettings.AutoStart) { Start-DeckCompanion $suiteRoot }
     }
 } catch { Write-Warning "Codex Deck could not attach: $($_.Exception.Message)" }

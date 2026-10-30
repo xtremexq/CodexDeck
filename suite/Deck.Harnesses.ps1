@@ -73,11 +73,15 @@ function Test-DeckHarnessInteractiveSession([string]$Harness,[string[]]$Argument
     }
     return $false
 }
-function Get-DeckHarnessSessionArguments($Settings,[string]$Harness,[string[]]$Arguments) {
+function Get-DeckHarnessSessionArguments($Settings,[string]$Harness,[string[]]$Arguments,[switch]$Resume) {
     # A missing [string[]] argument binds as $null; wrapping that with @()
     # preserves one null element, which can reach the mode-flag StartsWith check.
     $result=@(foreach($argument in $Arguments){if($null -ne $argument){[string]$argument}})
     if(-not (Test-DeckHarnessInteractiveSession $Harness $result)){return $result}
+    # Remote Codex tasks keep the permission policy they were started with and
+    # reject local permission overrides when resumed. A resume therefore uses
+    # the task's existing policy instead of Deck's install-wide default.
+    if($Harness -eq 'Codex' -and $Resume){return $result}
     $permissionArgs=@(Get-DeckHarnessFullPermissionArguments $Settings $Harness)
     if(-not $permissionArgs.Count){return $result}
     # A native per-invocation mode is an intentional override of the Deck default.
@@ -344,7 +348,10 @@ function Get-DeckHarnessLaunch([string]$SuiteRoot,[string]$Account,[string[]]$Ar
         # credentials separate. Preserve the real Windows profile for git, ssh,
         # gh and other tools Claude may launch from its session.
         $environment.CLAUDE_CONFIG_DIR=$claudeProfile
-        $remove=@('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_PROFILE','ANTHROPIC_BASE_URL','ANTHROPIC_MODEL','CLAUDE_CODE_OAUTH_TOKEN','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY','AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN','AWS_PROFILE','AWS_BEARER_TOKEN_BEDROCK','ANTHROPIC_BEDROCK_BASE_URL','ANTHROPIC_VERTEX_PROJECT_ID','ANTHROPIC_VERTEX_REGION','GOOGLE_APPLICATION_CREDENTIALS','CLOUD_ML_REGION','CLOUD_ML_PROJECT_ID','CLAUDE_CODE_DISABLE_CLAUDE_MDS','CLAUDE_CODE_DISABLE_AUTO_MEMORY','CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN')
+        # Claude's environment override takes precedence over /autocompact and
+        # its autoCompactWindow setting. Keep Deck-managed sessions responsive
+        # to the value changed inside Claude Code by removing inherited copies.
+        $remove=@('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_PROFILE','ANTHROPIC_BASE_URL','ANTHROPIC_MODEL','CLAUDE_CODE_OAUTH_TOKEN','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY','AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN','AWS_PROFILE','AWS_BEARER_TOKEN_BEDROCK','ANTHROPIC_BEDROCK_BASE_URL','ANTHROPIC_VERTEX_PROJECT_ID','ANTHROPIC_VERTEX_REGION','GOOGLE_APPLICATION_CREDENTIALS','CLOUD_ML_REGION','CLOUD_ML_PROJECT_ID','CLAUDE_CODE_DISABLE_CLAUDE_MDS','CLAUDE_CODE_DISABLE_AUTO_MEMORY','CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN','CLAUDE_CODE_AUTO_COMPACT_WINDOW')
         if($argsList -and $argsList[0] -eq 'login'){$argsList=@('auth','login')+@($argsList | Select-Object -Skip 1)}
         if($argsList -and $argsList[0] -eq 'logout'){$argsList=@('auth','logout')+@($argsList | Select-Object -Skip 1)}
         if(Test-DeckClaudeSessionLaunch $argsList){
@@ -448,6 +455,63 @@ function Get-DeckClaudeAuthStatus([string]$SuiteRoot,[string]$Account) {
     $cache | Add-Member -MemberType NoteProperty -Name $Account -Value $record -Force
     Write-DeckEnvironmentJson $cachePath $cache
     return $record
+}
+
+function Get-DeckClaudeUsageRecord([string]$SuiteRoot,[string]$Account) {
+    if((Get-DeckAccountIdentity $SuiteRoot $Account).Harness -ne 'Claude'){throw 'Claude usage checks require a Claude account.'}
+    $directory=Get-DeckEntryDirectory $SuiteRoot $Account
+    $credentialPath=Join-Path $directory 'claude/.credentials.json'
+    Assert-DeckHarnessPath $directory $credentialPath
+    if(-not (Test-Path -LiteralPath $credentialPath -PathType Leaf)){throw 'Claude account needs sign-in.'}
+    $credentialFile=Get-Item -LiteralPath $credentialPath -Force
+    if($credentialFile.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Claude credentials must be a regular file inside this isolated account.'}
+    $credential=Read-DeckEnvironmentJson $credentialPath
+    $token=[string]$credential.claudeAiOauth.accessToken
+    if([string]::IsNullOrWhiteSpace($token)){throw 'Claude account has no OAuth access token. Sign in again.'}
+
+    $usage=$null
+    for($attempt=0;$attempt -lt 2;$attempt++){
+        try{
+            $usage=Invoke-RestMethod -Uri 'https://api.anthropic.com/api/oauth/usage' -Method Get -Headers @{Authorization=('Bearer '+$token);'anthropic-beta'='oauth-2025-04-20'} -TimeoutSec 20 -ErrorAction Stop
+            break
+        }catch{
+            $statusCode=0
+            try{$statusCode=[int]$_.Exception.Response.StatusCode.value__}catch{}
+            if($statusCode -eq 401 -and $attempt -eq 0){
+                # Claude Code refreshes its OAuth credential through its isolated
+                # config directory. Reload the file after it has had that chance.
+                try{$authStatus=Get-DeckClaudeAuthStatus $SuiteRoot $Account}catch{throw 'Claude OAuth token was rejected and Claude Code could not refresh the sign-in. Sign in again.'}
+                if(-not $authStatus.LoggedIn){throw 'Claude OAuth token invalid or expired; sign in again (HTTP 401).'}
+                $credential=Read-DeckEnvironmentJson $credentialPath
+                $token=[string]$credential.claudeAiOauth.accessToken
+                if([string]::IsNullOrWhiteSpace($token)){throw 'Claude OAuth token was rejected and no refreshed token is available. Sign in again.'}
+                continue
+            }
+            if($statusCode -eq 401){throw 'Claude OAuth token invalid or expired; sign in again (HTTP 401).'}
+            if($statusCode){throw "Claude usage check failed (HTTP $statusCode)."}
+            throw 'Claude usage check failed because the provider request could not be completed.'
+        }
+    }
+    $token=$null
+    if(-not $usage -or -not $usage.PSObject.Properties['five_hour']){throw 'Claude usage response did not include its five-hour quota window.'}
+
+    $windows=@()
+    foreach($spec in @(@{Key='five_hour';Label='5H';Duration=18000},@{Key='seven_day';Label='7D';Duration=604800})){
+        $window=$usage.PSObject.Properties[$spec.Key].Value
+        if(-not $window){if($spec.Key -eq 'five_hour'){throw 'Claude usage response did not include its five-hour quota window.'};continue}
+        $utilizationProperty=$window.PSObject.Properties['utilization']
+        $resetProperty=$window.PSObject.Properties['resets_at']
+        if(-not $utilizationProperty -or $null -eq $utilizationProperty.Value){if($spec.Key -eq 'five_hour'){throw 'Claude usage response omitted five-hour utilization.'};continue}
+        $used=[double]$utilizationProperty.Value
+        if([double]::IsNaN($used) -or [double]::IsInfinity($used) -or $used -lt 0 -or $used -gt 100){throw "Claude usage response contained invalid $($spec.Label) utilization."}
+        $resetUnix=$null
+        if($resetProperty -and $resetProperty.Value){
+            try{$resetUnix=([DateTimeOffset]::Parse([string]$resetProperty.Value,[Globalization.CultureInfo]::InvariantCulture)).ToUnixTimeSeconds()}
+            catch{throw "Claude usage response contained an invalid $($spec.Label) reset time."}
+        }elseif($spec.Key -eq 'five_hour'){throw 'Claude usage response omitted the provider five-hour reset time.'}
+        $windows+=,[pscustomobject]@{Label=$spec.Label;DurationSeconds=$spec.Duration;UsedPct=$used;RemainingPct=[Math]::Round(100-$used,1);Dead=($used -ge 100);ResetsAtUnix=$resetUnix}
+    }
+    return [pscustomobject]@{Account=$Account;PlanType='Claude';Status='available';Error=$null;Source='claude-oauth-usage';Windows=$windows;CheckedAt=[DateTimeOffset]::UtcNow.ToString('o')}
 }
 
 function Clear-DeckClaudeAuthStatus([string]$SuiteRoot,[string]$Account) {
@@ -598,6 +662,29 @@ function Invoke-DeckHarnessProcess([string]$Executable,[string[]]$Arguments,[swi
         }
         $process.WaitForExit();$global:LASTEXITCODE=$process.ExitCode
     }finally{$process.Dispose()}
+}
+function Invoke-DeckClaudeWarmup([string]$SuiteRoot,[string]$Account,[string]$Model) {
+    if((Get-DeckAccountIdentity $SuiteRoot $Account).Harness -ne 'Claude'){throw 'Claude warm-up requires a Claude account.'}
+    if($Model -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$'){throw 'Invalid Claude warm-up model.'}
+    $prompt='Reply with exactly "hi". Do not use tools or read files.'
+    $arguments=@('--print','--output-format','json','--no-session-persistence','--safe-mode','--tools','','--permission-prompts','none','--model',$Model,$prompt)
+    $launch=Get-DeckHarnessLaunch $SuiteRoot $Account $arguments
+    $previous=@{}; $location=Get-Location
+    try{
+        $environmentKeys=@(@($launch.Environment.Keys)+@($launch.Remove) | Select-Object -Unique)
+        foreach($key in $environmentKeys){
+            $previous[$key]=[Environment]::GetEnvironmentVariable($key,'Process')
+            [Environment]::SetEnvironmentVariable($key,$launch.Environment[$key],'Process')
+        }
+        [void][IO.Directory]::CreateDirectory($launch.Environment.CLAUDE_CONFIG_DIR)
+        $workspace=Join-Path $SuiteRoot 'deck/empty-workspace'
+        [void][IO.Directory]::CreateDirectory($workspace)
+        Set-Location -LiteralPath $workspace
+        return Invoke-DeckHarnessProcess $launch.Executable $launch.Arguments -CaptureOutput
+    }finally{
+        Set-Location -LiteralPath $location.Path
+        foreach($key in $previous.Keys){[Environment]::SetEnvironmentVariable($key,$previous[$key],'Process')}
+    }
 }
 function Invoke-DeckHarnessInstallerScript([string]$Path,[string[]]$Arguments,[string]$Label) {
     $powershell=Join-Path $PSHOME 'powershell.exe'

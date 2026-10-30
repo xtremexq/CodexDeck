@@ -15,14 +15,18 @@ function New-Fixture([string]$Name){
     $script:SuiteRoot=Join-Path $fixture $Name; $script:root=Join-Path $SuiteRoot 'deck'
     $script:statePath=Join-Path $root 'warmup-worker.json'; $script:logPath=Join-Path $root 'warmup-worker.log'
     $script:settings=Get-DeckDefaults; $settings.WarmupEnabled=$true; $settings.WarmupSchedulingEnabled=$true; $settings.WarmupPlanTypes='all'
-    $script:responses=@{}; $script:starts=@(); $script:failChecks=@(); $script:failCheckMessage=''; $script:failWarmups=@(); $script:failPostChecks=@(); $script:dynamicReset=$false; $script:enqueueDuringWarmup=$false
+    $script:responses=@{}; $script:postResponses=@{}; $script:starts=@(); $script:failChecks=@(); $script:failCheckMessage=''; $script:failWarmups=@(); $script:failPostChecks=@(); $script:dynamicReset=$false; $script:enqueueDuringWarmup=$false
     Write-DeckJson (Join-Path $SuiteRoot 'accounts/account1/auth.json') @{}
     Write-DeckJson (Join-Path $root 'settings.json') $settings
 }
 function New-Quota([string]$Account,[long]$Reset,[double]$Used=0){
     [pscustomobject]@{Account=$Account;PlanType='plus';Status='available';Error=$null;CheckedAt=[DateTimeOffset]::Now.ToString('o');Windows=@([pscustomobject]@{DurationSeconds=18000;UsedPct=$Used;Dead=$false;ResetsAtUnix=$Reset})}
 }
+function New-ClaudeQuota([string]$Account,[long]$Reset,[double]$Used=0){
+    [pscustomobject]@{Account=$Account;PlanType='Claude';Status='available';Error=$null;Source='claude-oauth-usage';CheckedAt=[DateTimeOffset]::Now.ToString('o');Windows=@([pscustomobject]@{Label='5H';DurationSeconds=18000;UsedPct=$Used;RemainingPct=(100-$Used);Dead=($Used -ge 100);ResetsAtUnix=$Reset},[pscustomobject]@{Label='7D';DurationSeconds=604800;UsedPct=0;RemainingPct=100;Dead=$false;ResetsAtUnix=([DateTimeOffset]::Now.AddDays(6).ToUnixTimeSeconds())})}
+}
 function Get-DeckCheckCode($SuiteRoot,$Account){'synthetic check'}
+function Get-DeckClaudeCheckCode($SuiteRoot,$Account){'synthetic Claude check'}
 function Get-DeckWarmupCode($SuiteRoot,$Account,$Model){'synthetic warm-up'}
 function Sync-DeckWarmupStartup($SuiteRoot,$Settings,$NextRun){$script:scheduledNext=$NextRun}
 function Stop-DeckTask($Task){}
@@ -34,7 +38,8 @@ function Start-DeckTask($Code,$Kind,$Account){
     if($Kind -eq 'Check'){
         if($Account -in $script:failChecks -or ($Account -in $script:failPostChecks -and @($starts | Where-Object { $_.Account -eq $Account -and $_.Kind -eq 'Warm-up' }).Count)){$failure=if($script:failCheckMessage){$script:failCheckMessage}else{'Synthetic quota request failed.'}}
         else{
-            $record=$script:responses[$Account]
+            $isPost=@($starts | Where-Object { $_.Account -eq $Account -and $_.Kind -eq 'Warm-up' }).Count -gt 0
+            $record=if($isPost -and $script:postResponses.ContainsKey($Account)){$script:postResponses[$Account]}else{$script:responses[$Account]}
             if($script:dynamicReset){
                 Start-Sleep -Milliseconds 1100
                 $record.Windows[0].ResetsAtUnix=[DateTimeOffset]::Now.ToUnixTimeSeconds()+18000
@@ -43,6 +48,7 @@ function Start-DeckTask($Code,$Kind,$Account){
         }
     }else{
         if($Account -in $script:failWarmups){$failure='Synthetic model request failed.'}
+        elseif((Get-DeckAccountIdentity $SuiteRoot $Account).Harness -eq 'Claude'){$output='{"result":"hi","is_error":false}'}
         else{$output='{"type":"item.completed","item":{"type":"agent_message","text":"hi"}}'+"`n"+'{"type":"turn.completed"}'}
         if($script:enqueueDuringWarmup){$script:enqueueDuringWarmup=$false; Request-DeckWarmup $SuiteRoot account2 -NoStart}
     }
@@ -187,4 +193,32 @@ Invoke-Expression $queueLoop.Extent.Text
 Assert (@($starts | Where-Object Kind -eq 'Warm-up').Count -eq 2) 'Request arriving during an active worker was abandoned'
 Assert (@(Get-ChildItem -LiteralPath (Join-Path $root 'warmup-requests') -Filter '*.json').Count -eq 0) 'Worker left a manual request queued after completing'
 
-'PASS: worker schedule reconciliation, reset discovery and grace, deduplication, failure backoff and diagnostics, concurrent cache merge, and manual queue draining.'
+New-Fixture claude-cycle
+$settings.WarmupPlanTypes=''; $settings.WarmupAccounts='claudeA'; $settings.WarmupClaudeModel='sonnet'
+Write-DeckJson (Join-Path $SuiteRoot 'accounts/claudeA/deck-account.json') @{Version=1;Harness='Claude';Provider='Claude'}
+Write-DeckJson (Join-Path $SuiteRoot 'accounts/claudeA/claude/.credentials.json') @{claudeAiOauth=@{accessToken='synthetic-claude-auth'}}
+Write-DeckJson (Join-Path $root 'settings.json') $settings
+$claudeProviderReset=[DateTimeOffset]::Now.AddHours(4).AddMinutes(43).ToUnixTimeSeconds()
+$responses.claudeA=New-ClaudeQuota claudeA ([DateTimeOffset]::Now.AddHours(5).ToUnixTimeSeconds())
+$postResponses.claudeA=New-ClaudeQuota claudeA $claudeProviderReset
+Request-DeckWarmup $SuiteRoot claudeA -NoStart
+Invoke-DeckWarmupWorker
+$claudeReset=(Read-DeckJson (Join-Path $root 'warmup-resets.json')).claudeA
+$claudeCache=(Get-DeckUsageCache $root).claudeA
+$claudeState=Read-DeckJson $statePath
+Assert ($claudeReset -eq $claudeProviderReset) 'Claude reset did not use the exact post-warm-up provider timestamp'
+Assert ($claudeCache.PlanType -eq 'Claude' -and $claudeCache.Source -eq 'claude-oauth-usage' -and $claudeCache.Windows[0].DurationSeconds -eq 18000 -and $claudeCache.Windows[0].ResetsAtUnix -eq $claudeReset) 'Claude provider five-hour quota was not stored in the usage cache'
+Assert ($claudeState.Warmed -contains 'claudeA' -and ([DateTimeOffset]$claudeState.NextRun).ToUnixTimeSeconds() -eq [long]$claudeReset+$settings.WarmupGraceSeconds) 'Claude successful reply was not confirmed or scheduled at reset plus grace'
+$due=[DateTimeOffset]::Now.ToUnixTimeSeconds()-90
+$nextProviderReset=[DateTimeOffset]::Now.AddHours(4).AddMinutes(30).ToUnixTimeSeconds()
+$postResponses.claudeA=New-ClaudeQuota claudeA $nextProviderReset
+Write-DeckJson (Join-Path $root 'warmup-resets.json') @{claudeA=$due}
+$priorClaudeHistory=ConvertTo-DeckMap (Read-DeckJson (Join-Path $root 'warmup.json'))
+$priorClaudeHistory.claudeA.Reset=$due-18000; $priorClaudeHistory.claudeA.AttemptAt=$due-18000
+Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $priorClaudeHistory)
+Write-DeckJson $statePath @{NextRun=[DateTimeOffset]::Now.AddDays(-1).ToString('o');SettingsStamp=$claudeState.SettingsStamp}
+Invoke-DeckWarmupWorker
+$claudeReset=(Read-DeckJson (Join-Path $root 'warmup-resets.json')).claudeA
+Assert (@($starts | Where-Object {$_.Account -eq 'claudeA' -and $_.Kind -eq 'Warm-up'}).Count -eq 2 -and $claudeReset -eq $nextProviderReset) 'Claude reset wake did not send and store the next provider-reported boundary'
+
+'PASS: worker schedule reconciliation, Codex reset discovery and grace, Claude provider-reported reset creation and repeat wake, deduplication, failure backoff and diagnostics, concurrent cache merge, and manual queue draining.'

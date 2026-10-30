@@ -4,6 +4,8 @@ Open **Settings → Harnesses**. Codex CLI is always enabled. Enable Antigravity
 
 Each harness also has a global **dangerous automatic permissions** setting. It applies at launch to all existing and newly created accounts for that harness. Codex uses its native full-access/no-approval mode; Claude Code and Antigravity use their documented permission-bypass flags. OpenCode uses `--auto`, which approves requests except actions explicitly denied by its configuration. These settings live in Deck's install-wide `deck/settings.json`; a native permission mode explicitly supplied for one launch takes precedence. AGY also has a separate install-wide ordered failover setting for one-shot headless prompts.
 
+Codex remote conversation resumes keep the permission policy attached to the original task. Deck does not add its install-wide permission override to a resume, because Codex rejects permission overrides on remote resume.
+
 Install / update uses the official installers for Claude and Antigravity and the official npm packages for Codex and OpenCode. The npm installs require Node.js/npm on PATH. Installation runs in the background and reports failure in the tab. Closing Settings cancels an active install worker. CLI installations are shared between accounts; settings and sign-ins are isolated.
 
 Use **New account → Harness / login provider** in the desktop companion. In the terminal dashboard, press **N** and choose an enabled harness. Right-click an account and choose **Log in** to authenticate again. Existing account names retain their original identity. Harness profiles share Deck's account-name space in the desktop companion.

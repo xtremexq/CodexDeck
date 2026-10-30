@@ -289,10 +289,30 @@ public static class FakeDeckHarness {
     Assert (((Resolve-DeckFailoverPool $fixture '*' Ordered).Pool -join ',') -eq 'legacy') 'Wildcard failover includes foreign accounts'
     Refuses {Resolve-DeckFailoverPool $fixture 'legacy,claudeA' Ordered} 'Explicit failover includes a Claude account'
     Refuses {Resolve-DeckEntryPool $fixture ([pscustomobject]@{Accounts=@('claudeA')})} 'Pool includes a Claude account'
-    Refuses {Get-DeckCheckCode $fixture claudeA} 'Codex usage probe accepted Claude'
+    $claudeUnifiedCheckCode=Get-DeckCheckCode $fixture claudeA
+    Assert ($claudeUnifiedCheckCode -match 'Get-DeckClaudeUsageRecord') 'Unified account check did not route Claude to its quota reader'
     Refuses {Get-DeckModelsCode $fixture claudeA} 'Codex model discovery accepted Claude'
-    Refuses {Get-DeckWarmupCode $fixture claudeA} 'Codex warm-up accepted Claude'
-    Refuses {Request-DeckWarmup $fixture claudeA -NoStart} 'Codex manual warm-up accepted Claude'
+    $claudeCheckCode=Get-DeckClaudeCheckCode $fixture claudeA
+    $claudeWarmupCode=Get-DeckWarmupCode $fixture claudeA sonnet
+    Assert ($claudeCheckCode -match 'Get-DeckClaudeUsageRecord' -and $claudeWarmupCode -match 'Invoke-DeckClaudeWarmup') 'Claude warm-up did not use the provider quota and prompt helpers'
+    $usageReset=[DateTimeOffset]::Parse('2030-01-02T03:04:05.123+00:00').ToUnixTimeSeconds()
+    Write-DeckEnvironmentJson (Join-Path $fixture 'accounts/claudeA/claude/.credentials.json') @{claudeAiOauth=@{accessToken='synthetic-access-token'}}
+    function Invoke-RestMethod([string]$Uri,[string]$Method,$Headers,[int]$TimeoutSec,[string]$ErrorAction){
+        $script:claudeUsageRequest=[pscustomobject]@{Uri=$Uri;Method=$Method;Authorization=$Headers.Authorization;Beta=$Headers['anthropic-beta'];TimeoutSec=$TimeoutSec}
+        [pscustomobject]@{five_hour=[pscustomobject]@{utilization=12.5;resets_at='2030-01-02T03:04:05.123+00:00'};seven_day=[pscustomobject]@{utilization=60;resets_at='2030-01-08T00:00:00+00:00'}}
+    }
+    $claudeUsage=Get-DeckClaudeUsageRecord $fixture claudeA
+    Remove-Item Function:\Invoke-RestMethod -ErrorAction SilentlyContinue
+    Assert ($claudeUsage.Source -eq 'claude-oauth-usage' -and $claudeUsage.Windows.Count -eq 2) 'Claude usage check did not preserve its provider windows'
+    Assert ($claudeUsage.Windows[0].UsedPct -eq 12.5 -and $claudeUsage.Windows[0].RemainingPct -eq 87.5 -and $claudeUsage.Windows[0].ResetsAtUnix -eq $usageReset) 'Claude five-hour usage or reset did not match the provider payload'
+    Assert ($claudeUsage.Windows[1].UsedPct -eq 60 -and $claudeUsage.Windows[1].DurationSeconds -eq 604800) 'Claude seven-day usage window was not retained'
+    Assert ($script:claudeUsageRequest.Uri -eq 'https://api.anthropic.com/api/oauth/usage' -and $script:claudeUsageRequest.Authorization -eq 'Bearer synthetic-access-token' -and $script:claudeUsageRequest.Beta -eq 'oauth-2025-04-20') 'Claude usage request did not use its isolated OAuth credential and required API header'
+    Assert (-not (Test-DeckWarmupSelected (Get-DeckDefaults) claudeA Claude)) 'Claude was selected by a Codex account type'
+    $claudeWarmSettings=Get-DeckDefaults; $claudeWarmSettings.WarmupAccounts='claudeA'
+    Assert (Test-DeckWarmupSelected $claudeWarmSettings claudeA Claude) 'Explicit Claude account selection was ignored'
+    Request-DeckWarmup $fixture claudeA -NoStart
+    Assert ((Read-DeckEnvironmentJson (Join-Path $fixture 'deck/warmup-requests/claudeA.json')).Account -eq 'claudeA') 'Claude manual warm-up request was not queued'
+    Remove-Item -LiteralPath (Join-Path $fixture 'deck/warmup-requests/claudeA.json') -Force
     Assert ((@(Get-DeckSignedInAccounts $fixture) -join ',') -eq 'legacy') 'Warm-up candidates include a foreign account'
     Refuses {Set-DeckAntigravityRunner $fixture claudeA} 'Runner configuration accepted Claude'
     & {

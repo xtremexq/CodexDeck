@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Let Claude Code's `/autocompact` setting control managed sessions by clearing the inherited `CLAUDE_CODE_AUTO_COMPACT_WINDOW` override.
+- Add Claude Code warm-up prompts, configurable model selection, account targeting, and provider-reported usage and reset tracking before and after a confirmed reply.
+- Retry a rejected request after automatic token recovery even when it was first routed through quota failover; restart abandoned Auth Helper launches and mark workers failed when they exit without reporting an outcome.
+- Resume remote Codex tasks with the permissions already attached to the task, without adding Deck's install-wide permission override.
+
 ## 1.8.9 - 2026-10-29
 
 - Added a default-on Claude terminal scrollback option for interactive Claude Code sessions.

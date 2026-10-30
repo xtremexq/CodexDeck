@@ -12,15 +12,16 @@ function Write-DeckWarmupLog([string]$Message) {
     }
     [IO.File]::AppendAllText($logPath,([DateTimeOffset]::Now.ToString('o')+'  '+$Message+"`r`n"),[Text.UTF8Encoding]::new($false))
 }
-function Invoke-DeckWorkerBatch($Accounts, [ValidateSet('Check','Warm-up')][string]$Kind, [string]$Model, $Records = @{}) {
+function Invoke-DeckWorkerBatch($Accounts, [ValidateSet('Check','Warm-up')][string]$Kind, [string]$Model, $Records = @{}, $Settings = $null) {
     $queue=[Collections.Generic.Queue[string]]::new(); foreach($account in @($Accounts|Select-Object -Unique)){$queue.Enqueue($account)}
     $active=@{}; $results=@{}
     while($queue.Count -or $active.Count){
         while($queue.Count -and $active.Count -lt 8){
             $account=$queue.Dequeue()
             try{
-                $accountModel=if($Kind -eq 'Warm-up'){Get-DeckWarmupModel @{WarmupModel=$Model} ([string]$Records[$account].PlanType)}else{$Model}
-                $code=if($Kind -eq 'Check'){Get-DeckCheckCode $SuiteRoot $account}else{Get-DeckWarmupCode $SuiteRoot $account $accountModel}
+                $harness=(Get-DeckAccountIdentity $SuiteRoot $account).Harness
+                $accountModel=if($harness -eq 'Claude'){[string]$Settings.WarmupClaudeModel}elseif($Kind -eq 'Warm-up'){Get-DeckWarmupModel @{WarmupModel=$Model} ([string]$Records[$account].PlanType)}else{$Model}
+                $code=if($Kind -eq 'Check' -and $harness -eq 'Claude'){Get-DeckClaudeCheckCode $SuiteRoot $account}elseif($Kind -eq 'Check'){Get-DeckCheckCode $SuiteRoot $account}else{Get-DeckWarmupCode $SuiteRoot $account $accountModel}
                 $active[$account]=Start-DeckTask $code $Kind $account
             }
             catch{$results[$account]=[pscustomobject]@{Success=$false;Output='';Error=$_.Exception.Message}}
@@ -47,7 +48,7 @@ function Save-DeckWorkerState($Cache,$Resets,$History,$Checked,$Warmed,[string]$
     Write-DeckJson (Join-Path $root 'warmup-resets.json') $Resets
     Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $History)
     $settings=Get-DeckSettings $root; $accounts=@(Get-DeckWarmupAccounts $SuiteRoot $settings $latest)
-    $next=Get-DeckNextWarmupRun $settings $accounts $latest $Resets $History ([DateTimeOffset]::Now) 20
+    $next=Get-DeckNextWarmupRun $settings $accounts $latest $Resets $History ([DateTimeOffset]::Now) 20 $SuiteRoot
     Write-DeckJson $statePath ([ordered]@{LastRun=[DateTimeOffset]::Now.ToString('o');Outcome=$Outcome;Checked=@($Checked);Warmed=@($Warmed);SettingsStamp=(Get-DeckWarmupSettingsStamp $settings $accounts);NextRun=$(if($next){([DateTimeOffset]$next).ToString('o')}else{$null})})
     Write-DeckJson (Join-Path $root 'warmup-state-changed.json') @{At=[DateTimeOffset]::Now.ToString('o')}
     Sync-DeckWarmupStartup $SuiteRoot $settings $next
@@ -64,7 +65,7 @@ function Invoke-DeckWarmupWorker {
     $requests=@{}
     foreach($file in @(Get-ChildItem -LiteralPath (Join-Path $root 'warmup-requests') -Filter '*.json' -File -ErrorAction SilentlyContinue)){
         $request=Read-DeckJson $file.FullName; $account=[string]$request.Account
-        $valid=$account -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -and (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$account/auth.json")) -and $request.Mode -in @('Manual','Timed')
+        $valid=$account -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -and (Test-DeckWarmupAccountSignedIn $SuiteRoot $account) -and $request.Mode -in @('Manual','Timed')
         if($valid -and $request.Mode -eq 'Timed'){
             $plan=[string]$cache[$account].PlanType; if(-not $plan){$plan=[string](Get-DeckProfile $SuiteRoot $account).PlanType}
             $valid=$settings.WarmupEnabled -and $settings.WarmupTimedEnabled -and (Test-DeckWarmupSelected $settings $account $plan) -and $unix-[long]$request.At -le 300
@@ -80,7 +81,7 @@ function Invoke-DeckWarmupWorker {
     }
     $settingsStamp=Get-DeckWarmupSettingsStamp $settings $accounts
     if($workerState.SettingsStamp -ne $settingsStamp){$scheduledDue=$true}
-    $computedNext=Get-DeckNextWarmupRun $settings $accounts $cache $resets $history $now 20
+    $computedNext=Get-DeckNextWarmupRun $settings $accounts $cache $resets $history $now 20 $SuiteRoot
     if($computedNext -and $recordedNext -and $computedNext -lt $recordedNext){
         $recordedNext=[DateTimeOffset]$computedNext
         if($now -ge $recordedNext.AddSeconds(-5)){$scheduledDue=$true}
@@ -95,7 +96,7 @@ function Invoke-DeckWarmupWorker {
     if($settings.WarmupEnabled -and $accounts.Count){
         $authStamps=@{}
         foreach($account in @($accounts)){$authStamps[$account]=Get-DeckAuthFileStamp $SuiteRoot $account}
-        $checks=Invoke-DeckWorkerBatch $accounts Check $settings.WarmupModel
+        $checks=Invoke-DeckWorkerBatch $accounts Check $settings.WarmupModel @{} $settings
         foreach($account in @($accounts)){
             $result=$checks[$account]
             try{
@@ -149,12 +150,15 @@ function Invoke-DeckWarmupWorker {
             $warmRecords[$account]=$cache[$account]
             if(-not $warmRecords[$account].PlanType){$warmRecords[$account]=Get-DeckProfile $SuiteRoot $account}
         }
-        $runs=Invoke-DeckWorkerBatch @($warmJobs.Keys) 'Warm-up' $settings.WarmupModel $warmRecords
+        $runs=Invoke-DeckWorkerBatch @($warmJobs.Keys) 'Warm-up' $settings.WarmupModel $warmRecords $settings
         foreach($account in @($warmJobs.Keys)){
-            $result=$runs[$account]; $reply=if($result.Success){Get-DeckWarmupReply $result.Output}else{$null}
+            $result=$runs[$account]; $isClaude=(Get-DeckAccountIdentity $SuiteRoot $account).Harness -eq 'Claude'
+            $reply=if($result.Success -and $isClaude){Get-DeckClaudeWarmupReply $result.Output}elseif($result.Success){Get-DeckWarmupReply $result.Output}else{$null}
             $history[$account].Outcome=if($reply){'Replied: '+$reply}elseif($result.Success){'No assistant reply / unconfirmed'}else{'Request failed'}
             $history[$account].Reply=[string]$reply; $history[$account]|Add-Member NoteProperty CompletedAt ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -Force
-            if($reply){$warmed+=$account}
+            if($reply){
+                $warmed+=$account
+            }
             else{
                 $message=if($result.Error){$result.Error}else{'No completed assistant reply.'}
                 $history[$account] | Add-Member NoteProperty Error $message -Force
@@ -163,10 +167,11 @@ function Invoke-DeckWarmupWorker {
         }
         # A successful prompt starts/changes quota state. Refresh those accounts so
         # the following scheduled wake uses the provider's real next reset time.
+        $postAccounts=@($warmJobs.Keys)
         $postAuthStamps=@{}
-        foreach($account in @($warmJobs.Keys)){$postAuthStamps[$account]=Get-DeckAuthFileStamp $SuiteRoot $account}
-        $post=Invoke-DeckWorkerBatch @($warmJobs.Keys) Check $settings.WarmupModel
-        foreach($account in @($warmJobs.Keys)){
+        foreach($account in $postAccounts){$postAuthStamps[$account]=Get-DeckAuthFileStamp $SuiteRoot $account}
+        $post=if($postAccounts.Count){Invoke-DeckWorkerBatch $postAccounts Check $settings.WarmupModel @{} $settings}else{@{}}
+        foreach($account in $postAccounts){
             $result=$post[$account]
             try{
                 if(-not $result.Success){throw $(if($result.Error){$result.Error}else{'Quota refresh failed.'})}

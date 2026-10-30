@@ -320,7 +320,7 @@ function New-DeckEntryMenu([string]$Name) {
                 'Open terminal' {if(-not $SmokeTest -and -not $Demo){Open-DeckTerminal $account}}
                 'Log in' {if(-not $SmokeTest -and -not $Demo){Open-DeckTerminal $account -Login}}
                 'Check account' {
-                    if(-not (Test-DeckCodexAccount $suite $account)){$script:notice='Use the native usage command for this harness.'; Render-Deck;return}
+                    if((Get-DeckAccountIdentity $suite $account).Harness -notin @('Codex','Claude')){$script:notice='Usage checks are unavailable for this harness.'; Render-Deck;return}
                     if($tasks.ContainsKey($account)){return}
                     $now=[DateTimeOffset]::UtcNow; $at=$cache[$account].CheckedAt
                     $manualChecks[$account]=$now
@@ -355,13 +355,15 @@ function New-DeckEntryMenu([string]$Name) {
         foreach($item in $sender.Items){if($item -is [Windows.Controls.MenuItem]){
             $item.Tag.Account=$account
             if($item.Tag.Action -eq 'Log in'){$item.IsEnabled=-not (Get-DeckPoolEntry $suite $account)}
-            if($item.Tag.Action -in @('Check account','Warm up now','Toggle automatic warm-up')){$item.IsEnabled=Test-DeckCodexAccount $suite $account}
+            if($item.Tag.Action -eq 'Check account'){$item.IsEnabled=(Get-DeckAccountIdentity $suite $account).Harness -in @('Codex','Claude') -and (Test-DeckWarmupAccountSignedIn $suite $account)}
+            if($item.Tag.Action -in @('Warm up now','Toggle automatic warm-up')){$item.IsEnabled=Test-DeckWarmupAccountSignedIn $suite $account}
             if($item.Tag.Action -eq 'Toggle automatic warm-up'){
                 $plan=[string]$(if($cache[$account].PlanType){$cache[$account].PlanType}else{$profiles[$account].PlanType})
                 $managed=Test-DeckWarmupPlanSelected $settings $plan
                 $selected=Test-DeckWarmupSelected $settings $account $plan
                 $item.Header=if($selected){'Disable automatic warm-up'}else{'Enable automatic warm-up (uses quota)'}
-                $item.IsCheckable=$true; $item.IsChecked=$selected; $item.IsEnabled=-not $managed -and (Test-DeckCodexAccount $suite $account)
+                $canWarm=(Get-DeckAccountIdentity $suite $account).Harness -in @('Codex','Claude') -and (Test-DeckWarmupAccountSignedIn $suite $account)
+                $item.IsCheckable=$true; $item.IsChecked=$selected; $item.IsEnabled=-not $managed -and $canWarm
                 $item.ToolTip=if($managed){'Managed by the account-type selection in Settings'}else{'Runs through Windows Task Scheduler, even with Deck closed'}
             }
             if($item.Tag.Action -eq 'Pause / resume warm-up'){$item.Header=if($settings.WarmupEnabled){'Pause all automatic warm-ups'}else{'Resume automatic warm-ups'}}
@@ -374,7 +376,7 @@ function New-DeckHealthSummary([string]$Name,$Record,[int]$Size=10,$Existing=$nu
     $text=if($Existing){$Existing}else{New-DeckText '' '#929CA4' $Size}
     $text.Inlines.Clear()
     $text.TextWrapping='NoWrap'; $text.VerticalAlignment='Center'
-    $health=if($profiles[$Name].AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}elseif($profiles[$Name].Harness -and $profiles[$Name].Harness -ne 'Codex'){(Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage'}else{Get-DeckHealth $Record}
+    $health=if($profiles[$Name].AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}elseif($profiles[$Name].Harness -and $profiles[$Name].Harness -notin @('Codex','Claude')){(Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage'}else{Get-DeckHealth $Record}
     $text.ToolTip=$health
     $color=switch($health){'Ready'{'#69DEC0'} 'Low'{'#DCB675'} 'Exhausted'{'#F17D8D'} 'Limit reached'{'#F17D8D'} 'Sign in again'{'#F17D8D'} default{'#929CA4'}}
     $quotas=@(if($settings.ShowQuota){$Record.Windows | Where-Object {$null -ne $_}})
@@ -395,7 +397,7 @@ function New-DeckPanelUsage([string]$Name,$Record) {
     $usage=[Windows.Controls.Grid]::new(); $usage.VerticalAlignment='Center'; $usage.HorizontalAlignment='Left'
     $health=if($profiles[$Name].AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}else{Get-DeckHealth $Record}
     $usage.ToolTip=$health+$(if($tasks.ContainsKey($Name) -or $manualChecks.ContainsKey($Name)){' · checking'}elseif($profiles[$Name].AuthIssue -in @('token_revoked','oauth_invalid')){' · use Log in to reconnect'}elseif($Record.Error){' · check failed'}else{''})
-    if($profiles[$Name].Harness -and $profiles[$Name].Harness -ne 'Codex'){[void]$usage.Children.Add((New-DeckText ((Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage') '#929CA4' 10));return $usage}
+    if($profiles[$Name].Harness -and $profiles[$Name].Harness -notin @('Codex','Claude')){[void]$usage.Children.Add((New-DeckText ((Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage') '#929CA4' 10));return $usage}
     $windows=@(if($settings.ShowQuota){$Record.Windows | Where-Object { $null -ne $_ }})
     for($i=0;$i -lt $windows.Count;$i++){
         $column=[Windows.Controls.ColumnDefinition]::new(); $column.Width=[Windows.GridLength]::Auto; [void]$usage.ColumnDefinitions.Add($column)
@@ -415,7 +417,7 @@ function New-DeckPanelUsage([string]$Name,$Record) {
         [void]$usage.Children.Add($cell)
     }
     if(-not $windows.Count){
-        $health=if($profiles[$Name].AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}elseif($profiles[$Name].Harness -and $profiles[$Name].Harness -ne 'Codex'){(Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage'}else{Get-DeckHealth $Record}
+        $health=if($profiles[$Name].AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}elseif($profiles[$Name].Harness -and $profiles[$Name].Harness -notin @('Codex','Claude')){(Get-DeckHarness $profiles[$Name].Harness).Name+' / native usage'}else{Get-DeckHealth $Record}
         $healthText=New-DeckText $health $(switch($health){'Ready'{'#69DEC0'} 'Low'{'#DCB675'} 'Exhausted'{'#F17D8D'} 'Sign in again'{'#F17D8D'} default{'#929CA4'}}) 11
         $healthText.TextWrapping='NoWrap'; [void]$usage.Children.Add($healthText)
     }
@@ -666,7 +668,7 @@ function Update-DeckPicker([switch]$Force) {
         $folder=Join-Path $suite "accounts/$name"
         $authIssuePath=Join-Path $suite "deck/auth-issues/$name.json"
         $authIssueStamp=if(Test-Path -LiteralPath $authIssuePath -PathType Leaf){[IO.File]::GetLastWriteTimeUtc($authIssuePath).Ticks.ToString()}else{'0'}
-        $stamp=([IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'auth.json')).Ticks.ToString())+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'config.toml')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-entry.json')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-account.json')).Ticks.ToString()+'/'+$authIssueStamp
+        $stamp=([IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'auth.json')).Ticks.ToString())+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'config.toml')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-entry.json')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'deck-account.json')).Ticks.ToString()+'/'+[IO.File]::GetLastWriteTimeUtc((Join-Path $folder 'claude/.credentials.json')).Ticks.ToString()+'/'+$authIssueStamp
         if($profileStamps[$name] -ne $stamp){
             $profiles[$name]=Get-DeckProfile $suite $name; $profileStamps[$name]=$stamp; $script:profileVersion++; $script:lastRender=''
             if(Clear-DeckStaleRevokedAuth $suite $name $cache[$name]){$nextCheck[$name]=[DateTimeOffset]::UtcNow;$script:cacheVersion++;Save-DeckDesktopUsageCache}
@@ -859,12 +861,12 @@ function Show-DeckSettings {
     $groups=[ordered]@{
         Appearance=@($appearanceFields + $detailFields)
         General=@($settingsSections.General.Values | ForEach-Object {$_})
-        'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupPlanTypes','WarmupAccounts','WarmupModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
+        'Checks & Warmup'=@('AutoCheck','PollMinutes','MinimumGapSeconds','WarmupEnabled','WarmupSchedulingEnabled','WarmupResetEnabled','WarmupTimedEnabled','WarmupTimes','WarmupStartAtLogin','WarmupPlanTypes','WarmupAccounts','WarmupModel','WarmupClaudeModel','WarmupGraceSeconds','WarmupMaxDelayMinutes')
         Advanced=@($settingsSections.Advanced.Values | ForEach-Object {$_})
         Integrations=@('ContextOptimizer')
     }
-    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';General='Terminal, compaction and live context behavior';Details='Choose what appears in expanded account entries and the widget';Advanced='Failover and analytics';Terminal='Choose which interactive Codex and Claude sessions use the terminal''s normal screen buffer and native scrollback. Changes apply to new sessions.';Compaction='Press C in the codex-auth dashboard to opt in for a launch. Native uses Codex automatic compaction. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 55% means compaction starts at 45% used. Account, pool and failover conversations are supported.';Integrations='Install and update optional tools and catalogs. Choose projects for CodeGraph below after installing it.';'Live Context Manager'='Inspect the live trajectory and edit what Deck sends on the next model request. Raw rollout history stays unchanged. Direct launches remain view-only.';Analytics='Independent efficiency analysis measures repeated commands and paths, large tool results, token/cache patterns and compaction activity.';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Choose the accounts and timing below. Enable background scheduling and save only when you want the clearly named CodexDeck Warmup Scheduling task to run while Deck is closed.'}
-    $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupPlanTypes='Account types (select one or more)';WarmupAccounts='Specific accounts (optional with account types; select one or more)';WarmupModel='Paid-plan model / low reasoning effort';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
+    $descriptions=@{Failover='Automatically enable for new codex-auth conversations, including launches from Deck. The account you launch stays first; the chosen dynamic group or selected accounts may follow it. Existing sessions are unchanged. Account-specific history can prevent switching. Override one launch with -Failover Off.';Appearance='Window behavior and reading comfort';General='Terminal, compaction and live context behavior';Details='Choose what appears in expanded account entries and the widget';Advanced='Failover and analytics';Terminal='Choose which interactive Codex and Claude sessions use the terminal''s normal screen buffer and native scrollback. Changes apply to new sessions.';Compaction='Press C in the codex-auth dashboard to opt in for a launch. Native uses Codex automatic compaction. Custom preserves Deck''s handoff, compact and replay workflow. The percentage is free context remaining: 55% means compaction starts at 45% used. Account, pool and failover conversations are supported.';Integrations='Install and update optional tools and catalogs. Choose projects for CodeGraph below after installing it.';'Live Context Manager'='Inspect the live trajectory and edit what Deck sends on the next model request. Raw rollout history stays unchanged. Direct launches remain view-only.';Analytics='Independent efficiency analysis measures repeated commands and paths, large tool results, token/cache patterns and compaction activity.';Checks='Auto-check follows this interval for the displayed account list. Manual checks run immediately, up to eight together.';'Usage Warmup'='Warm-up and its Windows background task are off by default. Select Codex account types and any individual Codex or Claude accounts, then choose timing below. Claude quota checks use provider-reported five-hour and seven-day usage and reset timestamps before and after each confirmed reply.'}
+    $labels=@{ShowResetCredits='Reset credits';ShowCredits='Additional usage credits';MaskEmail='Mask email addresses';AccountPickerUsage='Usage in account picker';FailoverEnabled='Automatically enable failover for codex-auth launches';FailoverMode='Rotation';FailoverAccounts='Quota accounts';DefaultFolder='Terminal start folder';AlwaysAskFolder='Always ask where to open the terminal';ViewMode='Default view';WidgetOneLine='One-line widget entries';AlwaysOnTop='Keep Deck above other windows';CloseToTray='Close to the tray';AutoStart='Start Deck with account terminals';OpacityPercent='Window opacity (%)';FontSize='Text size';AutoCheck='Enable automatic checks';PollMinutes='Check interval (minutes)';MinimumGapSeconds='Cooldown after a list check (seconds)';WarmupEnabled='Enable automatic warm-up';WarmupResetEnabled='After quota resets';WarmupTimedEnabled='At chosen times every day';WarmupTimes='Daily times in local 24-hour format (08:00, 13:30)';WarmupStartAtLogin='Check and reschedule at Windows sign-in';WarmupPlanTypes='Codex account types (select one or more)';WarmupAccounts='Specific Codex or Claude accounts';WarmupModel='Codex paid-plan model / low reasoning effort';WarmupClaudeModel='Claude model';WarmupGraceSeconds='Wait after quota reset (seconds)';WarmupMaxDelayMinutes='Warm-up window after reset (minutes)';WidgetAutoHeight='Fit widget height to content';WidgetShowEmail='Email in widget';WidgetShowResets='Reset times in widget';ShowCheckedAt='Last check time';ShowProcessIds='Process IDs';ShowSessionCount='Terminal count'}
     $labels.AutoCompactMode='Auto-compact implementation'
     $labels.TerminalScrollbackEnabled='Preserve terminal scrollback for all accounts'
     $labels.ClaudeTerminalScrollbackEnabled='Preserve Claude terminal scrollback for all accounts'
@@ -970,6 +972,8 @@ function Show-DeckSettings {
                 $cachedModels=Read-DeckJson (Join-Path $root 'models.json')
                 foreach($model in @(Get-DeckModelNames @($settings.WarmupModel,'gpt-6-luna',$cachedModels.Models))){[void]$control.Items.Add([string]$model)}
                 $control.SelectedItem=$settings.WarmupModel; $control.ToolTip='Paid-plan warm-up uses low reasoning effort. Free and Go use their Codex-default model. Loading models from Codex...'
+            }elseif($key -eq 'WarmupClaudeModel'){
+                $control=[Windows.Controls.TextBox]::new(); $control.Text=[string]$settings.WarmupClaudeModel; $control.ToolTip='Claude model alias or ID, for example sonnet. Claude warm-up uses no tools and does not save a conversation.'
             }elseif($key -eq 'WarmupAccounts'){
                 $control=[Windows.Controls.ListBox]::new(); $control.SelectionMode='Multiple'; $control.MaxHeight=150
                 [Windows.Controls.VirtualizingPanel]::SetIsVirtualizing($control,$true); [Windows.Controls.VirtualizingPanel]::SetVirtualizationMode($control,[Windows.Controls.VirtualizationMode]::Recycling); [Windows.Controls.ScrollViewer]::SetCanContentScroll($control,$true)
@@ -1320,6 +1324,7 @@ function Show-DeckSettings {
                 if($updated.HarnessAntigravityFailoverAccounts -ne '*'){$updated.HarnessAntigravityFailoverAccounts=@($agyPool) -join ','}
             }
             if ($updated.WarmupModel -notmatch '^gpt-[a-zA-Z0-9.-]+$') { throw 'Enter a model ID, e.g. gpt-6-luna.' }
+            if ($updated.WarmupClaudeModel -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$') { throw 'Enter a Claude model alias or ID, e.g. sonnet.' }
             if ($updated.ViewMode -notin @('Panel','Widget','Tray')) { throw 'View Mode must be Panel, Widget, or Tray.' }
             if ($updated.DashboardTheme -notin @('Default','Focus','Cards','Ledger','Split')) { throw 'Choose a dashboard theme.' }
             if ($updated.AutoCompactMode -notin @('Native','Custom')) { throw 'Choose Native or Custom auto-compaction.' }
@@ -1428,7 +1433,7 @@ function New-DeckPanelDetails([string]$Name) {
         $divider=[Windows.Controls.Border]::new(); $divider.Height=1; $divider.Background='#30343A'; $divider.Margin='0,0,0,10'; [void]$detailPanel.Children.Add($divider)
         if($settings.ShowQuota){foreach($w in $row.Windows){[void]$detailPanel.Children.Add((New-DeckQuotaTrack $w $quotaColor ([bool]$settings.ShowResets)))}}
         $fields=[ordered]@{}
-        $fields['Status']=if($profile.Harness -and $profile.Harness -ne 'Codex'){'Use '+(Get-DeckHarness $profile.Harness).Name+' for usage and login status.'}else{$status+' · percentages remaining; * reset passed, check again'}
+        $fields['Status']=if($profile.Harness -and $profile.Harness -notin @('Codex','Claude')){'Use '+(Get-DeckHarness $profile.Harness).Name+' for usage and login status.'}elseif($profile.Harness -eq 'Claude'){$status+' · Claude OAuth usage'}else{$status+' · percentages remaining; * reset passed, check again'}
         if($profile.Harness){$fields['Harness']=(Get-DeckHarness $profile.Harness).Name}
         if($settings.ShowEmail){$fields['Email']=if($displayEmail){if($settings.MaskEmail){$displayEmail -replace '^(.).*(@.*)$','$1***$2'}else{$displayEmail}}else{'Unavailable'}}
         if($settings.ShowPlan){$fields['Plan']=if($plan){$plan}else{'Unavailable'}}
@@ -1441,7 +1446,7 @@ function New-DeckPanelDetails([string]$Name) {
         if($settings.ShowProcessIds){$fields['Process IDs']=($connected | ForEach-Object ProcessId)-join ', '}
         if($settings.ShowFolder){$fields['Folders']=($connected | ForEach-Object Folder | Select-Object -Unique)-join "`n"}
         if($settings.ShowWarmup -or (Test-DeckWarmupSelected $settings $name $plan)){$fields['Warm-up']=if($profile.AuthIssue -in @('token_revoked','oauth_invalid')){'Sign in again'}else{Get-DeckWarmupStatus $settings $(if($row){$row}else{@{Account=$name;PlanType=$plan}}) $history[$name]}}
-        if($settings.ShowCredits){$fields['Credits']=if($null -ne $row.Credits){($row.Credits.PSObject.Properties | ForEach-Object { $_.Name+': '+$_.Value }) -join ' · '}else{'Not provided by Codex'}}
+        if($settings.ShowCredits){$fields['Credits']=if($null -ne $row.Credits){($row.Credits.PSObject.Properties | ForEach-Object { $_.Name+': '+$_.Value }) -join ' · '}elseif($profile.Harness -eq 'Claude'){'Not provided by Claude usage API'}else{'Not provided by Codex'}}
         if($row.Error){$fields['Check error']=$row.Error}
         foreach($key in @($fields.Keys)){
             if([string]::IsNullOrWhiteSpace([string]$fields[$key])){$fields[$key]='Unavailable'}
@@ -1768,7 +1773,7 @@ function Invoke-DeckTick {
             # Profiles already contain harness identity from the throttled account refresh.
             # Re-reading every deck-account.json on each dispatcher tick made a large
             # account list steadily consume CPU while automatic checks were enabled.
-            $automatic=@(); if($settings.AutoCheck -and $now -ge $autoCheckReadyAt){$automatic=@(Get-DeckVisibleAccounts | Where-Object {$profiles[$_] -and $profiles[$_].Harness -eq 'Codex' -and -not $profiles[$_].AuthIssue})}
+            $automatic=@(); if($settings.AutoCheck -and $now -ge $autoCheckReadyAt){$automatic=@(Get-DeckVisibleAccounts | Where-Object {$profiles[$_] -and $profiles[$_].Harness -in @('Codex','Claude') -and -not $profiles[$_].AuthIssue -and (Test-DeckWarmupAccountSignedIn $suite $_)})}
             $due=@(Get-DeckDueAccounts $automatic $manualChecks $nextCheck $now)
             foreach($account in $due){
                 if (Get-DeckPoolEntry $suite $account) { $manualChecks.Remove($account); continue }
@@ -2179,6 +2184,7 @@ try{
         $settingsUI=Show-DeckSettings -TestUI
         if(@($settingsUI.Controls.WarmupModel.Items | Where-Object {$_ -isnot [string] -or $_ -notmatch '^gpt-' }).Count){throw 'Model picker contains a non-model item.'}
         if($settingsUI.Controls.WarmupModel -isnot [Windows.Controls.ComboBox] -or $settingsUI.Controls.WarmupModel.SelectedItem -ne $settings.WarmupModel){throw 'Model selector failed.'}
+        if($settingsUI.Controls.WarmupClaudeModel -isnot [Windows.Controls.TextBox] -or $settingsUI.Controls.WarmupClaudeModel.Text -ne $settings.WarmupClaudeModel){throw 'Claude warm-up model setting is missing or has the wrong default.'}
         foreach($control in $settingsUI.Controls.Values){if($control -ne $settingsUI.Controls.BrowserHarnessEnabled -and $control.Margin.Bottom -lt 14){throw 'Settings spacing failed.'}}
         if(@($settingsUI.Tabs.Items | ForEach-Object Header) -notcontains 'Backup' -or @($settingsUI.Tabs.Items | ForEach-Object Header) -notcontains 'About'){throw 'Backup/About tabs missing'}
         foreach($header in @('Harnesses','AI Router','General','Checks & Warmup','Environments','Skills','Advanced','Integrations','Backup','About')){
@@ -2470,6 +2476,7 @@ try{
             if($draftUI.Controls.AutoCompactHandoffPrompt.Visibility -ne 'Visible'){throw 'Custom auto-compact controls did not appear.'}
             $draftUI.Controls.AutoCompactThresholdPercent.Text='72'
             $draftUI.Controls.AutoCompactHandoffPrompt.Text="Write a concise DECK_HANDOFF with verified progress and the next action.`nInclude the relevant files and tests."
+            $draftUI.Controls.WarmupClaudeModel.Text='haiku'
             $draftScope=$draftUI.Controls.WarmupPlanTypes.Resources['ScopeMenu']
             $draftScope.Items[1].IsChecked=$true; $draftScope.Items[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
             $draftScope.Items[3].IsChecked=$true; $draftScope.Items[3].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
@@ -2496,6 +2503,7 @@ try{
             if($savedSettings.DashboardTheme -ne 'Split'){throw 'Save settings did not persist the terminal dashboard theme.'}
             if($savedSettings.AutoCompactHandoffPrompt -notmatch 'concise DECK_HANDOFF'){throw 'Save settings did not persist the multiline handoff request.'}
             if($savedSettings.WarmupPlanTypes -ne 'free,paid'){throw 'Save settings did not persist multiple warm-up account types.'}
+            if($savedSettings.WarmupClaudeModel -ne 'haiku'){throw 'Save settings did not persist the Claude warm-up model.'}
             $savedSkillAccess=@($savedSettings.SkillAccessAccounts -split ',' | Where-Object {$_})
             if($savedSkillAccess -contains 'account1' -or $savedSkillAccess -notcontains 'account2' -or $savedSkillAccess -notcontains 'pool'){throw 'Save settings did not persist custom per-account skill access.'}
             $savedSkill=@(Get-DeckBundledSkills $settingsFixture | Where-Object Name -eq 'debug-swarm')[0]

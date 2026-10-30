@@ -43,7 +43,7 @@ function Get-DeckDefaults {
         ShowModel=$false; AccountPickerUsage=$false; SkillAccessAccounts='*'
         ViewMode='Widget'; DashboardTheme='Default'; WidgetOneLine=$true; WidgetShowEmail=$false; WidgetShowResets=$true; WidgetAutoHeight=$true
         WidgetWidth=238; WidgetHeight=0
-        WarmupEnabled=$false; WarmupSchedulingEnabled=$false; WarmupPlanTypes=''; WarmupAccounts=''; WarmupModel='gpt-6-luna'
+        WarmupEnabled=$false; WarmupSchedulingEnabled=$false; WarmupPlanTypes=''; WarmupAccounts=''; WarmupModel='gpt-6-luna'; WarmupClaudeModel='sonnet'
         WarmupGraceSeconds=60; WarmupMaxDelayMinutes=30
         WarmupResetEnabled=$true; WarmupTimedEnabled=$false; WarmupTimes=''
         WarmupStartAtLogin=$true
@@ -89,7 +89,7 @@ function Get-DeckProfile([string]$SuiteRoot,[string]$Account) {
                 elseif($record.CredentialsPresent -eq ($authStatus -eq 'Credentials stored')){$authStatus=[string]$record.Status}
             }
         }
-        return @{Email=$null;PlanType=$identity.Provider;Model=$definition.Name+' default';Effort='default';Harness=$identity.Harness;Provider=$identity.Provider;AuthStatus=$authStatus;AuthCheckedAt=$authCheckedAt;AuthMethod=$authMethod}
+        return @{Email=$null;PlanType=$identity.Provider;Model=$definition.Name+' default';Effort='default';Harness=$identity.Harness;Provider=$identity.Provider;AuthStatus=$authStatus;AuthCheckedAt=$authCheckedAt;AuthMethod=$authMethod;AuthIssue=(Get-DeckAuthIssue $SuiteRoot $Account)}
     }
     $profile=@{Email=$null; PlanType=$null; Model='Codex default'; Effort='default'; AuthIssue=$null}
     $auth=Read-DeckJson (Join-Path $folder 'auth.json')
@@ -737,13 +737,38 @@ ConvertTo-Json -InputObject `$models
 "@
 }
 function Get-DeckCheckCode([string]$SuiteRoot, [string]$Account) {
-    if(-not (Test-DeckCodexAccount $SuiteRoot $Account)){throw 'Deck usage checks currently support ChatGPT / Codex accounts. Use the harness native usage command.'}
     if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$') { throw 'Invalid account.' }
+    if((Get-DeckAccountIdentity $SuiteRoot $Account).Harness -eq 'Claude'){return Get-DeckClaudeCheckCode $SuiteRoot $Account}
+    if(-not (Test-DeckCodexAccount $SuiteRoot $Account)){throw 'Deck usage checks currently support ChatGPT / Codex and Claude accounts.'}
     $path = (Join-Path $SuiteRoot 'Run-CodexLoopUsage.cmd').Replace("'", "''")
     $accounts = (Join-Path $SuiteRoot 'accounts').Replace("'", "''")
     return "`$ErrorActionPreference='Stop'; `$text=[IO.File]::ReadAllText('$path'); `$body=(`$text -split '(?m)^__POWERSHELL__\r?`$')[1]; & ([scriptblock]::Create(`$body)) -AccountsRoot '$accounts' -Account '$Account' -Json"
 }
+function Get-DeckClaudeCheckCode([string]$SuiteRoot,[string]$Account) {
+    if((Get-DeckAccountIdentity $SuiteRoot $Account).Harness -ne 'Claude'){throw 'Claude warm-up checks require a Claude account.'}
+    $module=(Join-Path $PSScriptRoot 'Deck.Core.ps1').Replace("'","''")
+    $suite=$SuiteRoot.Replace("'","''"); $name=$Account.Replace("'","''")
+    return @"
+`$ErrorActionPreference='Stop'
+. '$module'
+`$record=Get-DeckClaudeUsageRecord '$suite' '$name'
+ConvertTo-Json -InputObject `$record -Depth 8 -Compress
+"@
+}
 function Get-DeckWarmupCode([string]$SuiteRoot, [string]$Account, [string]$Model) {
+    if((Get-DeckAccountIdentity $SuiteRoot $Account).Harness -eq 'Claude'){
+        if($Model -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$'){throw 'Enter a valid Claude model name or ID.'}
+        $module=(Join-Path $PSScriptRoot 'Deck.Core.ps1').Replace("'","''")
+        $suite=$SuiteRoot.Replace("'","''"); $name=$Account.Replace("'","''"); $claudeModel=$Model.Replace("'","''")
+        return @"
+`$ErrorActionPreference='Stop'
+. '$module'
+`$captured=Invoke-DeckClaudeWarmup '$suite' '$name' '$claudeModel'
+if(`$captured.StandardOutput){[Console]::Out.Write(`$captured.StandardOutput)}
+if(`$captured.StandardError){[Console]::Error.Write(`$captured.StandardError)}
+exit [int]`$captured.ExitCode
+"@
+    }
     if(-not (Test-DeckCodexAccount $SuiteRoot $Account)){throw 'Deck warm-up requires a Codex / ChatGPT account.'}
     if ($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or ($Model -and $Model -notmatch '^gpt-[a-zA-Z0-9.-]+$')) { throw 'Invalid warm-up account or model.' }
     $accountPath = (Join-Path $SuiteRoot "accounts/$Account").Replace("'", "''")
@@ -764,6 +789,14 @@ $modelArgument
 & `$exe.Source @deckArgs
 exit `$LASTEXITCODE
 "@
+}
+function Get-DeckClaudeWarmupReply([string]$Output) {
+    try{$result=$Output | ConvertFrom-Json -ErrorAction Stop}catch{return}
+    if($result.PSObject.Properties['is_error'] -and [bool]$result.is_error){return}
+    if($result.PSObject.Properties['result'] -and -not [string]::IsNullOrWhiteSpace([string]$result.result)){
+        $reply=[string]$result.result
+        return $reply.Substring(0,[Math]::Min(500,$reply.Length))
+    }
 }
 
 function Move-DeckAccountToRecovery {
@@ -847,12 +880,14 @@ function Test-DeckWarmupPlanSelected($Settings, [string]$PlanType) {
     return $types -contains 'all' -or $types -contains $plan -or ($types -contains 'paid' -and $plan -in @('plus','pro','team','business','enterprise','edu'))
 }
 function Test-DeckWarmupSelected($Settings, [string]$Account, [string]$PlanType = '') {
-    if($PlanType -in @('Claude','Gemini','ChatGPT','Custom')){return $false}
     $accountSelected=$Account -in @($Settings.WarmupAccounts -split '[,;\s]+' | Where-Object {$_})
-    return $accountSelected -or (Test-DeckWarmupPlanSelected $Settings $PlanType)
+    if($accountSelected){return $true}
+    if($PlanType -in @('Claude','Gemini','ChatGPT','Custom')){return $false}
+    return Test-DeckWarmupPlanSelected $Settings $PlanType
 }
 function Get-DeckWarmupWindow($Record) {
     $plan=([string]$Record.PlanType).ToLowerInvariant()
+    if($plan -eq 'claude'){return $Record.Windows | Where-Object DurationSeconds -eq 18000 | Select-Object -First 1}
     if($plan -in @('free','go')){
         # Free/Go expose their primary allowance as a longer window. Do not
         # require the paid-plan 5-hour window for these accounts.
@@ -873,7 +908,7 @@ function Get-DeckWarmupStatus($Settings, $Record, $History, [long]$Now = ([DateT
     if (-not $Settings.WarmupEnabled) { return 'Paused' }
     if (-not $Settings.WarmupSchedulingEnabled) { return 'Background scheduling off' }
     if ($Settings.WarmupTimedEnabled -and -not $Settings.WarmupResetEnabled) { return 'Daily ' + $Settings.WarmupTimes + ' (local)' }
-    if ($Record.PlanType -and -not (Test-DeckWarmupPlanSupported $Record.PlanType)) { return 'Unsupported account plan' }
+    if ($Record.PlanType -and [string]$Record.PlanType -ne 'Claude' -and -not (Test-DeckWarmupPlanSupported $Record.PlanType)) { return 'Unsupported account plan' }
     if (Test-DeckInvalidAuthMessage ([string]$Record.Error)) { return 'Sign in again' }
     if ($History -and $Now - [long]$History.AttemptAt -lt 14400) { return $History.Outcome }
     if (-not $Record.CheckedAt -or $Record.Error -or $Record.Status -ne 'available') { return 'Waiting for fresh quota' }
@@ -938,8 +973,7 @@ function Get-DeckWarmupReply([string]$Output) {
     if($completed -and -not $failed -and -not [string]::IsNullOrWhiteSpace($reply)){return $reply.Substring(0,[Math]::Min(500,$reply.Length))}
 }
 function Request-DeckWarmup([string]$SuiteRoot, [string]$Account, [switch]$NoStart) {
-    if(-not (Test-DeckCodexAccount $SuiteRoot $Account)){throw 'Deck warm-up requires a Codex / ChatGPT account.'}
-    if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or -not (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$Account/auth.json"))){throw 'Select a signed-in account.'}
+    if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -or -not (Test-DeckWarmupAccountSignedIn $SuiteRoot $Account)){throw 'Select a signed-in Codex or Claude account.'}
     $path=Join-Path $SuiteRoot "deck/warmup-requests/$Account.json"
     Write-DeckJson $path @{Account=$Account;Mode='Manual';At=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()}
     if(-not $NoStart){Start-DeckWarmupScheduler $SuiteRoot}
@@ -960,13 +994,27 @@ function Get-DeckSignedInAccounts([string]$SuiteRoot) {
         Where-Object { $_.Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'auth.json') -PathType Leaf) -and (Test-DeckCodexAccount $SuiteRoot $_.Name) } |
         Sort-Object Name | ForEach-Object Name)
 }
+function Test-DeckWarmupAccountSignedIn([string]$SuiteRoot,[string]$Account) {
+    if($Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){return $false}
+    try{$identity=Get-DeckAccountIdentity $SuiteRoot $Account}catch{return $false}
+    if($identity.Harness -eq 'Codex'){return Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$Account/auth.json") -PathType Leaf}
+    if($identity.Harness -eq 'Claude'){
+        $path=Join-Path (Get-DeckEntryDirectory $SuiteRoot $Account) 'claude/.credentials.json'
+        if(-not (Test-Path -LiteralPath $path -PathType Leaf)){return $false}
+        $item=Get-Item -LiteralPath $path -Force
+        return $item.Length -gt 0 -and -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+    }
+    return $false
+}
 function Get-DeckOAuthAccountId([string]$SuiteRoot,[string]$Account) {
     $auth=Read-DeckJson (Join-Path $SuiteRoot "accounts/$Account/auth.json")
     if($auth -and $auth.tokens.account_id){return [string]$auth.tokens.account_id}
 }
 function Get-DeckAuthFileStamp([string]$SuiteRoot,[string]$Account) {
     try {
-        $file=Get-Item -LiteralPath (Join-Path $SuiteRoot "accounts/$Account/auth.json") -ErrorAction Stop
+        $identity=Get-DeckAccountIdentity $SuiteRoot $Account
+        $path=if($identity.Harness -eq 'Claude'){Join-Path (Get-DeckEntryDirectory $SuiteRoot $Account) 'claude/.credentials.json'}else{Join-Path $SuiteRoot "accounts/$Account/auth.json"}
+        $file=Get-Item -LiteralPath $path -ErrorAction Stop
         return '{0}:{1}' -f $file.Length,$file.LastWriteTimeUtc.Ticks
     } catch { return '' }
 }
@@ -1009,6 +1057,24 @@ function Set-DeckAuthIssue([string]$SuiteRoot,[string]$Account,[string]$Message)
     if($email -and (Test-DeckAuthHelperEmail $SuiteRoot $email)){[void](Start-DeckAuthHelperRecoveryWorker $SuiteRoot $Account $email -Force)}
     return $true
 }
+function Test-DeckAuthHelperWorkerActive([string]$SuiteRoot,[string]$Account,$Status) {
+    $processId=0
+    try{$processId=[int]$Status.ProcessId}catch{}
+    $scriptPattern=[regex]::Escape((Join-Path $SuiteRoot 'Deck.AuthHelper.ps1'))
+    $accountPattern='(?i)(?:^|\s)-Account(?:\s+|:)\s*["'']?'+[regex]::Escape($Account)+'["'']?(?:\s|$)'
+    try {
+        if($processId -gt 0){$workers=@(Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction Stop)}
+        else{$workers=@(Get-CimInstance Win32_Process -ErrorAction Stop)}
+        if(@($workers | Where-Object {$_.CommandLine -match $scriptPattern -and $_.CommandLine -match $accountPattern}).Count){return $true}
+        if($processId -gt 0){return $false}
+        try{return $Status.State -eq 'queued' -and (([DateTimeOffset]::UtcNow-[DateTimeOffset]::Parse([string]$Status.At)).TotalSeconds -lt 10)}catch{return $false}
+    } catch {
+        # Older status files may not have a process ID. Keep their short
+        # queued-start grace period, but let the next retry replace a dead run.
+        if($processId -gt 0){return [bool](Get-Process -Id $processId -ErrorAction SilentlyContinue)}
+        try{return $Status.State -eq 'queued' -and (([DateTimeOffset]::UtcNow-[DateTimeOffset]::Parse([string]$Status.At)).TotalSeconds -lt 10)}catch{return $false}
+    }
+}
 function Start-DeckAuthHelperRecoveryWorker([string]$SuiteRoot,[string]$Account,[string]$Email,[switch]$Force) {
     if(-not $Email -or $Account -notmatch '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'){return $false}
     if(-not (Test-DeckAuthHelperEmail $SuiteRoot $Email)){return $false}
@@ -1023,7 +1089,7 @@ function Start-DeckAuthHelperRecoveryWorker([string]$SuiteRoot,[string]$Account,
             try {
                 $age=([DateTimeOffset]::UtcNow-[DateTimeOffset]::Parse([string]$previous.At)).TotalSeconds
                 $window=if($previous.State -eq 'queued'){30}else{360}
-                if($age -ge 0 -and $age -lt $window -and $previous.Email -ieq $Email -and [string]$previous.AuthFileStamp -eq $authStamp){return $false}
+                if($age -ge 0 -and $age -lt $window -and $previous.Email -ieq $Email -and [string]$previous.AuthFileStamp -eq $authStamp -and (Test-DeckAuthHelperWorkerActive $SuiteRoot $Account $previous)){return $false}
             } catch {}
         }
         if(-not $Force -and $previous -and $previous.Email -ieq $Email -and [string]$previous.AuthFileStamp -eq $authStamp -and [string]$previous.HelperFileStamp -eq $helperStamp -and $previous.State -in @('unmatched','succeeded','failed')){return $false}
@@ -1112,16 +1178,19 @@ function Test-DeckCachedRevokedAuth([string]$SuiteRoot,[string]$Account,$Record)
 function Get-DeckWarmupAccounts([string]$SuiteRoot, $Settings, $Cache = @{}) {
     $seenIdentities=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $eligible=@()
-    foreach($account in @(Get-DeckSignedInAccounts $SuiteRoot)){
+    foreach($directory in @(Get-ChildItem -LiteralPath (Join-Path $SuiteRoot 'accounts') -Directory -ErrorAction SilentlyContinue | Where-Object {$_.Name -match '^[a-zA-Z][a-zA-Z0-9_-]{0,39}$'} | Sort-Object Name)){
+        $account=$directory.Name
+        if(-not (Test-DeckWarmupAccountSignedIn $SuiteRoot $account)){continue}
+        $harness=(Get-DeckAccountIdentity $SuiteRoot $account).Harness
         $record=$Cache[$account]
         # A revoked OAuth grant cannot recover by retrying its unchanged auth.json.
         # Keep it visible in the cache/dashboard, but stop the background worker
         # from issuing the same doomed quota request until the user signs in again.
         if(Test-DeckCachedRevokedAuth $SuiteRoot $account $record){continue}
-        $plan=if($record -and $record.PSObject.Properties['PlanType']){[string]$record.PSObject.Properties['PlanType'].Value}else{''}
-        if(-not $plan){$plan=[string](Get-DeckProfile $SuiteRoot $account).PlanType}
-        if((Test-DeckWarmupPlanSupported $plan) -and (Test-DeckWarmupSelected $Settings $account $plan)){
-            $identity=Get-DeckOAuthAccountId $SuiteRoot $account
+        $plan=if($record -and $record.PSObject.Properties['PlanType']){[string]$record.PSObject.Properties['PlanType'].Value}else{[string](Get-DeckProfile $SuiteRoot $account).PlanType}
+        $selected=if($harness -eq 'Claude'){$account -in @($Settings.WarmupAccounts -split '[,;\s]+' | Where-Object {$_})}else{(Test-DeckWarmupPlanSupported $plan) -and (Test-DeckWarmupSelected $Settings $account $plan)}
+        if($selected){
+            $identity=if($harness -eq 'Codex'){Get-DeckOAuthAccountId $SuiteRoot $account}else{$null}
             $status=if($record -and $record.PSObject.Properties['Status']){[string]$record.PSObject.Properties['Status'].Value}else{''}
             $error=if($record -and $record.PSObject.Properties['Error']){$record.PSObject.Properties['Error'].Value}else{$null}
             $priority=if($record -and $status -eq 'available' -and -not $error){0}elseif($record -and ($error -or $status -eq 'error')){2}else{1}
@@ -1133,12 +1202,13 @@ function Get-DeckWarmupAccounts([string]$SuiteRoot, $Settings, $Cache = @{}) {
         $entry.Account
     }
 }
-function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, [DateTimeOffset]$Now = [DateTimeOffset]::Now, [int]$UnknownDelayMinutes = 1) {
+function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, [DateTimeOffset]$Now = [DateTimeOffset]::Now, [int]$UnknownDelayMinutes = 1, [string]$SuiteRoot = '') {
     if(-not $Settings.WarmupEnabled -or -not $Settings.WarmupResetEnabled){return}
     if(-not @($Accounts).Count){return $Now.AddHours(6)}
     $unix=$Now.ToUnixTimeSeconds(); $candidates=@()
     foreach($account in @($Accounts)){
         $record=$Cache[$account]
+        $harness=if($SuiteRoot){try{(Get-DeckAccountIdentity $SuiteRoot $account).Harness}catch{'Codex'}}else{'Codex'}
         if($record -and ($record.Error -or $record.Status -eq 'error')){$candidates+=$Now.AddMinutes([Math]::Max(20,$UnknownDelayMinutes)); continue}
         $blockedWindows=@($record.Windows | Where-Object { $_.Dead -or ($null -ne $_.UsedPct -and $_.UsedPct -ge 99.5) })
         if($blockedWindows.Count){
@@ -1168,6 +1238,7 @@ function Get-DeckNextWarmupRun($Settings, $Accounts, $Cache, $Resets, $History, 
             }
         }else{$candidates+=$Now.AddMinutes([Math]::Max(20,$UnknownDelayMinutes))}
     }
+    if(-not $candidates.Count){return $Now.AddHours(6)}
     $candidates | Sort-Object | Select-Object -First 1
 }
 function Get-DeckWarmupSettingsStamp($Settings, $Accounts) {
@@ -1224,7 +1295,7 @@ function Sync-DeckWarmupStartup([string]$SuiteRoot, $Settings, $NextRun = $null)
         $history=ConvertTo-DeckMap (Read-DeckJson (Join-Path $SuiteRoot 'deck/warmup.json'))
         $resets=@{}; $saved=Read-DeckJson (Join-Path $SuiteRoot 'deck/warmup-resets.json'); if($saved){foreach($property in $saved.PSObject.Properties){$resets[$property.Name]=[long]$property.Value}}
         $accounts=@(Get-DeckWarmupAccounts $SuiteRoot $Settings $cache)
-        $computed=Get-DeckNextWarmupRun $Settings $accounts $cache $resets $history ([DateTimeOffset]::Now) 1
+        $computed=Get-DeckNextWarmupRun $Settings $accounts $cache $resets $history ([DateTimeOffset]::Now) 1 $SuiteRoot
         if($computed){$NextRun=[DateTimeOffset]$computed}
     }
     $identity=[Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -1251,7 +1322,7 @@ function Sync-DeckWarmupStartup([string]$SuiteRoot, $Settings, $NextRun = $null)
     # neither it nor the child PowerShell process can flash on the desktop.
     $principal=New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
     $taskSettings=New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $taskSettings -Principal $principal -Description 'Checks selected Codex accounts at warm-up times, warms eligible accounts, refreshes quota state, and exits. Managed by Codex Deck.' -Force | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $taskSettings -Principal $principal -Description 'Checks selected Codex accounts and Claude sign-in, warms eligible accounts, tracks Claude five-hour windows after a confirmed reply, and exits. Managed by Codex Deck.' -Force | Out-Null
     # Only retire the previous task after the replacement was registered. A
     # registration failure must not silently disable an existing schedule.
     foreach($legacyTaskName in $legacyTaskNames){Unregister-ScheduledTask -TaskName $legacyTaskName -Confirm:$false -ErrorAction SilentlyContinue}
@@ -1271,8 +1342,10 @@ function Add-DeckTimedWarmups([string]$SuiteRoot, $Settings, $Accounts, $Cache, 
         foreach($account in $Accounts){
             $plan=$Cache[$account].PlanType
             if(-not $plan){$plan=(Get-DeckProfile $SuiteRoot $account).PlanType}
-            if(-not (Test-DeckWarmupPlanSupported $plan) -or -not (Test-DeckWarmupSelected $Settings $account $plan)){continue}
-            if(-not (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$account/auth.json"))){continue}
+            $harness=(Get-DeckAccountIdentity $SuiteRoot $account).Harness
+            $selected=if($harness -eq 'Claude'){$account -in @($Settings.WarmupAccounts -split '[,;\s]+' | Where-Object {$_})}else{(Test-DeckWarmupPlanSupported $plan) -and (Test-DeckWarmupSelected $Settings $account $plan)}
+            if(-not $selected){continue}
+            if(-not (Test-DeckWarmupAccountSignedIn $SuiteRoot $account)){continue}
             $key="$slot/$account"; if($ledger.ContainsKey($key)){continue}
             $request=Join-Path $root "warmup-requests/$account.json"
             if(-not (Test-Path -LiteralPath $request)){Write-DeckJson $request @{Account=$account;Mode='Timed';At=$Now.ToUnixTimeSeconds();Slot=$slot}}
@@ -1292,11 +1365,11 @@ function Invoke-DeckQueuedWarmups([string]$SuiteRoot, $Settings, $Tasks, $Histor
         $plan=[string](Get-DeckProfile $SuiteRoot $account).PlanType
         $paused=$request.Mode -eq 'Timed' -and (-not $Settings.WarmupEnabled -or -not $Settings.WarmupTimedEnabled -or -not (Test-DeckWarmupSelected $Settings $account $plan))
         $recent=$History[$account] -and $Now-[long]$History[$account].AttemptAt -lt 30
-        if($expired -or $paused -or $recent -or -not (Test-Path -LiteralPath (Join-Path $SuiteRoot "accounts/$account/auth.json"))){Remove-Item -LiteralPath $file.FullName; continue}
+        if($expired -or $paused -or $recent -or -not (Test-DeckWarmupAccountSignedIn $SuiteRoot $account)){Remove-Item -LiteralPath $file.FullName; continue}
         $History[$account]=[pscustomobject]@{Account=$account;Reset=0;AttemptAt=$Now;Mode=$request.Mode;Outcome='Sending / waiting for reply';Reply=''}
         Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $History)
         Remove-Item -LiteralPath $file.FullName
-        try{$Tasks[$account]=Start-DeckTask (Get-DeckWarmupCode $SuiteRoot $account (Get-DeckWarmupModel $Settings $plan)) 'Warm-up' $account}
+        try{$model=if((Get-DeckAccountIdentity $SuiteRoot $account).Harness -eq 'Claude'){$Settings.WarmupClaudeModel}else{Get-DeckWarmupModel $Settings $plan};$Tasks[$account]=Start-DeckTask (Get-DeckWarmupCode $SuiteRoot $account $model) 'Warm-up' $account}
         catch{$History[$account].Outcome='Failed to start'; Write-DeckJson (Join-Path $root 'warmup.json') @(Get-DeckMapValues $History)}
     }
 }

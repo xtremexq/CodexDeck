@@ -116,20 +116,46 @@ function recordRevokedAuth(root, account, rejectedEmail, rejectedToken) {
 function helperStatusPath(root, account) {
   return path.join(root, 'deck', 'auth-helper', 'status', account + '.json');
 }
-function writeAuthHelperStatus(root, account, email, state, message, authStamp, attemptId) {
+function writeAuthHelperStatus(root, account, email, state, message, authStamp, attemptId, processId = 0) {
   let temporary;
   try {
     const helperPath=path.join(root,'deck','auth-helper.dat');
     const helperStamp=(()=>{try{const stat=fs.statSync(helperPath,{bigint:true});return (stat.mtimeNs/100n+621355968000000000n).toString()}catch{return '0'}})();
     const file=helperStatusPath(root,account); temporary=file+'.'+process.pid+'.'+crypto.randomBytes(6).toString('hex')+'.tmp';
     fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
-    fs.writeFileSync(temporary,JSON.stringify({Version:1,Account:account,Email:email,State:state,Message:message,At:new Date().toISOString(),AuthFileStamp:authStamp,HelperFileStamp:helperStamp,AttemptId:attemptId}),{flag:'wx',mode:0o600});
+    fs.writeFileSync(temporary,JSON.stringify({Version:1,Account:account,Email:email,State:state,Message:message,At:new Date().toISOString(),AuthFileStamp:authStamp,HelperFileStamp:helperStamp,AttemptId:attemptId,ProcessId:processId}),{flag:'wx',mode:0o600});
     fs.renameSync(temporary,file);
     return true;
   } catch { return false; }
   finally { if(temporary)try{fs.unlinkSync(temporary)}catch{} }
 }
-function startAuthHelper(root, account, email, originalAuth, originalStamp, shouldStop = () => false) {
+function authHelperProcessAlive(processId) {
+  const pid=Number(processId);
+  if(!Number.isSafeInteger(pid) || pid<=0) return false;
+  try { process.kill(pid,0); return true; }
+  catch(error) { return error?.code==='EPERM'; }
+}
+function setQueuedAuthHelperProcessId(root, account, attemptId, processId) {
+  let temporary;
+  try {
+    const file=helperStatusPath(root,account), state=readJson(file);
+    if(state?.AttemptId!==attemptId || state.State!=='queued') return false;
+    state.ProcessId=processId;
+    temporary=file+'.'+process.pid+'.'+crypto.randomBytes(6).toString('hex')+'.tmp';
+    fs.writeFileSync(temporary,JSON.stringify(state),{flag:'wx',mode:0o600});
+    fs.renameSync(temporary,file);
+    return true;
+  } catch { return false; }
+  finally { if(temporary)try{fs.unlinkSync(temporary)}catch{} }
+}
+function failAuthHelperAttempt(root, account, email, authStamp, attemptId, message = 'Auth Helper worker exited before reporting an outcome.') {
+  try {
+    const state=readJson(helperStatusPath(root,account));
+    if(state?.AttemptId!==attemptId || state.AuthFileStamp!==authStamp || !['queued','running'].includes(state.State)) return false;
+    return writeAuthHelperStatus(root,account,email,'failed',message,authStamp,attemptId,0);
+  } catch { return false; }
+}
+async function startAuthHelper(root, account, email, originalAuth, originalStamp, shouldStop = () => false) {
   if (!root || !email || !originalStamp) return Promise.resolve(false);
   const helper = path.join(root, 'Deck.AuthHelper.ps1');
   if (!fs.existsSync(helper)) return Promise.resolve(false);
@@ -141,7 +167,17 @@ function startAuthHelper(root, account, email, originalAuth, originalStamp, shou
     const age=Date.now()-Date.parse(prior?.At || '');
     const activeWindow=prior?.State==='queued' ? 30000 : 360000;
     if(['queued','running'].includes(prior?.State) && String(prior.Email||'').toLowerCase()===String(email).toLowerCase() && prior.AuthFileStamp===originalStamp && Number.isFinite(age) && age>=0 && age<activeWindow){
-      return waitForAuthHelper(root,account,email,originalAuth,originalStamp,330000,shouldStop,null,prior.AttemptId,Date.parse(prior.At));
+      const hasProcessId=Number.isSafeInteger(Number(prior.ProcessId)) && Number(prior.ProcessId)>0;
+      const workerAlive=hasProcessId ? authHelperProcessAlive(prior.ProcessId) : prior.State==='queued' && age<30000;
+      if(workerAlive || (!hasProcessId && prior.State==='running')){
+        const recovered=await waitForAuthHelper(root,account,email,originalAuth,originalStamp,330000,shouldStop,null,prior.AttemptId,Date.parse(prior.At));
+        if(recovered || shouldStop()) return recovered;
+        const latest=readJson(statusPath);
+        // A queued status without a worker PID that never advances is an
+        // abandoned launch. Replace it once instead of leaving this request
+        // waiting for another turn to start recovery.
+        if(latest?.AttemptId!==prior.AttemptId || latest.State!=='queued' || Number(latest.ProcessId)>0) return false;
+      }
     }
   } catch { /* Start a new recovery if there is no readable live status. */ }
   if(!writeAuthHelperStatus(root,account,email,'queued','Waiting for Deck Auth Helper.',originalStamp,attemptId)) return Promise.resolve(false);
@@ -151,10 +187,12 @@ function startAuthHelper(root, account, email, originalAuth, originalStamp, shou
       '-NoLogo','-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass',
       '-File',helper,'-Recover','-SuiteRoot',root,'-Account',account,'-Email',email,'-BrowserHarness','-Force','-AttemptId',attemptId
     ], { detached:true, windowsHide:true, stdio:'ignore' });
-    child.once('error',()=>writeAuthHelperStatus(root,account,email,'failed','Could not start Deck Auth Helper.',originalStamp,attemptId));
+    if(child.pid) setQueuedAuthHelperProcessId(root,account,attemptId,child.pid);
+    child.once('error',()=>failAuthHelperAttempt(root,account,email,originalStamp,attemptId,'Could not start Deck Auth Helper.'));
+    child.once('exit',()=>failAuthHelperAttempt(root,account,email,originalStamp,attemptId));
     child.unref();
   } catch {
-    writeAuthHelperStatus(root,account,email,'failed','Could not start Deck Auth Helper.',originalStamp,attemptId);
+    failAuthHelperAttempt(root,account,email,originalStamp,attemptId,'Could not start Deck Auth Helper.');
     return Promise.resolve(false);
   }
   return waitForAuthHelper(root,account,email,originalAuth,originalStamp,330000,shouldStop,child,attemptId,Date.now());
@@ -547,7 +585,7 @@ async function createProxy(config, dependencies = {}) {
       // Let the active account validate server-stored references it owns. A 429
       // proves the request was rejected, so portable full/encrypted history can
       // be retried without duplicating an accepted response.
-      let attempts = 0, maxAttempts = conversation && automatic ? pool.length : 1, authRecoveryRetried=false, forcedAuthRecoveryAccount=null;
+      let attempts = 0, maxAttempts = conversation ? (automatic ? pool.length : 1) + 1 : 1, authRecoveryRetried=false, forcedAuthRecoveryAccount=null;
       while (!res.destroyed && attempts++ < maxAttempts) {
         refreshExcluded();
         if (excluded.has(current)) {
@@ -559,7 +597,8 @@ async function createProxy(config, dependencies = {}) {
             // accompanied the previous 429. In a manual-only session there is
             // no other account to rotate to, so let each explicit new request
             // make one live probe instead of manufacturing a stale local 429.
-            // maxAttempts remains one, so the request is never replayed.
+            // A 429 never selects the auth-recovery retry; without a next account
+            // the rejected quota request is returned without replaying it.
             excluded.delete(current);
             retryAt.delete(current);
             resetProbes.add(current);
@@ -626,7 +665,6 @@ async function createProxy(config, dependencies = {}) {
                 // J, Codex's native refresh, or another already-running helper
                 // may have replaced this same account's token in flight.
                 authRecoveryRetried=true;
-                attempts--;
                 forcedAuthRecoveryAccount=used;
                 continue;
               }
@@ -640,7 +678,6 @@ async function createProxy(config, dependencies = {}) {
                 }
                 if(await recovery){
                   authRecoveryRetried=true;
-                  attempts--;
                   forcedAuthRecoveryAccount=used;
                   continue;
                 }
@@ -651,7 +688,6 @@ async function createProxy(config, dependencies = {}) {
                   currentAuth=getCredentials(used);
                   if(currentAuth.token!==auth.token && String(currentAuth.id)===String(auth.id) && String(authEmail(currentAuth)||'').toLowerCase()===String(email).toLowerCase()){
                     authRecoveryRetried=true;
-                    attempts--;
                     forcedAuthRecoveryAccount=used;
                     continue;
                   }
