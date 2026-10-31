@@ -279,6 +279,19 @@ def click_continue(page):
     return False
 
 
+def click_use_another_account(page):
+    for selector in (
+        "button:has-text('Use another account')",
+        "[role=button]:has-text('Use another account')",
+        "a:has-text('Use another account')",
+    ):
+        button = first_visible(page, [selector])
+        if button is not None:
+            button.click()
+            return True
+    return False
+
+
 def fill_otp(field, page, code):
     if field.get_attribute("maxlength") == "1":
         digits = page.locator("input[maxlength='1']")
@@ -411,6 +424,17 @@ def complete_login(payload):
                         continue
                     diagnostic = safe_page_diagnostics(page, email)
                     raise RuntimeError(f"OpenAI sign-in page returned an error after retry; page state: {diagnostic}")
+                text = body_text(page).lower()
+                account_picker = "choose an account to continue to codex" in text or ("welcome back" in text and "use another account" in text)
+                if account_picker:
+                    if click_use_another_account(page):
+                        email_submitted = False
+                        password_submitted = False
+                        otp_submitted_at = 0.0
+                        page.wait_for_timeout(700)
+                    else:
+                        page.wait_for_timeout(500)
+                    continue
                 email_field = first_visible(page, [
                     "input[type='email']",
                     "input[name='email']",

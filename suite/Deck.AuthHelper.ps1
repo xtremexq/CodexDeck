@@ -317,6 +317,21 @@ def click_continue(state, allow_consent=False):
             return True
     return False
 
+def click_use_another_account():
+    expression = r'''(()=>{
+        const wanted = "use another account";
+        const visible = e => { const s=getComputedStyle(e), r=e.getBoundingClientRect(); return s.display!=="none" && s.visibility!=="hidden" && r.width>0 && r.height>0; };
+        const text = e => (e.innerText||e.value||e.getAttribute("aria-label")||"").replace(/\s+/g," ").trim().toLowerCase();
+        const e = [...document.querySelectorAll("button,[role=button],a")].find(x => visible(x) && text(x) === wanted);
+        if(!e)return false;
+        e.click();
+        return true;
+    })()'''
+    try:
+        return bool(evaluate(expression))
+    except Exception:
+        return False
+
 def make_totp(secret):
     normalized = re.sub(r"\s+", "", secret or "").replace("-", "").rstrip("=")
     if not normalized:
@@ -361,6 +376,16 @@ while time.time() < deadline:
         raise RuntimeError("OpenAI rejected the sign-in details or requires an account check; stopped.")
     if "unexpected token" in body or "not valid json" in body:
         raise RuntimeError("OpenAI returned an invalid response after sign-in; stopped for a safe retry.")
+    account_picker = "choose an account to continue to codex" in body or ("welcome back" in body and "use another account" in body)
+    if account_picker:
+        if click_use_another_account():
+            email_done = password_done = otp_done = False
+            email_submitted_at = None
+            print("Selected Use another account on the account chooser.", flush=True)
+            time.sleep(0.8)
+        else:
+            time.sleep(0.6)
+        continue
     if "operation timed out" in body or "oops, an error occurred" in body:
         if service_retry_count >= 1:
             raise RuntimeError("OpenAI sign-in service timed out after one retry.")
